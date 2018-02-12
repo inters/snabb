@@ -49,6 +49,12 @@ end
 
 function PrivateRouter:link ()
    self.routing_table4 = lpm:new()
+   -- NB: need to add default LPM entry until #1238 is fixed, see
+   --    https://github.com/snabbco/snabb/issues/1238#issuecomment-345362030
+   -- Zero maps to nil in self.routes (which is indexed starting at one), hence
+   -- packets that match the default entry will be dropped (and route_errors
+   -- incremented.)
+   self.routing_table4:add_string("0.0.0.0/0", 0)
    for key, route in ipairs(self.routes) do
       route.link = self.output[config.link_name(route.net_cidr4)]
       self.routing_table4:add_string(route.net_cidr4, key)
