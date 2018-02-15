@@ -54,8 +54,8 @@ TESTMODS = $(shell find . -regex '\./$(SRCPATTERN)\.\(lua\|dasl\)' -printf '%P '
 
 # TESTSCRIPTS expands to:
 #   lib/watchdog/selftest.sh ...
-# for each executable selftext.sh script in src.
-TESTSCRIPTS = $(shell find . -name "selftest.sh" -executable | xargs)
+# for each executable selftext.* script in src.
+TESTSCRIPTS = $(shell find . -name "selftest.*" -executable | xargs)
 
 PATH := ../lib/luajit/usr/local/bin:$(PATH)
 

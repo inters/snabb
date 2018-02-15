@@ -5,22 +5,12 @@ module(...,package.seeall)
 local shm = require("core.shm")
 local interlink = require("lib.interlink")
 
-local Receiver = {
-   name = "apps.interlink.Receiver",
-   config = {
-      name = {required=true},
-      create = {default=false}
-   }
-}
+local Receiver = {name="apps.interlink.Receiver"}
 
-function Receiver:new (conf)
+function Receiver:new (_, name)
    local self = {}
-   if conf.create then
-      self.interlink = interlink.create(conf.name)
-      self.destroy = conf.name
-   else
-      self.interlink = interlink.open(conf.name)
-   end
+   self.shm_name = "group/interlink/"..name
+   self.interlink = interlink.new(self.shm_name)
    return setmetatable(self, {__index=Receiver})
 end
 
@@ -35,12 +25,7 @@ function Receiver:pull ()
 end
 
 function Receiver:stop ()
-   if self.destroy then
-      interlink.free(self.interlink)
-      shm.unlink(self.destroy)
-   else
-      shm.unmap(self.interlink)
-   end
+   interlink.free(self.interlink, self.shm_name)
 end
 
 return Receiver
