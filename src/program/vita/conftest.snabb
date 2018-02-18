@@ -1,4 +1,4 @@
-#!/usr/bin/env snabb snsh
+#!snabb snsh
 
 -- Use of this source code is governed by the GNU AGPL license; see COPYING.
 
