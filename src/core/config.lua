@@ -62,10 +62,6 @@ function canonical_link (spec)
    return format_link(parse_link(spec))
 end
 
-function link_name (s)
-   return s:gsub("[^%w_]", "_")
-end
-
 -- Parse Lua object for the arg to an app based on config. Arg may be a table
 -- or a string encoded Lua object.
 function parse_app_arg (arg, config)

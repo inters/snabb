@@ -38,8 +38,9 @@ function PrivateRouter:new (conf)
       fwd4_packets = packet_buffer(),
       arp_packets = packet_buffer()
    }
-   for _, route in pairs(conf.routes) do
+   for id, route in pairs(conf.routes) do
       o.routes[#o.routes+1] = {
+         id = id,
          net_cidr4 = assert(route.net_cidr4, "Missing net_cidr4"),
          link = nil
       }
@@ -48,10 +49,14 @@ function PrivateRouter:new (conf)
 end
 
 function PrivateRouter:link ()
-   self.routing_table4 = lpm:new()
-   for key, route in ipairs(self.routes) do
-      route.link = self.output[config.link_name(route.net_cidr4)]
-      self.routing_table4:add_string(route.net_cidr4, key)
+   local keybits = 15 -- see lib/lpm/README.md
+   self.routing_table4 = lpm:new({keybits=keybits})
+   for index, route in ipairs(self.routes) do
+      assert(index < 2^keybits, "index overflow")
+      route.link = self.output[route.id]
+      if route.link then
+         self.routing_table4:add_string(route.net_cidr4, index)
+      end
    end
    self.routing_table4:build()
 end
@@ -144,8 +149,9 @@ function PublicRouter:new (conf)
       protocol_packets = packet_buffer(),
       arp_packets = packet_buffer()
    }
-   for _, route in pairs(conf.routes) do
+   for id, route in pairs(conf.routes) do
       o.routes[#o.routes+1] = {
+         id = id,
          spi = assert(route.spi, "Missing SPI"),
          link = nil
       }
@@ -161,7 +167,7 @@ function PublicRouter:link ()
    }
    for index, route in ipairs(self.routes) do
       assert(ffi.cast(index_t, index) == index, "index overflow")
-      route.link = self.output[tostring(route.spi)]
+      route.link = self.output[route.id]
       if route.link then
          self.routing_table4:add(route.spi, index)
       end

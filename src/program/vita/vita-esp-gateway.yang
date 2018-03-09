@@ -33,7 +33,7 @@ module vita-esp-gateway {
 
   list route {
     key id; unique "net_cidr4 preshared_key spi";
-    leaf id { type string; mandatory true; }
+    leaf id { type string { pattern '[\w_]+'; } mandatory true; }
     leaf net_cidr4 { type inet:ipv4-prefix; mandatory true; }
     leaf gw_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
     leaf preshared_key { type key32; mandatory true; }
