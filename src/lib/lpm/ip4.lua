@@ -40,7 +40,7 @@ function IP4.get_bit (ip, offset)
 end
 IP4.masked = (function()
    local arr = ffi.new("int32_t[?]", 33)
-   for i=1,33 do
+   for i=1,32 do
       arr[i] = bit.bnot(2^(32-i)-1)
    end
    return function(ip, length)
