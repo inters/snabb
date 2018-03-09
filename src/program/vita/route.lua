@@ -51,6 +51,12 @@ end
 function PrivateRouter:link ()
    local keybits = 15 -- see lib/lpm/README.md
    self.routing_table4 = lpm:new({keybits=keybits})
+   -- NB: need to add default LPM entry until #1238 is fixed, see
+   --    https://github.com/snabbco/snabb/issues/1238#issuecomment-345362030
+   -- Zero maps to nil in self.routes (which is indexed starting at one), hence
+   -- packets that match the default entry will be dropped (and route_errors
+   -- incremented.)
+   self.routing_table4:add_string("0.0.0.0/0", 0)
    for index, route in ipairs(self.routes) do
       assert(index < 2^keybits, "index overflow")
       route.link = self.output[route.id]
