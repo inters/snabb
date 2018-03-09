@@ -3,8 +3,8 @@ module vita-ephemeral-keys {
   prefix ephemeral-keys;
 
   typedef spi { type uint32 { range "256..max"; } }
-  typedef key16 { type string { patttern '([0-9a-fA-F]{2}\s*){16}'; } }
-  typedef key4  { type string { patttern '([0-9a-fA-F]{2}\s*){4}'; } }
+  typedef key16 { type string { pattern '([0-9a-fA-F]{2}\s*){16}'; } }
+  typedef key4  { type string { pattern '([0-9a-fA-F]{2}\s*){4}'; } }
 
   list sa {
     key id; unique "spi key";

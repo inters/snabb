@@ -15,11 +15,10 @@ module vita-esp-gateway {
   typedef time-to-live { type uint32 { range "1..max"; } }
 
   grouping interface {
+    leaf pciaddr { type pci-address; mandatory true; }
     leaf macaddr { type yang:mac-address; mandatory true; }
     leaf vlan { type uint16 { range "0..4095"; } }
     leaf mtu { type uint16; }
-    leaf pciaddr { type pci-address; }
-    leaf vmdq { type boolean; }
   }
 
   container private_interface { uses interface; }

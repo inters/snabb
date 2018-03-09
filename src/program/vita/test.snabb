@@ -86,8 +86,8 @@ end
 
 
 local conf = {
-   private_interface = { macaddr = "52:54:00:00:00:00" },
-   public_interface = { macaddr = "52:54:00:00:00:FF" },
+   private_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:00" },
+   public_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:FF" },
    private_ip4 = "192.168.10.1",
    public_ip4 = "203.0.113.1",
    private_nexthop_ip4 = "192.168.10.1",
