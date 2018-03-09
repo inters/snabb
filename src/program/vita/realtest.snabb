@@ -2,6 +2,7 @@
 
 -- Use of this source code is governed by the GNU AGPL license; see COPYING.
 
+local gentest = require("program.vita.gentest")
 local counter = require("core.counter")
 local Intel = require("apps.intel_mp.intel_mp").Intel
 local ARP = require("apps.ipv4.arp").ARP
@@ -16,10 +17,10 @@ local S = require("syscall")
 
 -- Synopsis:
 --
---    realtest.snabb <pciaddr> <macaddr> <src> <dst> <nh> \
---       [<duration>] [<pktsize>|IMIX] [<gbps>] [<cpu>]
+--    realtest.snabb <pciaddr> <macaddr> <ip> <nh> \
+--       [<duration>] [<pktsize>|IMIX] [<gbps>] [<nroutes>] [<prefix>] [<cpu>]
 --
---     Default is 10 seconds at 10 Gbps IMIX.                               (-:
+--     Default is 10 seconds at 10 Gbps IMIX via one route with prefix 172.16.
 --
 -- This hardware-based benchmarking design for Vita simulates a private
 -- next-hop suitable for evaluating Vita performance in a realistic setting.
@@ -29,8 +30,12 @@ local S = require("syscall")
 --
 --    realtest(A) <-> Vita(A) <-> Vita(B) <-> realtest(B)
 --
--- Subsequently, two interconnected pairs of (possibly virtualized) NIC ports
--- are required to test Vita using two opposing instances of realtest.
+-- ...where <pciaddr>, <macaddr> and <ip> denote realtest(A), <nh> is the
+-- private IP address of Vita(A). Subsequently, three interconnected pairs of
+-- (possibly virtualized) NIC ports are required to test Vita using two
+-- opposing instances of realtest. The Vita node to be tested must be
+-- configured accordingly for routes <prefix>.N.0/24 with SPI 1000+N with
+-- all-zero keys for N from 1 to <nroutes>.
 --
 -- Here is a diagram of the app graph implemented:
 --
@@ -64,50 +69,33 @@ local S = require("syscall")
 
 local pciaddr = assert(main.parameters[1], "Need pciaddr")
 local macaddr = assert(main.parameters[2], "Need macaddr")
-local src = assert(main.parameters[3], "Need src")
-local dst = assert(main.parameters[4], "Need dst")
-local nh = assert(main.parameters[5], "Need dst")
-local duration = tonumber(main.parameters[6]) or 10
-local pktsize = main.parameters[7] or "IMIX"
-local rate = main.parameters[8] or 10
-if rate then rate = math.floor((tonumber(rate)/8)*1e9) end
-local cpu = tonumber(main.parameters[9])
-
-
-local IMIX = { 54, 54, 54, 54, 54, 54, 54, 590, 590, 590, 590, 1514 }
-
-function test_packets (macaddr, src, dst, pktsize)
-   pktsize = pktsize ~= "IMIX" and tonumber(pktsize)
-   local sizes = (pktsize and {pktsize}) or IMIX
-   local packets = {}
-   for _, size in ipairs(sizes) do
-      local payload_size = size - ethernet:sizeof() - ipv4:sizeof()
-      assert(payload_size >= 0, "Negative payload_size :-(")
-      local d = datagram:new(packet.resize(packet.allocate(), payload_size))
-      d:push(ipv4:new{ src = ipv4:pton(src),
-                       dst = ipv4:pton(dst),
-                       ttl = 64 })
-      d:push(ethernet:new{ src = ethernet:pton(macaddr),
-                           type = 0x0800 })
-      packets[#packets+1] = d:packet()
-   end
-   return packets
-end
-
+local ip = assert(main.parameters[3], "Need ip")
+local nh = assert(main.parameters[4], "Need nh")
+local duration = tonumber(main.parameters[5]) or 10
+local pktsize = tonumber(main.parameters[6]) or main.parameters[6]
+local rate = math.floor(tonumber(main.parameters[7] or 10)*1e9/8)
+local nroutes = tonumber(main.parameters[8])
+local route_prefix = main.parameters[9]
+local cpu = tonumber(main.parameters[10])
 
 numa.bind_to_cpu(cpu)
-
 
 local c = config.new()
 
 config.app(c, "nic", Intel, {pciaddr=pciaddr, macaddr=macaddr, vmdq=true})
 config.app(c, "arp", ARP, {self_mac=ethernet:pton(macaddr),
-                           self_ip=ipv4:pton(src),
+                           self_ip=ipv4:pton(ip),
                            next_ip=ipv4:pton(nh)})
 config.link(c, "nic.output -> arp.south")
 config.link(c, "arp.south -> nic.input")
 
-config.app(c, "synth", Synth, {packets=test_packets(macaddr,src,dst,pktsize)})
+local _, sim_packets = gentest.gen_testcase({
+      private_nexthop_ip4 = ip,
+      route_prefix = route_prefix,
+      nroutes = nroutes,
+      packet_size = pktsize
+})
+config.app(c, "synth", Synth, {packets=sim_packets})
 config.app(c, "rate", RateLimiter, {rate=rate, bucket_capacity=rate})
 config.link(c, "synth.output -> rate.input")
 config.link(c, "rate.output -> arp.north")

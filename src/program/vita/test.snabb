@@ -7,6 +7,7 @@ local lib = require("core.lib")
 local worker = require("core.worker")
 local counter = require("core.counter")
 local vita = require("program.vita.vita")
+local gentest = require("program.vita.gentest")
 local basic_apps = require("apps.basic.basic_apps")
 local Synth = require("apps.test.synth").Synth
 local PcapFilter = require("apps.packet_filter.pcap_filter").PcapFilter
@@ -19,9 +20,9 @@ local S = require("syscall")
 
 -- Synopsis:
 --
---    sudo program/vita/test.snabb [<pktsize>|IMIX] [<npackets>]
+--    sudo program/vita/test.snabb [<pktsize>|IMIX] [<npackets>] [<nroutes>]
 --
---     Default is 10 million packets at IMIX.                               (-:
+--     Default is 10 million packets at IMIX via one route.                 (-:
 --
 -- This is a software-only benchmark scenario for Vita. It simulates a single
 -- Vita node with the public ports being connected in loop-back mode (i.e.,
@@ -63,45 +64,11 @@ local S = require("syscall")
 --
 -- For a more realistic test case see: realtest.snabb
 
-local IMIX = { 54, 54, 54, 54, 54, 54, 54, 590, 590, 590, 590, 1514 }
-
-function test_packets (pktsize)
-   pktsize = pktsize ~= "IMIX" and tonumber(pktsize)
-   local sizes = (pktsize and {pktsize}) or IMIX
-   local packets = {}
-   for _, size in ipairs(sizes) do
-      local payload_size = size - ethernet:sizeof() - ipv4:sizeof()
-      assert(payload_size >= 0, "Negative payload_size :-(")
-      local d = datagram:new(packet.resize(packet.allocate(), payload_size))
-      d:push(ipv4:new{ src = ipv4:pton("192.168.10.100"),
-                       dst = ipv4:pton("192.168.10.200"),
-                       ttl = 64 })
-      d:push(ethernet:new{ src = ethernet:pton("52:54:00:00:00:00"),
-                           dst = ethernet:pton("52:54:00:00:00:00"),
-                           type = 0x0800 })
-      packets[#packets+1] = d:packet()
-   end
-   return packets
-end
-
-
-local conf = {
-   private_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:00" },
-   public_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:FF" },
-   private_ip4 = "192.168.10.1",
-   public_ip4 = "203.0.113.1",
-   private_nexthop_ip4 = "192.168.10.1",
-   public_nexthop_ip4 = "203.0.113.1",
-   route = {
-      loopback = {
-         net_cidr4 = "192.168.10.0/24",
-         gw_ip4 = "203.0.113.1",
-         preshared_key = string.rep("00", 32),
-         spi = 1000
-      }
-   },
-   negotiation_ttl = 1
-}
+local conf, sim_packets = gentest.gen_testcase({
+      private_nexthop_ip4 = gentest.defaults.private_ip4.default,
+      packet_size = tonumber(main.parameters[1]) or main.parameters[1],
+      nroutes = tonumber(main.parameters[3])
+})
 
 local current_node = S.getcpu().node
 vita.cpubind(nil, current_node)
@@ -111,7 +78,7 @@ local c, private = vita.configure_private_router(conf, config.new())
 config.app(c, "bridge", basic_apps.Join)
 config.link(c, "bridge.output -> "..private.input)
 
-config.app(c, "synth", Synth, {packets=test_packets(main.parameters[1])})
+config.app(c, "synth", Synth, {packets=sim_packets})
 config.link(c, "synth.output -> bridge.synth")
 
 config.app(c, "sieve", PcapFilter, {filter="arp"})
