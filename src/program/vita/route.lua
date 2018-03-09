@@ -107,15 +107,14 @@ function PrivateRouter:push ()
 end
 
 function PrivateRouter:find_route4 (dst)
-   local route = self.routes[self.routing_table4:search_bytes(dst)]
-   return route and route.link
+   return self.routes[self.routing_table4:search_bytes(dst)]
 end
 
 function PrivateRouter:forward4 (p)
    self.ip4:new_from_mem(p.data, p.length)
    local route = self:find_route4(self.ip4:dst())
    if route then
-      link.transmit(route, p)
+      link.transmit(route.link, p)
    else
       packet.free(p)
       counter.add(self.shm.rxerrors)
@@ -229,14 +228,15 @@ function PublicRouter:push ()
 end
 
 function PublicRouter:find_route4 (spi)
-   return self.routes[self.routing_table4:lookup_ptr(spi).value].link
+   local entry = self.routing_table4:lookup_ptr(spi)
+   return entry and self.routes[entry.value]
 end
 
 function PublicRouter:forward4 (p)
    local route = self.esp:new_from_mem(p.data, p.length)
              and self:find_route4(self.esp:spi())
    if route then
-      link.transmit(route, p)
+      link.transmit(route.link, p)
    else
       packet.free(p)
       counter.add(self.shm.rxerrors)
