@@ -34,7 +34,7 @@ creates a new lpm object from the config table
    `{ keybits = 15 | 31 }`
 
 Method **instance:add_string** cidr_string, key
-key is any value > 0 and less than 2 ^ keybits - 1, if cidr_string already
+key is any non-negative integer less than 2 ^ keybits, if cidr_string already
 exists key is updated
 
 Method **instance:remove_string** cidr_string

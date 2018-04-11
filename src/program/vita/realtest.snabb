@@ -14,10 +14,53 @@ local datagram = require("lib.protocol.datagram")
 local numa = require("lib.numa")
 local S = require("syscall")
 
-
--- realtest.snabb <pciaddr> <macaddr> <src> <dst> <nh> \
---    [<duration>] [<pktsize>|IMIX] [<gbps>] [<cpu>]
--- default is 10 seconds at IMIX                                           (-:
+-- Synopsis:
+--
+--    realtest.snabb <pciaddr> <macaddr> <src> <dst> <nh> \
+--       [<duration>] [<pktsize>|IMIX] [<gbps>] [<cpu>]
+--
+--     Default is 10 seconds at 10 Gbps IMIX.                               (-:
+--
+-- This hardware-based benchmarking design for Vita simulates a private
+-- next-hop suitable for evaluating Vita performance in a realistic setting.
+-- Its synthesized traffic is rate limited to facilitate testing varying
+-- traffic levels. It is supposed to be used in a mirrored fashion; i.e., in a
+-- topology like so
+--
+--    realtest(A) <-> Vita(A) <-> Vita(B) <-> realtest(B)
+--
+-- Subsequently, two interconnected pairs of (possibly virtualized) NIC ports
+-- are required to test Vita using two opposing instances of realtest.
+--
+-- Here is a diagram of the app graph implemented:
+--
+--          +------------+        +---------+
+--          |            | output |         |
+--          |  RateLim   <--------+  Synth  |
+--          |            |        |         |
+--          +-----+------+        +---------+
+--                |
+--                |                      +----------+
+--                |  +--------+          |          |
+--                |  |        |  +------->          +--->
+--                +-->        +--+    ^  |          |
+--          north    |  ARP   |    south |   NIC    |  (Vita private)
+--                +--+        <--+    .  |          |
+--                |  |        |  +-------+          <----
+--                |  +--------+     ^ .  |          |
+--                |                 . .  +----------+
+--                |                 . .
+--            +---v----+            . .
+--            |        |    RX/TX measured here
+--            |  Sink  |
+--            |        |
+--            +--------+
+--
+-- A realtest instance measures and reports throughput at the NIC driver edge.
+-- The reported ingress rate corresponds to the amount of traffic received
+-- from the opposing realtest instance (i.e., end-to-end.)
+--
+-- For a simpler test case with minimal demands see: test.snabb
 
 local pciaddr = assert(main.parameters[1], "Need pciaddr")
 local macaddr = assert(main.parameters[2], "Need macaddr")
@@ -26,7 +69,7 @@ local dst = assert(main.parameters[4], "Need dst")
 local nh = assert(main.parameters[5], "Need dst")
 local duration = tonumber(main.parameters[6]) or 10
 local pktsize = main.parameters[7] or "IMIX"
-local rate = main.parameters[8];
+local rate = main.parameters[8] or 10
 if rate then rate = math.floor((tonumber(rate)/8)*1e9) end
 local cpu = tonumber(main.parameters[9])
 
