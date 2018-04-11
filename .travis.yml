@@ -1,0 +1,12 @@
+sudo: required
+
+language: c
+
+compiler: gcc
+
+before_script:
+  - sudo sysctl -w vm.nr_hugepages=512
+
+script:
+ - make -j
+ - (cd src && sudo ./snabb snsh program/vita/test.snabb)
