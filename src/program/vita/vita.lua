@@ -116,14 +116,14 @@ function configure_private_router (conf, append)
    })
    config.link(c, "PrivateRouter.arp -> PrivateNextHop.arp")
 
-   for _, route in pairs(conf.route) do
-      local private_in = "PrivateRouter."..config.link_name(route.net_cidr4)
-      local ESP_in = "ESP_"..route.spi.."_in"
+   for id, route in pairs(conf.route) do
+      local private_in = "PrivateRouter."..id
+      local ESP_in = "ESP_"..id.."_in"
       config.app(c, ESP_in, Transmitter)
       config.link(c, private_in.." -> "..ESP_in..".input")
 
-      local private_out = "PrivateNextHop."..config.link_name(route.net_cidr4)
-      local DSP_out = "DSP_"..route.spi.."_out"
+      local private_out = "PrivateNextHop."..id
+      local DSP_out = "DSP_"..id.."_out"
       config.app(c, DSP_out, Receiver)
       config.link(c, DSP_out..".output -> "..private_out)
    end
@@ -155,15 +155,15 @@ function configure_public_router (conf, append)
    config.link(c, "PublicRouter.protocol -> Protocol_in.input")
    config.link(c, "Protocol_out.output -> PublicNextHop.protocol")
 
-   for _, route in pairs(conf.route) do
-      local public_in = "PublicRouter."..route.spi
-      local DSP_in = "DSP_"..route.spi.."_in"
+   for id, route in pairs(conf.route) do
+      local public_in = "PublicRouter."..id
+      local DSP_in = "DSP_"..id.."_in"
       config.app(c, DSP_in, Transmitter)
       config.link(c, public_in.." -> "..DSP_in..".input")
 
-      local public_out = "PublicNextHop."..config.link_name(route.gw_ip4)
-      local ESP_out = "ESP_"..route.spi.."_out"
-      local Tunnel = "Tunnel_"..config.link_name(route.gw_ip4)
+      local public_out = "PublicNextHop."..id
+      local ESP_out = "ESP_"..id.."_out"
+      local Tunnel = "Tunnel_"..id
       config.app(c, ESP_out, Receiver)
       config.app(c, Tunnel, tunnel.Tunnel4,
                  {src=conf.public_ip4, dst=route.gw_ip4})
@@ -285,14 +285,14 @@ end
 function configure_esp (ephemeral_keys)
    local c = config.new()
 
-   for _, sa in pairs(ephemeral_keys.sa) do
+   for id, sa in pairs(ephemeral_keys.sa) do
       -- Configure interlink receiver/transmitter for inbound SA
-      local ESP_in = "ESP_"..sa.spi.."_in"
-      local ESP_out = "ESP_"..sa.spi.."_out"
+      local ESP_in = "ESP_"..id.."_in"
+      local ESP_out = "ESP_"..id.."_out"
       config.app(c, ESP_in, Receiver)
       config.app(c, ESP_out, Transmitter)
       -- Configure inbound SA
-      local ESP = "ESP_"..sa.spi
+      local ESP = "ESP_"..id
       config.app(c, ESP, tunnel.Encapsulate, sa)
       config.link(c, ESP_in..".output -> "..ESP..".input4")
       config.link(c, ESP..".output -> "..ESP_out..".input")
@@ -304,14 +304,14 @@ end
 function configure_dsp (ephemeral_keys)
    local c = config.new()
 
-   for _, sa in pairs(ephemeral_keys.sa) do
+   for id, sa in pairs(ephemeral_keys.sa) do
       -- Configure interlink receiver/transmitter for outbound SA
-      local DSP_in = "DSP_"..sa.spi.."_in"
-      local DSP_out = "DSP_"..sa.spi.."_out"
+      local DSP_in = "DSP_"..id.."_in"
+      local DSP_out = "DSP_"..id.."_out"
       config.app(c, DSP_in, Receiver)
       config.app(c, DSP_out, Transmitter)
       -- Configure outbound SA
-      local DSP = "DSP_"..sa.spi
+      local DSP = "DSP_"..id
       config.app(c, DSP, tunnel.Decapsulate, sa)
       config.link(c, DSP_in..".output -> "..DSP..".input")
       config.link(c, DSP..".output4 -> "..DSP_out..".input")
@@ -341,7 +341,7 @@ function dsp_worker (cpu, memnode)
 end
 
 function load_config (schema, confpath)
-   return yang.load_data_for_schema(
+   return yang.load_config_for_schema(
       schema, lib.readfile(confpath, "a*"), confpath
    )
 end

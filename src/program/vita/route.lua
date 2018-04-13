@@ -38,8 +38,9 @@ function PrivateRouter:new (conf)
       fwd4_packets = packet_buffer(),
       arp_packets = packet_buffer()
    }
-   for _, route in pairs(conf.routes) do
+   for id, route in pairs(conf.routes) do
       o.routes[#o.routes+1] = {
+         id = id,
          net_cidr4 = assert(route.net_cidr4, "Missing net_cidr4"),
          link = nil
       }
@@ -48,10 +49,20 @@ function PrivateRouter:new (conf)
 end
 
 function PrivateRouter:link ()
-   self.routing_table4 = lpm:new()
-   for key, route in ipairs(self.routes) do
-      route.link = self.output[config.link_name(route.net_cidr4)]
-      self.routing_table4:add_string(route.net_cidr4, key)
+   local keybits = 15 -- see lib/lpm/README.md
+   self.routing_table4 = lpm:new({keybits=keybits})
+   -- NB: need to add default LPM entry until #1238 is fixed, see
+   --    https://github.com/snabbco/snabb/issues/1238#issuecomment-345362030
+   -- Zero maps to nil in self.routes (which is indexed starting at one), hence
+   -- packets that match the default entry will be dropped (and route_errors
+   -- incremented.)
+   self.routing_table4:add_string("0.0.0.0/0", 0)
+   for index, route in ipairs(self.routes) do
+      assert(index < 2^keybits, "index overflow")
+      route.link = self.output[route.id]
+      if route.link then
+         self.routing_table4:add_string(route.net_cidr4, index)
+      end
    end
    self.routing_table4:build()
 end
@@ -102,15 +113,14 @@ function PrivateRouter:push ()
 end
 
 function PrivateRouter:find_route4 (dst)
-   local route = self.routes[self.routing_table4:search_bytes(dst)]
-   return route and route.link
+   return self.routes[self.routing_table4:search_bytes(dst)]
 end
 
 function PrivateRouter:forward4 (p)
    self.ip4:new_from_mem(p.data, p.length)
    local route = self:find_route4(self.ip4:dst())
    if route then
-      link.transmit(route, p)
+      link.transmit(route.link, p)
    else
       packet.free(p)
       counter.add(self.shm.rxerrors)
@@ -144,8 +154,9 @@ function PublicRouter:new (conf)
       protocol_packets = packet_buffer(),
       arp_packets = packet_buffer()
    }
-   for _, route in pairs(conf.routes) do
+   for id, route in pairs(conf.routes) do
       o.routes[#o.routes+1] = {
+         id = id,
          spi = assert(route.spi, "Missing SPI"),
          link = nil
       }
@@ -161,7 +172,7 @@ function PublicRouter:link ()
    }
    for index, route in ipairs(self.routes) do
       assert(ffi.cast(index_t, index) == index, "index overflow")
-      route.link = self.output[tostring(route.spi)]
+      route.link = self.output[route.id]
       if route.link then
          self.routing_table4:add(route.spi, index)
       end
@@ -223,14 +234,15 @@ function PublicRouter:push ()
 end
 
 function PublicRouter:find_route4 (spi)
-   return self.routes[self.routing_table4:lookup_ptr(spi).value].link
+   local entry = self.routing_table4:lookup_ptr(spi)
+   return entry and self.routes[entry.value]
 end
 
 function PublicRouter:forward4 (p)
    local route = self.esp:new_from_mem(p.data, p.length)
              and self:find_route4(self.esp:spi())
    if route then
-      link.transmit(route, p)
+      link.transmit(route.link, p)
    else
       packet.free(p)
       counter.add(self.shm.rxerrors)

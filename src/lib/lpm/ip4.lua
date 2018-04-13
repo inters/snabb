@@ -40,7 +40,7 @@ function IP4.get_bit (ip, offset)
 end
 IP4.masked = (function()
    local arr = ffi.new("int32_t[?]", 33)
-   for i=1,33 do
+   for i=1,32 do
       arr[i] = bit.bnot(2^(32-i)-1)
    end
    return function(ip, length)
@@ -119,13 +119,20 @@ function IP4.selftest ()
    selftest_get_bit()
    selftest_commonlength()
    local pmu = require("lib.pmu")
-   local gbit = IP4.get_bit
-   pmu.profile(function()
-      local c = 0
-      for i = 0,1000000 do
-         c = c + IP4.commonlength(i,i)
-      end
-   end)
+   local avail, err = pmu.is_available()
+   if not avail then
+      print("PMU not available:")
+      print("  "..err)
+      print("Skipping benchmark.")
+   else
+      local gbit = IP4.get_bit
+      pmu.profile(function()
+         local c = 0
+         for i = 0,1000000 do
+            c = c + IP4.commonlength(i,i)
+         end
+      end)
+   end
 end
 
 return IP4
