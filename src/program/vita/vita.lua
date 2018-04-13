@@ -68,7 +68,7 @@ function run (args)
 
    args = lib.dogetopt(args, opt, "hHtc:m:", long_opt)
 
-   if #args < 1 then print(usage) main.exit() end
+   if #args ~= 1 then exit_usage(1) end
    local confpath = args[1]
 
    if conftest then
@@ -82,21 +82,26 @@ function run (args)
    -- “link” with worker processes
    worker.set_exit_on_worker_death(true)
 
-   -- start crypto processes
-   worker.start("ESP", ([[require("program.vita.vita").esp_worker(%s, %s)]])
-                   :format(cpus[3], memnode))
-   worker.start("DSP", ([[require("program.vita.vita").dsp_worker(%s, %s)]])
-                   :format(cpus[4], memnode))
-
-   -- start PublicPort process
+   -- start private and public router processes
+   worker.start(
+      "PrivatePort",
+      ([[require("program.vita.vita").private_port_worker(%q, %s, %s)]])
+         :format(confpath, cpus[1], memnode)
+   )
    worker.start(
       "PublicPort",
       ([[require("program.vita.vita").public_port_worker(%q, %s, %s)]])
          :format(confpath, cpus[2], memnode)
    )
 
-   -- become PrivatePort process
-   private_port_worker(confpath, cpus[1], memnode)
+   -- start crypto processes
+   worker.start("ESP", ([[require("program.vita.vita").esp_worker(%s, %s)]])
+                   :format(cpus[3], memnode))
+   worker.start("DSP", ([[require("program.vita.vita").dsp_worker(%s, %s)]])
+                   :format(cpus[4], memnode))
+
+   -- become key exchange protocol handler process
+   exchange_worker(confpath, cpus[5], memnode)
 end
 
 function configure_private_router (conf, append)
@@ -114,14 +119,12 @@ function configure_private_router (conf, append)
    for id, route in pairs(conf.route) do
       local private_in = "PrivateRouter."..id
       local ESP_in = "ESP_"..id.."_in"
-      config.app(c, ESP_in, Transmitter,
-                 {name="group/interlink/"..ESP_in, create=true})
+      config.app(c, ESP_in, Transmitter)
       config.link(c, private_in.." -> "..ESP_in..".input")
 
       local private_out = "PrivateNextHop."..id
       local DSP_out = "DSP_"..id.."_out"
-      config.app(c, DSP_out, Receiver,
-                 {name="group/interlink/"..DSP_out, create=true})
+      config.app(c, DSP_out, Receiver)
       config.link(c, DSP_out..".output -> "..private_out)
    end
 
@@ -147,29 +150,21 @@ function configure_public_router (conf, append)
    })
    config.link(c, "PublicRouter.arp -> PublicNextHop.arp")
 
-   config.app(c, "KeyExchange", exchange.KeyManager, {
-                 node_ip4 = conf.public_ip4,
-                 routes = conf.route,
-                 esp_keyfile = esp_keyfile,
-                 dsp_keyfile = dsp_keyfile,
-                 negotiation_ttl = conf.negotiation_ttl,
-                 sa_ttl = conf.sa_ttl
-   })
-   config.link(c, "PublicRouter.protocol -> KeyExchange.input")
-   config.link(c, "KeyExchange.output -> PublicNextHop.protocol")
+   config.app(c, "Protocol_in", Transmitter)
+   config.app(c, "Protocol_out", Receiver)
+   config.link(c, "PublicRouter.protocol -> Protocol_in.input")
+   config.link(c, "Protocol_out.output -> PublicNextHop.protocol")
 
    for id, route in pairs(conf.route) do
       local public_in = "PublicRouter."..id
       local DSP_in = "DSP_"..id.."_in"
-      config.app(c, DSP_in, Transmitter,
-                 {name="group/interlink/"..DSP_in, create=true})
+      config.app(c, DSP_in, Transmitter)
       config.link(c, public_in.." -> "..DSP_in..".input")
 
       local public_out = "PublicNextHop."..id
       local ESP_out = "ESP_"..id.."_out"
       local Tunnel = "Tunnel_"..id
-      config.app(c, ESP_out, Receiver,
-                 {name="group/interlink/"..ESP_out, create=true})
+      config.app(c, ESP_out, Receiver)
       config.app(c, Tunnel, tunnel.Tunnel4,
                  {src=conf.public_ip4, dst=route.gw_ip4})
       config.link(c, ESP_out..".output -> "..Tunnel..".input")
@@ -258,6 +253,32 @@ function public_router_loopback_worker (confpath, cpu, memnode)
    )
 end
 
+function configure_exchange (conf, append)
+   conf = lib.parse(conf, confspec)
+   local c = append or config.new()
+
+   config.app(c, "KeyExchange", exchange.KeyManager, {
+                 node_ip4 = conf.public_ip4,
+                 routes = conf.route,
+                 esp_keyfile = esp_keyfile,
+                 dsp_keyfile = dsp_keyfile,
+                 negotiation_ttl = conf.negotiation_ttl,
+                 sa_ttl = conf.sa_ttl
+   })
+   config.app(c, "Protocol_in", Receiver)
+   config.app(c, "Protocol_out", Transmitter)
+   config.link(c, "Protocol_in.output -> KeyExchange.input")
+   config.link(c, "KeyExchange.output -> Protocol_out.input")
+
+   return c
+end
+
+function exchange_worker (confpath, cpu, memnode)
+   cpubind(cpu, memnode)
+   engine.log = true
+   listen_confpath(schemata['esp-gateway'], confpath, configure_exchange)
+end
+
 
 -- ephemeral_keys := { <id>=(SA), ... }                        (see exchange)
 
@@ -268,8 +289,8 @@ function configure_esp (ephemeral_keys)
       -- Configure interlink receiver/transmitter for inbound SA
       local ESP_in = "ESP_"..id.."_in"
       local ESP_out = "ESP_"..id.."_out"
-      config.app(c, ESP_in, Receiver, {name="group/interlink/"..ESP_in})
-      config.app(c, ESP_out, Transmitter, {name="group/interlink/"..ESP_out})
+      config.app(c, ESP_in, Receiver)
+      config.app(c, ESP_out, Transmitter)
       -- Configure inbound SA
       local ESP = "ESP_"..id
       config.app(c, ESP, tunnel.Encapsulate, sa)
@@ -287,8 +308,8 @@ function configure_dsp (ephemeral_keys)
       -- Configure interlink receiver/transmitter for outbound SA
       local DSP_in = "DSP_"..id.."_in"
       local DSP_out = "DSP_"..id.."_out"
-      config.app(c, DSP_in, Receiver, {name="group/interlink/"..DSP_in})
-      config.app(c, DSP_out, Transmitter, {name="group/interlink/"..DSP_out})
+      config.app(c, DSP_in, Receiver)
+      config.app(c, DSP_out, Transmitter)
       -- Configure outbound SA
       local DSP = "DSP_"..id
       config.app(c, DSP, tunnel.Decapsulate, sa)

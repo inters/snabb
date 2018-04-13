@@ -103,6 +103,12 @@ worker.start(
       :format(confpath, nil, current_node)
 )
 
+worker.start(
+   "Exchange",
+   ([[require("program.vita.vita").exchange_worker(%q, %s, %s)]])
+      :format(confpath, nil, current_node)
+)
+
 worker.start("ESP", ([[require("program.vita.vita").esp_worker(%s, %s)]])
              :format(nil, current_node))
 worker.start("DSP", ([[require("program.vita.vita").dsp_worker(%s, %s)]])
