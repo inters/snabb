@@ -93,7 +93,7 @@ worker.set_exit_on_worker_death(true)
 local confpath = shm.root.."/"..shm.resolve("group/testconf")
 do
    local f = assert(io.open(confpath, "w"), "Unable to open file: "..confpath)
-   yang.print_data_for_schema(vita.schemata['esp-gateway'], conf, f)
+   yang.print_config_for_schema(vita.schemata['esp-gateway'], conf, f)
    f:close()
 end
 

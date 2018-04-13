@@ -320,7 +320,7 @@ function dsp_worker (cpu, memnode)
 end
 
 function load_config (schema, confpath)
-   return yang.load_data_for_schema(
+   return yang.load_config_for_schema(
       schema, lib.readfile(confpath, "a*"), confpath
    )
 end

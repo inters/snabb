@@ -48,7 +48,9 @@ function start (name, luacode)
       S.setenv("SNABB_PROGRAM_LUACODE", luacode, true)
       -- Restart the process with execve().
       -- /proc/$$/exe is a link to the same Snabb executable that we are running
-      lib.execv(("/proc/%d/exe"):format(S.getpid()), {})
+      local filename = ("/proc/%d/exe"):format(S.getpid())
+      local argv = { ("[snabb worker '%s' for %d]"):format(name, S.getppid()) }
+      lib.execv(filename, argv)
    else
       vmprofile.start() -- re-enable profiling
       -- Parent process
