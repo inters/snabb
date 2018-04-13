@@ -19,7 +19,7 @@ module(...,package.seeall)
 --    empty(r)                   full(r)
 --    extract(r)                 insert(r, p)
 --    pull(r)                    push(r)
---    detach_receiver(name)      detach_transmitter(name)
+--    detach_receiver(r, name)   detach_transmitter(r, name)
 --
 -- I.e., both receiver and transmitter will attach to a queue object they wish
 -- to communicate over, and detach once they cease operations.
@@ -38,13 +38,13 @@ module(...,package.seeall)
 --    attach_receiver(name), attach_transmitter(name)
 --       Attaches to and returns a shared memory interlink object by name (a
 --       SHM path). If the target name is unavailable (possibly because it is
---       already in use), this operation will block until it becomes available
+--       already in use) this operation will block until it becomes available
 --       again.
 --
 --    detach_receiver(r, name), detach_transmitter(r, name)
---       Unmaps interlink r and unlinks it from its name. If other end has
---       already freed the interlink, any packets remaining in the queue are
---       freed.
+--       Unmaps interlink r after detaching from the shared queue. Unless the
+--       other end is still attached the shared queue is unlinked from its
+--       name, and any packets remaining are freed.
 --
 --    full(r) / empty(r)
 --       Return true if the interlink r is full / empty.
@@ -63,7 +63,7 @@ local band = require("bit").band
 local waitfor = require("core.lib").waitfor
 local sync = require("core.sync")
 
-local SIZE = link.max + 1
+local SIZE = 1024
 local CACHELINE = 64 -- XXX - make dynamic
 local INT = ffi.sizeof("int")
 
@@ -87,16 +87,21 @@ ffi.cdef([[ struct interlink {
 -- and detach in any order, and even for multiple processes to attempt to
 -- attach to the same interlink at the same time.
 --
+-- Furthermore, more than two processes can attach to and detach from an
+-- interlink during its life time. I.e., a new receiver can attach to the queue
+-- once the former receiver has detached while the transmitter stays attached
+-- throughout, and vice-versa.
+--
 -- Interlinks can be in one of five states:
 
 local FREE = 0 -- Implicit initial state due to 0 value.
 local RXUP = 1 -- Receiver has attached.
 local TXUP = 2 -- Transmitter has attached.
 local DXUP = 3 -- Both ends have attached.
-local DOWN = 4 -- Either end has detached; must be re-allocated.
+local DOWN = 4 -- Both ends have detached; must be re-allocated.
 
--- Once either end detaches from an interlink it stays in the DOWN state
--- until it is deallocated.
+-- If at any point both ends have detached from an interlink it stays in the
+-- DOWN state until it is deallocated.
 --
 -- Here are the valid state transitions and when they occur:
 --
@@ -126,18 +131,16 @@ local DOWN = 4 -- Either end has detached; must be re-allocated.
 -- (any)    DOWN->*     Cannot transition from DOWN (must create new queue.)
 
 local function attach (name, initialize)
-   local ok, r
+   local r
    local first_try = true
    waitfor(
       function ()
-         -- Try to open the queue.
-         ok, r = pcall(shm.open, name, "struct interlink")
-         -- If that failed then we try to create it.
-         if not ok then ok, r = pcall(shm.create, name, "struct interlink") end
-         -- Return if we could map the queue and succeed to initialize it.
-         if ok and initialize(r) then return true end
+         -- Create/open the queue.
+         r = shm.create(name, "struct interlink")
+         -- Return if we succeed to initialize it.
+         if initialize(r) then return true end
          -- We failed; handle error and try again.
-         if ok then shm.unmap(r); ok, r = nil end
+         shm.unmap(r)
          if first_try then
             print("interlink: waiting for "..name.." to become available...")
             first_try = false
@@ -171,7 +174,10 @@ local function detach (r, name, reset, shutdown)
          if reset(r) then return true
          -- Alternatively, attempt to shutdown and deallocate queue.
          elseif shutdown(r) then
-            while not empty(r) do
+            -- If detach is called by the supervisor (due to an abnormal exit)
+            -- the packet module will not be loaded (and there will be no
+            -- freelist to put the packets into.)
+            while packet and not empty(r) do
                packet.free(extract(r))
             end
             shm.unlink(name)
@@ -185,23 +191,23 @@ end
 function detach_receiver (r, name)
    detach(r, name,
           -- Reset: detach from queue with active transmitter (DXUP -> TXUP.)
-          function () return sync.cas(r.state, DXUP, TXUP) end,
+          function (r) return sync.cas(r.state, DXUP, TXUP) end,
           -- Shutdown: deallocate no longer used (RXUP -> DOWN.)
-          function () return sync.cas(r.state, RXUP, DOWN) end)
+          function (r) return sync.cas(r.state, RXUP, DOWN) end)
 end
 
 function detach_transmitter (r, name)
    detach(r, name,
           -- Reset: detach from queue with ready receiver (DXUP -> RXUP.)
-          function () return sync.cas(r.state, DXUP, RXUP) end,
+          function (r) return sync.cas(r.state, DXUP, RXUP) end,
           -- Shutdown: deallocate no longer used queue (TXUP -> DOWN.)
-          function () return sync.cas(r.state, TXUP, DOWN) end)
+          function (r) return sync.cas(r.state, TXUP, DOWN) end)
 end
 
 -- Queue operations follow below.
 
 local function NEXT (i)
-   return band(i + 1, link.max)
+   return band(i + 1, SIZE - 1)
 end
 
 function full (r)
@@ -243,3 +249,33 @@ function pull (r)
    -- NB: no need for memory barrier on x86 (see push.)
    r.read = r.nread
 end
+
+-- The code below registers an abstract SHM object type with core.shm, and
+-- implements the minimum API necessary for programs like snabb top to inspect
+-- interlink queues (including a tostring meta-method to describe queue
+-- objects.)
+
+shm.register('interlink', getfenv())
+
+function open (name, readonly)
+   return shm.open(name, "struct interlink", readonly)
+end
+
+local function describe (r)
+   local function queue_fill (r)
+      local read, write = r.read, r.write
+      return read > write and write + SIZE - read or write - read
+   end
+   local function status (r)
+      return ({
+         [FREE] = "initializing",
+         [RXUP] = "waiting for transmitter",
+         [TXUP] = "waiting for receiver",
+         [DXUP] = "in active use",
+         [DOWN] = "deallocating"
+      })[r.state[0]]
+   end
+   return ("%d/%d (%s)"):format(queue_fill(r), SIZE, status(r))
+end
+
+ffi.metatype(ffi.typeof("struct interlink"), {__tostring=describe})
