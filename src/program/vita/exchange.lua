@@ -351,13 +351,13 @@ end
 function KeyManager:configure_route (route, rx, tx)
    route.status = status.ready
    route.rx_sa = {
-      mode = "aes-gcm-128-12",
+      aead = "aes-gcm-16-icv",
       spi = route.spi,
       key = lib.hexdump(rx.key),
       salt = lib.hexdump(rx.salt)
    }
    route.tx_sa = {
-      mode = "aes-gcm-128-12",
+      aead = "aes-gcm-16-icv",
       spi = route.spi,
       key = lib.hexdump(tx.key),
       salt = lib.hexdump(tx.salt)

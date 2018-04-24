@@ -9,7 +9,7 @@ module vita-ephemeral-keys {
   list sa {
     key id; unique "spi key";
     leaf id { type string { pattern '[\w_]+'; } mandatory true; }
-    leaf mode { type string; mandatory true; }
+    leaf aead { type string; mandatory true; }
     leaf spi { type spi; mandatory true; }
     leaf key { type key16; mandatory true; }
     leaf salt { type key4; mandatory true; }
