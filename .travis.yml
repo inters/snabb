@@ -9,4 +9,4 @@ before_script:
 
 script:
  - make -j
- - (cd src && sudo ./snabb snsh program/vita/test.snabb)
+ - (cd src && sudo ./snabb snsh program/vita/test.snabb IMIX 1e6 3)
