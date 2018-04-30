@@ -4,7 +4,7 @@ set -e
 SKIPPED_CODE=43
 
 # Requires test_env with Linux guest featuring ipsec/ESN support.
-if [ "$SNABB_IPSEC_SKIP_E2E_TEST" = yes ]; then
+if [ -z "$SNABB_IPSEC_ENABLE_E2E_TEST" ]; then
     exit $SKIPPED_CODE
 fi
 
