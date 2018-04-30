@@ -12,6 +12,7 @@ local histogram = require('core.histogram')
 local counter   = require("core.counter")
 local jit       = require("jit")
 local S         = require("syscall")
+local vmprofile = require("jit.vmprofile")
 local ffi       = require("ffi")
 local C         = ffi.C
 local S         = require("syscall")
@@ -31,6 +32,9 @@ local named_program_root = shm.root .. "/" .. "by-name"
 
 -- The currently claimed name (think false = nil but nil makes strict.lua unhappy).
 program_name = false
+
+-- Auditlog state
+local auditlog_enabled = false
 
 -- The set of all active apps and links in the system, indexed by name.
 app_table, link_table = {}, {}
@@ -70,7 +74,7 @@ busywait = false
 
 -- Profiling with vmprofile --------------------------------
 
--- FFI interface towards vmprofile
+-- Low-level FFI
 ffi.cdef[[
 int vmprofile_get_profile_size();
 void vmprofile_set_profile(void *counters);
@@ -81,7 +85,7 @@ local vmprofile_t = ffi.new("uint8_t["..C.vmprofile_get_profile_size().."]")
 local vmprofiles = {}
 local function getvmprofile (name)
    if vmprofiles[name] == nil then
-      vmprofiles[name] = shm.create("engine/vmprofile/"..name, vmprofile_t)
+      vmprofiles[name] = shm.create("vmprofile/"..name, vmprofile_t)
    end
    return vmprofiles[name]
 end
@@ -118,7 +122,7 @@ function with_restart (app, method)
    else
       status, result = true, method(app)
    end
-   setvmprofile('engine')
+   setvmprofile("engine")
    return status, result
 end
 
@@ -492,8 +496,15 @@ function main (options)
       done = lib.timeout(options.duration)
    end
 
+   -- Enable auditlog
+   if not auditlog_enabled then
+      jit.auditlog(shm.path("audit.log"))
+      auditlog_enabled = true
+   end
+
    -- Setup vmprofile
-   setvmprofile('engine')
+   setvmprofile("engine")
+   vmprofile.start()
 
    local breathe = breathe
    if options.measure_latency or options.measure_latency == nil then
@@ -509,7 +520,7 @@ function main (options)
    until done and done()
    counter.commit()
    if not options.no_report then report(options.report) end
-   setvmprofile('program')
+   setvmprofile("program")
 end
 
 local nextbreath
