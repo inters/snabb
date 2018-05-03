@@ -163,9 +163,9 @@ function Parser:parse_qstring(quote)
    local terminators = "\n"..quote
    if quote == '"' then terminators = terminators.."\\" end
 
-   local result = ""
+   local result = {}
    while true do
-      result = result..self:take_while("[^"..terminators.."]")
+      table.insert(result, self:take_while("[^"..terminators.."]"))
       if self:check(quote) then break end
       if self:is_eof() then
          self:error("while looking for '%s' (to terminate quoted string), got EOF", quote)
@@ -174,20 +174,19 @@ function Parser:parse_qstring(quote)
          while self.column < start_column do
             if not self:check(" ") and not self:check("\t") then break end
          end
-         result = result.."\n"
+         table.insert(result, "\n")
          if self.column > start_column then
-            result = result..string.rep(" ", self.column-start_column)
+            table.insert(result, string.rep(" ", self.column-start_column))
          end
       elseif self:check("\\") then
-         if self:check("n") then result = result.."\n"
-         elseif self:check("t") then result = result.."\t"
-         elseif self:check('"') then result = result..'"'
-         elseif self:check("\\") then result = result.."\\"
-         else
-            result = result.."\\"
-         end
+         if self:check("n")      then table.insert(result, "\n")
+         elseif self:check("t")  then table.insert(result, "\t")
+         elseif self:check('"')  then table.insert(result, '"')
+         elseif self:check("\\") then table.insert(result, "\\")
+         else                         table.insert(result, "\\") end
       end
    end
+   result = table.concat(result)
    self:check(quote)
    self:skip_whitespace()
 
