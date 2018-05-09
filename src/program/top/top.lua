@@ -11,6 +11,10 @@ local S = require("syscall")
 local histogram = require("core.histogram")
 local usage = require("program.top.README_inc")
 
+-- We must load any modules that register abstract shm types that we may
+-- wish to inspect.
+require("lib.interlink")
+
 local long_opts = {
    help = "h", list = "l"
 }
@@ -69,7 +73,7 @@ function list_shm (pid, object)
    table.sort(sorted)
    for _, name in ipairs(sorted) do
       if name ~= 'path' and name ~= 'specs' and  name ~= 'readonly' then
-         print_row({30, 30}, {name, tostring(frame[name])})
+         print_row({30, 47}, {name, tostring(frame[name])})
       end
    end
    shm.delete_frame(frame)
@@ -81,7 +85,9 @@ function top (instance_pid)
    local configs = 0
    local last_stats = nil
    while (true) do
-      if configs < counter.read(counters.engine.configs) then
+      local current = counter.read(counters.engine.configs)
+      if configs < current then
+         configs = current
          -- If a (new) config is loaded we (re)open the link counters.
          open_link_counters(counters, instance_tree)
       end
@@ -195,17 +201,12 @@ end
 
 function pad_str (s, n, no_pad)
    local padding = math.max(n - s:len(), 0)
-   local truncated = s:sub(1, n)
-   local padded = ((not no_pad) and (" "):rep(padding)) or ""
-   return truncated..padded
+   return ("%s%s"):format(s:sub(1, n), (no_pad and "") or (" "):rep(padding))
 end
 
 function print_row (spec, args)
    for i, s in ipairs(args) do
-      local column
-      if i < #args then column = pad_str(s, spec[i])
-      else              column = pad_str(s, spec[i], 'no-pad') end
-      io.write((" %s"):format(column))
+      io.write((" %s"):format(pad_str(s, spec[i], i == #args)))
    end
    io.write("\n")
 end

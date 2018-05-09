@@ -163,9 +163,9 @@ function Parser:parse_qstring(quote)
    local terminators = "\n"..quote
    if quote == '"' then terminators = terminators.."\\" end
 
-   local result = ""
+   local result = {}
    while true do
-      result = result..self:take_while("[^"..terminators.."]")
+      table.insert(result, self:take_while("[^"..terminators.."]"))
       if self:check(quote) then break end
       if self:is_eof() then
          self:error("while looking for '%s' (to terminate quoted string), got EOF", quote)
@@ -174,20 +174,19 @@ function Parser:parse_qstring(quote)
          while self.column < start_column do
             if not self:check(" ") and not self:check("\t") then break end
          end
-         result = result.."\n"
+         table.insert(result, "\n")
          if self.column > start_column then
-            result = result..string.rep(" ", self.column-start_column)
+            table.insert(result, string.rep(" ", self.column-start_column))
          end
       elseif self:check("\\") then
-         if self:check("n") then result = result.."\n"
-         elseif self:check("t") then result = result.."\t"
-         elseif self:check('"') then result = result..'"'
-         elseif self:check("\\") then result = result.."\\"
-         else
-            result = result.."\\"
-         end
+         if self:check("n")      then table.insert(result, "\n")
+         elseif self:check("t")  then table.insert(result, "\t")
+         elseif self:check('"')  then table.insert(result, '"')
+         elseif self:check("\\") then table.insert(result, "\\")
+         else                         table.insert(result, "\\") end
       end
    end
+   result = table.concat(result)
    self:check(quote)
    self:skip_whitespace()
 
@@ -278,16 +277,12 @@ function Parser:parse_statement()
       self:error("keyword expected")
    end
    returnval.keyword = keyword
-   if self:check(";") then
-      -- We've ended the statement without an argument.
-      return returnval
-   end
 
    -- Take the identifier
-   self:consume_whitespace()
-   local argument = self:parse_string()
-   if argument ~= "" then returnval.argument = argument end
-   self:skip_whitespace()
+   if self:skip_whitespace() and self:peek() ~= ';' and self:peek() ~= '{' then
+      returnval.argument = self:parse_string()
+      self:skip_whitespace()
+   end
 
    if self:check(";") then
       return returnval
@@ -427,7 +422,9 @@ function selftest()
    test_module("// foo bar;\nleaf port;", {{keyword="leaf", argument="port"}})
    test_module("type/** hellooo */string;", {{keyword="type", argument="string"}})
    test_module('type "hello\\pq";', {{keyword="type", argument="hello\\pq"}})
-   test_module('description "";', {{keyword="description"}})
+   test_module('description "";', {{keyword="description", argument=""}})
+   test_module('description;', {{keyword="description"}})
+   test_module('description ;', {{keyword="description"}})
    test_module(lines("leaf port {", "type number;", "}"), {{keyword="leaf",
    argument="port", statements={{keyword="type", argument="number"}}}})
    test_module(lines("leaf port {", "type;", "}"), {{keyword="leaf",
@@ -436,5 +433,6 @@ function selftest()
    argument="hello/world"}})
    parse(require('lib.yang.ietf_inet_types_yang'))
    parse(require('lib.yang.ietf_yang_types_yang'))
-   parse(require('lib.yang.ietf_softwire_yang'))
+   parse(require('lib.yang.ietf_softwire_common_yang'))
+   parse(require('lib.yang.ietf_softwire_br_yang'))
 end

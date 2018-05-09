@@ -351,13 +351,13 @@ end
 function KeyManager:configure_route (route, rx, tx)
    route.status = status.ready
    route.rx_sa = {
-      mode = "aes-gcm-128-12",
+      aead = "aes-gcm-16-icv",
       spi = route.spi,
       key = lib.hexdump(rx.key),
       salt = lib.hexdump(rx.salt)
    }
    route.tx_sa = {
-      mode = "aes-gcm-128-12",
+      aead = "aes-gcm-16-icv",
       spi = route.spi,
       key = lib.hexdump(tx.key),
       salt = lib.hexdump(tx.salt)
@@ -439,7 +439,7 @@ end
 
 local function store_ephemeral_keys (path, keys)
    local f = assert(io.open(path, "w"), "Unable to open file: "..path)
-   yang.print_data_for_schema(schemata['ephemeral-keys'], {sa=keys}, f)
+   yang.print_config_for_schema(schemata['ephemeral-keys'], {sa=keys}, f)
    f:close()
 end
 

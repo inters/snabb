@@ -1,4 +1,4 @@
-#!/usr/bin/env snabb snsh
+#!snabb snsh
 
 -- Use of this source code is governed by the GNU AGPL license; see COPYING.
 
@@ -12,7 +12,7 @@ local confpath = shm.root.."/"..shm.resolve("group/testconf")
 
 local function commit_conf (conf)
    local f = assert(io.open(confpath, "w"), "Unable to open file: "..confpath)
-   yang.print_data_for_schema(vita.schemata['esp-gateway'], conf, f)
+   yang.print_config_for_schema(vita.schemata['esp-gateway'], conf, f)
    f:close()
 end
 

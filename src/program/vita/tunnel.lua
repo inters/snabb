@@ -6,7 +6,7 @@ local counter = require("core.counter")
 local esp = require("lib.ipsec.esp")
 local ipv4 = require("lib.protocol.ipv4")
 
--- sa := { spi=(SPI), mode=(STRING), key=(KEY), salt=(SALT),
+-- sa := { spi=(SPI), aead=(STRING), key=(KEY), salt=(SALT),
 --         [ window_size=(INT),
 --           resync_threshold=(INT), resync_attempts=(INT),
 --           auditing=(BOOL) ] }
@@ -18,7 +18,7 @@ Encapsulate = {
    name = "Encapsulate",
    config = {
       spi = {required=true},
-      mode = {required=true},
+      aead = {required=true},
       key = {required=true},
       salt = {required=true}
    }
@@ -44,7 +44,7 @@ Decapsulate = {
    name = "Decapsulate",
    config = {
       spi = {required=true},
-      mode = {required=true},
+      aead = {required=true},
       key = {required=true},
       salt = {required=true},
       window_size = {},
