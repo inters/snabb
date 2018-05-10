@@ -16,7 +16,7 @@ local Transmitter = require("apps.interlink.transmitter")
 local intel_mp = require("apps.intel_mp.intel_mp")
 local numa = require("lib.numa")
 local yang = require("lib.yang.yang")
-local C = require("ffi").C
+local S = require("syscall")
 local usage = require("program.vita.README_inc")
 local confighelp = require("program.vita.README_config_inc")
 
@@ -349,14 +349,22 @@ end
 function listen_confpath (schema, confpath, loader, interval)
    interval = interval or 1e9
 
-   local mtime = 0
+   local notify_fd = assert(S.inotify_init("cloexec, nonblock"))
+   local conf_fd
    local needs_reconfigure = true
-   timer.activate(timer.new(
-      "check-for-reconfigure",
-      function () needs_reconfigure = C.stat_mtime(confpath) ~= mtime end,
-      interval,
-      "repeating"
-   ))
+   local function check_reconfigure ()
+      if not conf_fd then
+         conf_fd = notify_fd:inotify_add_watch(confpath, "modify")
+         needs_reconfigure = needs_reconfigure or conf_fd
+      else
+         local n, err = notify_fd:inotify_read()
+         needs_reconfigure = (not err and assert(err.again)) and n >= 1
+      end
+   end
+   timer.activate(timer.new("check-for-reconfigure",
+                            check_reconfigure,
+                            interval,
+                            "repeating"))
 
    local function run_loader ()
       return loader(load_config(schema, confpath))
@@ -367,7 +375,6 @@ function listen_confpath (schema, confpath, loader, interval)
       local success, c = pcall(run_loader)
       if success then
          print("Reconfigure: loaded "..confpath)
-         mtime = C.stat_mtime(confpath)
          engine.configure(c)
       else
          print("Reconfigure: error: "..c)
