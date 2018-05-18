@@ -8,6 +8,8 @@ local header = require("lib.protocol.header")
 local ipsum = require("lib.checksum").ipsum
 local htons, ntohs, htonl, ntohl =
    lib.htons, lib.ntohs, lib.htonl, lib.ntohl
+local band, lshift, rshift, bnot =
+   bit.band, bit.lshift, bit.rshift, bit.bnot
 
 -- TODO: generalize
 local AF_INET = 2
@@ -145,6 +147,25 @@ function ipv4:ttl (ttl)
    else
       return self:header().ttl
    end
+end
+
+-- Adopted from lwAFTR with love
+function ipv4:ttl_decrement ()
+   local old_ttl = self:ttl()
+   local new_ttl = band(old_ttl - 1, 0xff)
+   self:ttl(new_ttl)
+   local chksum = bnot(ntohs(self:header().checksum))
+   -- Now fix up the checksum. The ttl field is the first byte in the
+   -- 16-bit big-endian word, so the difference to the overall sum is
+   -- multiplied by 0xff.
+   chksum = chksum + lshift(new_ttl - old_ttl, 8)
+   -- Now do the one's complement 16-bit addition of the 16-bit words of
+   -- the checksum, which necessarily is a 32-bit value.  Two carry
+   -- iterations will suffice.
+   chksum = band(chksum, 0xffff) + rshift(chksum, 16)
+   chksum = band(chksum, 0xffff) + rshift(chksum, 16)
+   self:header().checksum = htons(bnot(chksum))
+   return new_ttl
 end
 
 function ipv4:protocol (protocol)
