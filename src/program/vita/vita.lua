@@ -354,7 +354,7 @@ function listen_confpath (schema, confpath, loader, interval)
    local needs_reconfigure = true
    local function check_reconfigure ()
       if not conf_fd then
-         conf_fd = notify_fd:inotify_add_watch(confpath, "modify")
+         conf_fd = notify_fd:inotify_add_watch(confpath, "close_write")
          needs_reconfigure = needs_reconfigure or conf_fd
       else
          local n, err = notify_fd:inotify_read()
