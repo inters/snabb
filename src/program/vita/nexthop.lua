@@ -22,7 +22,6 @@ NextHop4 = {
       nexthop_ip4 = {required=true}
    },
    shm = {
-      protocol_errors = {counter},
       arp_requests = {counter},
       arp_replies = {counter},
       arp_errors = {counter},
@@ -68,7 +67,6 @@ function NextHop4:new (conf)
    -- Headers to parse
    o.arp = arp:new{}
    o.arp_ipv4 = arp_ipv4:new{}
-   o.ip4 = ipv4:new{}
 
    -- Initially, we don’t know the hardware address of our next hop
    o.connected = false
@@ -100,14 +98,7 @@ function NextHop4:push ()
       for _, input in ipairs(self.forward) do
          while not link.empty(input) do
             local p = link.receive(input)
-            local ip4 = self.ip4:new_from_mem(p.data, p.length)
-            if ip4 and ip4:ttl() > 0 then
-               ip4:ttl(ip4:ttl() - 1)
-               ip4:checksum()
-               link.transmit(output, self:encapsulate(p, 0x0800))
-            else
-               counter.add(self.shm.protocol_errors)
-            end
+            link.transmit(output, self:encapsulate(p, 0x0800))
          end
       end
 

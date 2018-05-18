@@ -5,6 +5,8 @@ module(...,package.seeall)
 local lib = require("core.lib")
 local shm = require("core.shm")
 local worker = require("core.worker")
+local dispatch = require("program.vita.dispatch")
+local ttl = require("program.vita.ttl")
 local route = require("program.vita.route")
 local tunnel = require("program.vita.tunnel")
 local nexthop = require("program.vita.nexthop")
@@ -97,13 +99,19 @@ function configure_private_router (conf, append)
    conf = lib.parse(conf, confspec)
    local c = append or config.new()
 
+   config.app(c, "PrivateDispatch", dispatch.PrivateDispatch)
+   config.app(c, "OutboundTTL", ttl.DecrementTTL)
    config.app(c, "PrivateRouter", route.PrivateRouter, {routes=conf.route})
+   config.app(c, "InboundTTL", ttl.DecrementTTL)
    config.app(c, "PrivateNextHop", nexthop.NextHop4, {
                  node_mac = conf.private_interface.macaddr,
                  node_ip4 = conf.private_ip4,
                  nexthop_ip4 = conf.private_nexthop_ip4
    })
-   config.link(c, "PrivateRouter.arp -> PrivateNextHop.arp")
+   config.link(c, "PrivateDispatch.forward4 -> OutboundTTL.input")
+   config.link(c, "PrivateDispatch.arp -> PrivateNextHop.arp")
+   config.link(c, "OutboundTTL.output -> PrivateRouter.input")
+   config.link(c, "InboundTTL.output -> PrivateNextHop.forward")
 
    for id, route in pairs(conf.route) do
       local private_in = "PrivateRouter."..id
@@ -111,14 +119,14 @@ function configure_private_router (conf, append)
       config.app(c, ESP_in, Transmitter)
       config.link(c, private_in.." -> "..ESP_in..".input")
 
-      local private_out = "PrivateNextHop."..id
+      local private_out = "InboundTTL."..id
       local DSP_out = "DSP_"..id.."_out"
       config.app(c, DSP_out, Receiver)
       config.link(c, DSP_out..".output -> "..private_out)
    end
 
    local private_links = {
-      input = "PrivateRouter.input",
+      input = "PrivateDispatch.input",
       output = "PrivateNextHop.output"
    }
    return c, private_links
@@ -128,6 +136,7 @@ function configure_public_router (conf, append)
    conf = lib.parse(conf, confspec)
    local c = append or config.new()
 
+   config.app(c, "PublicDispatch", dispatch.PublicDispatch)
    config.app(c, "PublicRouter", route.PublicRouter, {
                  routes = conf.route,
                  node_ip4 = conf.public_ip4
@@ -137,11 +146,12 @@ function configure_public_router (conf, append)
                  node_ip4 = conf.public_ip4,
                  nexthop_ip4 = conf.public_nexthop_ip4
    })
-   config.link(c, "PublicRouter.arp -> PublicNextHop.arp")
+   config.link(c, "PublicDispatch.forward4 -> PublicRouter.input")
+   config.link(c, "PublicDispatch.arp -> PublicNextHop.arp")
 
    config.app(c, "Protocol_in", Transmitter)
    config.app(c, "Protocol_out", Receiver)
-   config.link(c, "PublicRouter.protocol -> Protocol_in.input")
+   config.link(c, "PublicDispatch.protocol -> Protocol_in.input")
    config.link(c, "Protocol_out.output -> PublicNextHop.protocol")
 
    for id, route in pairs(conf.route) do
@@ -161,7 +171,7 @@ function configure_public_router (conf, append)
    end
 
    local public_links = {
-      input = "PublicRouter.input",
+      input = "PublicDispatch.input",
       output = "PublicNextHop.output"
    }
 
