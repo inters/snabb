@@ -72,13 +72,8 @@ local conf, sim_packets = gentest.gen_testcase({
       nroutes = tonumber(main.parameters[3])
 })
 
-local cpuspec = main.parameters[4] or ''
-local cpus = {}
-for cpu in cpuspec:gmatch('%s*([0-9]+),*') do
-   table.insert(cpus, assert(tonumber(cpu)))
-end
-
-vita.cpubind(cpus[1])
+local cpu = vita.cpuset(main.parameters[4] or '')
+numa.bind_to_cpu(cpu[2])
 
 local c, private = vita.configure_private_router(conf, config.new())
 
@@ -107,19 +102,19 @@ end
 worker.start(
    "PublicRouterLoopback",
    ([[require("program.vita.vita").public_router_loopback_worker(%q, %s)]])
-      :format(confpath, cpus[2])
+      :format(confpath, cpu[3])
 )
 
 worker.start(
    "Exchange",
    ([[require("program.vita.vita").exchange_worker(%q, %s)]])
-      :format(confpath, cpus[3])
+      :format(confpath, cpu[1])
 )
 
 worker.start("ESP", ([[require("program.vita.vita").esp_worker(%s)]])
-             :format(cpus[4]))
+             :format(cpu[4]))
 worker.start("DSP", ([[require("program.vita.vita").dsp_worker(%s)]])
-                :format(cpus[5]))
+                :format(cpu[5]))
 
 
 -- adapted from snabbnfv traffic
