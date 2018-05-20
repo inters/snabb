@@ -64,7 +64,7 @@ function ipv4:new (config)
    o:ihl(o:sizeof() / 4)
    o:dscp(config.dscp or 0)
    o:ecn(config.ecn or 0)
-   o:total_length(o:sizeof()) -- default to header only
+   o:total_length(config.total_length or o:sizeof()) -- default to header only
    o:id(config.id or 0)
    o:flags(config.flags or 0)
    o:frag_off(config.frag_off or 0)
