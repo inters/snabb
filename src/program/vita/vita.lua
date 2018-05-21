@@ -16,6 +16,8 @@ local interlink = require("lib.interlink")
 local Receiver = require("apps.interlink.receiver")
 local Transmitter = require("apps.interlink.transmitter")
 local intel_mp = require("apps.intel_mp.intel_mp")
+local echo4 = require("apps.ipv4.echo")
+local ipv4 = require("lib.protocol.ipv4")
 local numa = require("lib.numa")
 local yang = require("lib.yang.yang")
 local C = require("ffi").C
@@ -99,9 +101,14 @@ function configure_private_router (conf, append)
    conf = lib.parse(conf, confspec)
    local c = append or config.new()
 
-   config.app(c, "PrivateDispatch", dispatch.PrivateDispatch)
+   config.app(c, "PrivateDispatch", dispatch.PrivateDispatch, {
+                 node_ip4 = conf.private_ip4
+   })
    config.app(c, "OutboundTTL", ttl.DecrementTTL)
    config.app(c, "PrivateRouter", route.PrivateRouter, {routes=conf.route})
+   config.app(c, "PrivateEcho4", echo4.ICMPEcho, {
+                 address = ipv4:pton(conf.private_ip4)
+   })
    config.app(c, "InboundTTL", ttl.DecrementTTL)
    config.app(c, "PrivateNextHop", nexthop.NextHop4, {
                  node_mac = conf.private_interface.macaddr,
@@ -109,9 +116,12 @@ function configure_private_router (conf, append)
                  nexthop_ip4 = conf.private_nexthop_ip4
    })
    config.link(c, "PrivateDispatch.forward4 -> OutboundTTL.input")
+   config.link(c, "PrivateDispatch.echo4 -> PrivateEcho4.south")
    config.link(c, "PrivateDispatch.arp -> PrivateNextHop.arp")
    config.link(c, "OutboundTTL.output -> PrivateRouter.input")
    config.link(c, "InboundTTL.output -> PrivateNextHop.forward")
+   config.link(c, "PrivateEcho4.south -> PrivateNextHop.echo4")
+   config.link(c, "PrivateEcho4.north -> PrivateEcho4.north")
 
    for id, route in pairs(conf.route) do
       local private_in = "PrivateRouter."..id
@@ -136,10 +146,15 @@ function configure_public_router (conf, append)
    conf = lib.parse(conf, confspec)
    local c = append or config.new()
 
-   config.app(c, "PublicDispatch", dispatch.PublicDispatch)
+   config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
+                 node_ip4 = conf.public_ip4
+   })
    config.app(c, "PublicRouter", route.PublicRouter, {
                  routes = conf.route,
                  node_ip4 = conf.public_ip4
+   })
+   config.app(c, "PublicEcho4", echo4.ICMPEcho, {
+                 address = ipv4:pton(conf.public_ip4)
    })
    config.app(c, "PublicNextHop", nexthop.NextHop4, {
                  node_mac = conf.public_interface.macaddr,
@@ -147,7 +162,10 @@ function configure_public_router (conf, append)
                  nexthop_ip4 = conf.public_nexthop_ip4
    })
    config.link(c, "PublicDispatch.forward4 -> PublicRouter.input")
+   config.link(c, "PublicDispatch.echo4 -> PublicEcho4.south")
    config.link(c, "PublicDispatch.arp -> PublicNextHop.arp")
+   config.link(c, "PublicEcho4.south -> PublicNextHop.echo4")
+   config.link(c, "PublicEcho4.north -> PublicEcho4.north")
 
    config.app(c, "Protocol_in", Transmitter)
    config.app(c, "Protocol_out", Receiver)

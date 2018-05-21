@@ -11,6 +11,9 @@ local ffi = require("ffi")
 
 PrivateDispatch = {
    name = "PrivateDispatch",
+   config = {
+      node_ip4 = {required=true}
+   },
    shm = {
       rxerrors = {counter},
       ethertype_errors = {counter},
@@ -18,17 +21,28 @@ PrivateDispatch = {
    }
 }
 
-function PrivateDispatch:new ()
+function PrivateDispatch:new (conf)
    local o = {
       p_box = ffi.new("struct packet *[1]"),
       ip4 = ipv4:new({}),
-      dispatch = pf_match.compile([[match {
+      dispatch = pf_match.compile(([[match {
+         ip icmp[icmptype] = icmp-echo and dst host %s => echo4
+         ip icmp and dst host %s => events4
          ip => forward4
          arp => arp
          otherwise => reject_ethertype
-      }]])
+      }]]):format(conf.node_ip4, conf.node_ip4))
    }
    return setmetatable(o, {__index=PrivateDispatch})
+end
+
+function PrivateDispatch:echo4 ()
+   link.transmit(self.output.echo4, self.p_box[0])
+end
+
+function PrivateDispatch:events4 ()
+   -- Not implemented.
+   packet.free(self.p_box[0])
 end
 
 function PrivateDispatch:forward4 ()
@@ -68,6 +82,9 @@ end
 
 PublicDispatch = {
    name = "PublicDispatch",
+   config = {
+      node_ip4 = {required=true}
+   },
    shm = {
       rxerrors = {counter},
       ethertype_errors = {counter},
@@ -75,19 +92,30 @@ PublicDispatch = {
    }
 }
 
-function PublicDispatch:new ()
+function PublicDispatch:new (conf)
    local o = {
       p_box = ffi.new("struct packet *[1]"),
       ip4 = ipv4:new({}),
-      dispatch = pf_match.compile([[match {
+      dispatch = pf_match.compile(([[match {
          ip proto esp => forward4
          ip proto 99 => protocol
+         ip icmp[icmptype] = icmp-echo and dst host %s => echo4
+         ip icmp and dst host %s => events4
          ip => reject_protocol
          arp => arp
          otherwise => reject_ethertype
-      }]])
+      }]]):format(conf.node_ip4, conf.node_ip4))
    }
    return setmetatable(o, {__index=PublicDispatch})
+end
+
+function PublicDispatch:echo4 ()
+   link.transmit(self.output.echo4, self.p_box[0])
+end
+
+function PublicDispatch:events4 ()
+   -- Not implemented.
+   packet.free(self.p_box[0])
 end
 
 function PublicDispatch:forward4 ()
