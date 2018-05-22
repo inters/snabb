@@ -197,6 +197,10 @@ Computes and sets the IPv4 header checksum. Its called automatically by
 Predicate methods to test if *ip* is equal to the source or destination
 addresses individually.
 
+— Method **ipv4:swap**
+
+Swaps the source and destination addresses.
+
 — Function **ipv4:pton** *string*
 
 Returns the binary representation of IPv4 address denoted by *string*.

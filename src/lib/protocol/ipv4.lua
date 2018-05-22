@@ -220,6 +220,14 @@ function ipv4:eq (other)
          self:src_eq(other:src()) and self:dst_eq(other:dst())
 end
 
+function ipv4:swap ()
+   local tmp = ipv4_addr_t()
+   local h = self:header()
+   ffi.copy(tmp, h.src_ip, ipv4_addr_t_size)
+   ffi.copy(h.dst_ip, h.src_ip, ipv4_addr_t_size)
+   ffi.copy(h.src_ip, tmp, ipv4_addr_t_size)
+end
+
 -- Return a pseudo header for checksum calculation in a upper-layer
 -- protocol (e.g. icmp).  Note that the payload length and next-header
 -- values in the pseudo-header refer to the effective upper-layer
