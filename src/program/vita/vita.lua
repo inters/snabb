@@ -11,12 +11,12 @@ local route = require("program.vita.route")
 local tunnel = require("program.vita.tunnel")
 local nexthop = require("program.vita.nexthop")
 local exchange = require("program.vita.exchange")
+local icmp = require("program.vita.icmp")
       schemata = require("program.vita.schemata")
 local interlink = require("lib.interlink")
 local Receiver = require("apps.interlink.receiver")
 local Transmitter = require("apps.interlink.transmitter")
 local intel_mp = require("apps.intel_mp.intel_mp")
-local echo4 = require("apps.ipv4.echo")
 local ipv4 = require("lib.protocol.ipv4")
 local numa = require("lib.numa")
 local yang = require("lib.yang.yang")
@@ -105,23 +105,37 @@ function configure_private_router (conf, append)
                  node_ip4 = conf.private_ip4
    })
    config.app(c, "OutboundTTL", ttl.DecrementTTL)
-   config.app(c, "PrivateRouter", route.PrivateRouter, {routes=conf.route})
-   config.app(c, "PrivateEcho4", echo4.ICMPEcho, {
-                 address = ipv4:pton(conf.private_ip4)
+   config.app(c, "PrivateRouter", route.PrivateRouter, {
+                 routes = conf.route
+   })
+   config.app(c, "PrivateICMP4", icmp.ICMP4, {
+                 node_ip4 = conf.private_ip4
+   })
+   config.app(c, "InboundDispatch", dispatch.InboundDispatch, {
+                 node_ip4 = conf.private_ip4
    })
    config.app(c, "InboundTTL", ttl.DecrementTTL)
+   config.app(c, "InboundICMP4", icmp.ICMP4, {
+                 node_ip4 = conf.private_ip4
+   })
    config.app(c, "PrivateNextHop", nexthop.NextHop4, {
                  node_mac = conf.private_interface.macaddr,
                  node_ip4 = conf.private_ip4,
                  nexthop_ip4 = conf.private_nexthop_ip4
    })
    config.link(c, "PrivateDispatch.forward4 -> OutboundTTL.input")
-   config.link(c, "PrivateDispatch.echo4 -> PrivateEcho4.south")
+   config.link(c, "PrivateDispatch.icmp4 -> PrivateICMP4.input")
    config.link(c, "PrivateDispatch.arp -> PrivateNextHop.arp")
+   config.link(c, "PrivateDispatch.protocol4_unreachable -> PrivateICMP4.protocol_unreachable")
    config.link(c, "OutboundTTL.output -> PrivateRouter.input")
+   config.link(c, "OutboundTTL.time_exceeded -> PrivateICMP4.transit_ttl_exceeded")
+   config.link(c, "PrivateICMP4.output -> PrivateNextHop.icmp4")
+   config.link(c, "InboundDispatch.forward4 -> InboundTTL.input")
+   config.link(c, "InboundDispatch.icmp4 -> InboundICMP4.input")
+   config.link(c, "InboundDispatch.protocol4_unreachable -> InboundICMP4.protocol_unreachable")
    config.link(c, "InboundTTL.output -> PrivateNextHop.forward")
-   config.link(c, "PrivateEcho4.south -> PrivateNextHop.echo4")
-   config.link(c, "PrivateEcho4.north -> PrivateEcho4.north")
+   config.link(c, "InboundTTL.time_exceeded -> InboundICMP4.transit_ttl_exceeded")
+   config.link(c, "InboundICMP4.output -> PrivateRouter.control")
 
    for id, route in pairs(conf.route) do
       local private_in = "PrivateRouter."..id
@@ -129,7 +143,7 @@ function configure_private_router (conf, append)
       config.app(c, ESP_in, Transmitter)
       config.link(c, private_in.." -> "..ESP_in..".input")
 
-      local private_out = "InboundTTL."..id
+      local private_out = "InboundDispatch."..id
       local DSP_out = "DSP_"..id.."_out"
       config.app(c, DSP_out, Receiver)
       config.link(c, DSP_out..".output -> "..private_out)
@@ -150,11 +164,10 @@ function configure_public_router (conf, append)
                  node_ip4 = conf.public_ip4
    })
    config.app(c, "PublicRouter", route.PublicRouter, {
-                 routes = conf.route,
-                 node_ip4 = conf.public_ip4
+                 routes = conf.route
    })
-   config.app(c, "PublicEcho4", echo4.ICMPEcho, {
-                 address = ipv4:pton(conf.public_ip4)
+   config.app(c, "PublicICMP4", icmp.ICMP4, {
+                 node_ip4 = conf.public_ip4
    })
    config.app(c, "PublicNextHop", nexthop.NextHop4, {
                  node_mac = conf.public_interface.macaddr,
@@ -162,10 +175,10 @@ function configure_public_router (conf, append)
                  nexthop_ip4 = conf.public_nexthop_ip4
    })
    config.link(c, "PublicDispatch.forward4 -> PublicRouter.input")
-   config.link(c, "PublicDispatch.echo4 -> PublicEcho4.south")
+   config.link(c, "PublicDispatch.icmp4 -> PublicICMP4.input")
    config.link(c, "PublicDispatch.arp -> PublicNextHop.arp")
-   config.link(c, "PublicEcho4.south -> PublicNextHop.echo4")
-   config.link(c, "PublicEcho4.north -> PublicEcho4.north")
+   config.link(c, "PublicDispatch.protocol4_unreachable -> PublicICMP4.protocol_unreachable")
+   config.link(c, "PublicICMP4.output -> PublicNextHop.icmp4")
 
    config.app(c, "Protocol_in", Transmitter)
    config.app(c, "Protocol_out", Receiver)

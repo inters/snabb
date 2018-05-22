@@ -8,8 +8,6 @@ local ipv4 = require("lib.protocol.ipv4")
 DecrementTTL = {
    name = "DecrementTTL",
    shm = {
-      rxerrors = {counter},
-      ttl_errors = {counter},
       protocol_errors = {counter}
    }
 }
@@ -27,12 +25,9 @@ function DecrementTTL:push ()
             ip4:ttl_decrement()
             link.transmit(self.output.output, p)
          elseif ip4 then
-            packet.free(p)
-            counter.add(self.shm.rxerrors)
-            counter.add(self.shm.ttl_errors)
+            link.transmit(self.output.time_exceeded, p)
          else
             packet.free(p)
-            counter.add(self.shm.rxerrors)
             counter.add(self.shm.protocol_errors)
          end
       end

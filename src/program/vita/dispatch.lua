@@ -2,6 +2,7 @@
 
 module(...,package.seeall)
 
+local icmp = require("program.vita.icmp")
 local counter = require("core.counter")
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
@@ -26,23 +27,14 @@ function PrivateDispatch:new (conf)
       p_box = ffi.new("struct packet *[1]"),
       ip4 = ipv4:new({}),
       dispatch = pf_match.compile(([[match {
-         ip icmp[icmptype] = icmp-echo and dst host %s => echo4
-         ip icmp and dst host %s => events4
+         ip dst host %s and icmp => icmp4
+         ip dst host %s => protocol4_unreachable
          ip => forward4
          arp => arp
          otherwise => reject_ethertype
       }]]):format(conf.node_ip4, conf.node_ip4))
    }
    return setmetatable(o, {__index=PrivateDispatch})
-end
-
-function PrivateDispatch:echo4 ()
-   link.transmit(self.output.echo4, self.p_box[0])
-end
-
-function PrivateDispatch:events4 ()
-   -- Not implemented.
-   packet.free(self.p_box[0])
 end
 
 function PrivateDispatch:forward4 ()
@@ -59,9 +51,19 @@ function PrivateDispatch:forward4 ()
    end
 end
 
+function PrivateDispatch:icmp4 ()
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+   link.transmit(self.output.icmp4, p)
+end
+
 function PrivateDispatch:arp ()
    local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
    link.transmit(self.output.arp, p)
+end
+
+function PrivateDispatch:protocol4_unreachable ()
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+   link.transmit(self.output.protocol4_unreachable, p)
 end
 
 function PrivateDispatch:reject_ethertype ()
@@ -95,27 +97,17 @@ PublicDispatch = {
 function PublicDispatch:new (conf)
    local o = {
       p_box = ffi.new("struct packet *[1]"),
-      ip4 = ipv4:new({}),
       dispatch = pf_match.compile(([[match {
          ip proto esp => forward4
          ip proto 99 => protocol
-         ip icmp[icmptype] = icmp-echo and dst host %s => echo4
-         ip icmp and dst host %s => events4
+         ip dst host %s and icmp => icmp4
+         ip dst host %s => protocol4_unreachable
          ip => reject_protocol
          arp => arp
          otherwise => reject_ethertype
       }]]):format(conf.node_ip4, conf.node_ip4))
    }
    return setmetatable(o, {__index=PublicDispatch})
-end
-
-function PublicDispatch:echo4 ()
-   link.transmit(self.output.echo4, self.p_box[0])
-end
-
-function PublicDispatch:events4 ()
-   -- Not implemented.
-   packet.free(self.p_box[0])
 end
 
 function PublicDispatch:forward4 ()
@@ -130,9 +122,19 @@ function PublicDispatch:protocol ()
    link.transmit(self.output.protocol, p)
 end
 
+function PublicDispatch:icmp4 ()
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+   link.transmit(self.output.icmp4, p)
+end
+
 function PublicDispatch:arp ()
    local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
    link.transmit(self.output.arp, p)
+end
+
+function PublicDispatch:protocol4_unreachable ()
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+   link.transmit(self.output.protocol4_unreachable, p)
 end
 
 function PublicDispatch:reject_protocol ()
@@ -153,5 +155,66 @@ function PublicDispatch:push ()
       local p = link.receive(input)
       self.p_box[0] = p
       self:dispatch(p.data, p.length)
+   end
+end
+
+
+InboundDispatch = {
+   name = "InboundDispatch",
+   config = {
+      node_ip4 = {required=true},
+   },
+   shm = {
+      protocol_errors = {counter}
+   }
+}
+
+function InboundDispatch:new (conf)
+   local o = {
+      node_ip4n = ipv4:pton(conf.node_ip4),
+      ip4 = ipv4:new({})
+   }
+   return setmetatable(o, {__index=InboundDispatch})
+end
+
+function InboundDispatch:forward4 (p)
+   link.transmit(self.output.forward4, p)
+end
+
+function InboundDispatch:icmp4 (p)
+   link.transmit(self.output.icmp4, p)
+end
+
+function InboundDispatch:protocol4_unreachable (p)
+   link.transmit(self.output.protocol4_unreachable, p)
+end
+
+function InboundDispatch:reject_protocol (p)
+   packet.free(p)
+   counter.add(self.shm.protocol_errors)
+end
+
+function InboundDispatch:dispatch (p)
+   local ip4 = self.ip4:new_from_mem(p.data, p.length)
+   if ip4 then
+      if ip4:dst_eq(self.node_ip4n) then
+         if ip4:protocol() == icmp.ICMP4.PROTOCOL then
+            self:icmp4(p)
+         else
+            self:protocol4_unreachable(p)
+         end
+      else
+         self:forward4(p)
+      end
+   else
+      self:reject_protocol(p)
+   end
+end
+
+function InboundDispatch:push ()
+   for _, input in ipairs(self.input) do
+      while not link.empty(input) do
+         self:dispatch(link.receive(input))
+      end
    end
 end

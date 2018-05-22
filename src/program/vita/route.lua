@@ -22,7 +22,6 @@ PrivateRouter = {
       routes = {required=true}
    },
    shm = {
-      rxerrors = {counter},
       route_errors = {counter}
    }
 }
@@ -65,20 +64,23 @@ function PrivateRouter:find_route4 (dst)
    return self.routes[self.routing_table4:search_bytes(dst)]
 end
 
-function PrivateRouter:push ()
-   local input = self.input.input
+function PrivateRouter:route (p)
+   assert(self.ip4:new_from_mem(p.data, p.length))
+   local route = self:find_route4(self.ip4:dst())
+   if route then
+      link.transmit(route.link, p)
+   else
+      packet.free(p)
+      counter.add(self.shm.route_errors)
+   end
+end
 
-   while not link.empty(input) do
-      local p = link.receive(input)
-      assert(self.ip4:new_from_mem(p.data, p.length))
-      local route = self:find_route4(self.ip4:dst())
-      if route then
-         link.transmit(route.link, p)
-      else
-         packet.free(p)
-         counter.add(self.shm.rxerrors)
-         counter.add(self.shm.route_errors)
-      end
+function PrivateRouter:push ()
+   while not link.empty(self.input.input) do
+      self:route(link.receive(self.input.input))
+   end
+   while not link.empty(self.input.control) do
+      self:route(link.receive(self.input.control))
    end
 end
 
@@ -86,11 +88,9 @@ end
 PublicRouter = {
    name = "PublicRouter",
    config = {
-      routes = {required=true},
-      node_ip4 = {required=true}
+      routes = {required=true}
    },
    shm = {
-      rxerrors = {counter},
       route_errors = {counter}
    }
 }
@@ -141,9 +141,7 @@ function PublicRouter:push ()
          link.transmit(route.link, p)
       else
          packet.free(p)
-         counter.add(self.shm.rxerrors)
          counter.add(self.shm.route_errors)
       end
    end
 end
-
