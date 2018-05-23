@@ -33,10 +33,10 @@ local ipv4 = subClass(header)
 ipv4._name = "ipv4"
 ipv4._ulp = {
    class_map = {
+       [1] = "lib.protocol.icmp.header",
        [6] = "lib.protocol.tcp",
       [17] = "lib.protocol.udp",
       [47] = "lib.protocol.gre",
-      [58] = "lib.protocol.icmp.header",
    },
    method    = 'protocol' }
 ipv4:init(
