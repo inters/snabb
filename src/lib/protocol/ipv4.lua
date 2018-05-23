@@ -195,8 +195,12 @@ function ipv4:src (ip)
    end
 end
 
+local function ip_eq (x, y)
+   return ffi.cast("uint32_t *", x)[0] == ffi.cast("uint32_t *", y)[0]
+end
+
 function ipv4:src_eq (ip)
-   return C.memcmp(ip, self:header().src_ip, ipv4_addr_t_size) == 0
+   return ip_eq(ip, self:header().src_ip, ipv4_addr_t_size)
 end
 
 function ipv4:dst (ip)
@@ -208,7 +212,7 @@ function ipv4:dst (ip)
 end
 
 function ipv4:dst_eq (ip)
-   return C.memcmp(ip, self:header().dst_ip, ipv4_addr_t_size) == 0
+   return ip_eq(ip, self:header().dst_ip, ipv4_addr_t_size)
 end
 
 -- override the default equality method
