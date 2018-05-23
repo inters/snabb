@@ -141,6 +141,10 @@ function ipv4:frag_off (frag_off)
    return lib.bitfield(16, self:header(), 'frag_off', 3, 13, frag_off)
 end
 
+function ipv4:is_fragment ()
+   return self:frag_off() ~= 0 or band(self:flags(), 0x01) == 1
+end
+
 function ipv4:ttl (ttl)
    if ttl ~= nil then
       self:header().ttl = ttl

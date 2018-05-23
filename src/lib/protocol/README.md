@@ -201,6 +201,10 @@ addresses individually.
 
 Swaps the source and destination addresses.
 
+— Method **ipv4:is_fragment**
+
+Returns true if the header denotes an IP fragment and false otherwise.
+
 — Function **ipv4:pton** *string*
 
 Returns the binary representation of IPv4 address denoted by *string*.
