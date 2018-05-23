@@ -90,7 +90,8 @@ PublicDispatch = {
    shm = {
       rxerrors = {counter},
       ethertype_errors = {counter},
-      protocol_errors = {counter}
+      protocol_errors = {counter},
+      fragment_errors = {counter}
    }
 }
 
@@ -98,6 +99,7 @@ function PublicDispatch:new (conf)
    local o = {
       p_box = ffi.new("struct packet *[1]"),
       dispatch = pf_match.compile(([[match {
+         ip[6:2] & 0x3FFF != 0 => reject_fragment
          ip proto esp => forward4
          ip proto 99 => protocol
          ip dst host %s and icmp => icmp4
@@ -135,6 +137,12 @@ end
 function PublicDispatch:protocol4_unreachable ()
    local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
    link.transmit(self.output.protocol4_unreachable, p)
+end
+
+function PublicDispatch:reject_fragment ()
+   packet.free(self.p_box[0])
+   counter.add(self.shm.rxerrors)
+   counter.add(self.shm.fragment_errors)
 end
 
 function PublicDispatch:reject_protocol ()

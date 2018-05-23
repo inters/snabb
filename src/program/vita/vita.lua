@@ -31,6 +31,7 @@ local confspec = {
    public_ip4 = {required=true},
    private_nexthop_ip4 = {required=true},
    public_nexthop_ip4 = {required=true},
+   private_mtu = {default=8937},
    route = {required=true},
    negotiation_ttl = {},
    sa_ttl = {}
@@ -106,10 +107,12 @@ function configure_private_router (conf, append)
    })
    config.app(c, "OutboundTTL", ttl.DecrementTTL)
    config.app(c, "PrivateRouter", route.PrivateRouter, {
-                 routes = conf.route
+                 routes = conf.route,
+                 mtu = conf.private_mtu
    })
    config.app(c, "PrivateICMP4", icmp.ICMP4, {
-                 node_ip4 = conf.private_ip4
+                 node_ip4 = conf.private_ip4,
+                 nexthop_mtu = conf.private_mtu
    })
    config.app(c, "InboundDispatch", dispatch.InboundDispatch, {
                  node_ip4 = conf.private_ip4
@@ -129,6 +132,7 @@ function configure_private_router (conf, append)
    config.link(c, "PrivateDispatch.protocol4_unreachable -> PrivateICMP4.protocol_unreachable")
    config.link(c, "OutboundTTL.output -> PrivateRouter.input")
    config.link(c, "OutboundTTL.time_exceeded -> PrivateICMP4.transit_ttl_exceeded")
+   config.link(c, "PrivateRouter.fragmentation_needed -> PrivateICMP4.fragmentation_needed")
    config.link(c, "PrivateICMP4.output -> PrivateNextHop.icmp4")
    config.link(c, "InboundDispatch.forward4 -> InboundTTL.input")
    config.link(c, "InboundDispatch.icmp4 -> InboundICMP4.input")
@@ -216,11 +220,6 @@ function configure_private_router_with_nic (conf, append)
 
    local c, private =
       configure_private_router(conf, append or config.new())
-
-   -- Gracious limit for user defined MTU on private interface to avoid packet
-   -- payload overun due to ESP tunnel overhead.
-   conf.private_interface.mtu =
-      math.min(conf.private_interface.mtu or 8000, 8000)
 
    conf.private_interface.vmdq = true
 

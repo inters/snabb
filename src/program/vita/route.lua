@@ -5,10 +5,7 @@ module(...,package.seeall)
 local counter = require("core.counter")
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
-local arp = require("lib.protocol.arp")
-local esp_header = require("lib.protocol.esp")
-local esp = require("lib.ipsec.esp")
-local exchange = require("program.vita.exchange")
+local esp = require("lib.protocol.esp")
 local lpm = require("lib.lpm.lpm4_248").LPM4_248
 local ctable = require("lib.ctable")
 local ffi = require("ffi")
@@ -19,16 +16,20 @@ local ffi = require("ffi")
 PrivateRouter = {
    name = "PrivateRouter",
    config = {
-      routes = {required=true}
+      routes = {required=true},
+      mtu = {required=true}
    },
    shm = {
-      route_errors = {counter}
+      rxerrors = {counter},
+      route_errors = {counter},
+      mtu_errors = {counter}
    }
 }
 
 function PrivateRouter:new (conf)
    local o = {
       routes = {},
+      mtu = conf.mtu,
       ip4 = ipv4:new({})
    }
    for id, route in pairs(conf.routes) do
@@ -68,9 +69,20 @@ function PrivateRouter:route (p)
    assert(self.ip4:new_from_mem(p.data, p.length))
    local route = self:find_route4(self.ip4:dst())
    if route then
-      link.transmit(route.link, p)
+      if p.length + ethernet:sizeof() <= self.mtu then
+         link.transmit(route.link, p)
+      else
+         counter.add(self.shm.rxerrors)
+         counter.add(self.shm.mtu_errors)
+         if bit.band(self.ip4:flags(), 2) == 2 then -- Don’t fragment bit set?
+            link.transmit(self.output.fragmentation_needed, p)
+         else
+            packet.free(p)
+         end
+      end
    else
       packet.free(p)
+      counter.add(self.shm.rxerrors)
       counter.add(self.shm.route_errors)
    end
 end
@@ -98,7 +110,7 @@ PublicRouter = {
 function PublicRouter:new (conf)
    local o = {
       routes = {},
-      esp = esp_header:new({})
+      esp = esp:new({})
    }
    for id, route in pairs(conf.routes) do
       o.routes[#o.routes+1] = {

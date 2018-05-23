@@ -18,7 +18,6 @@ module vita-esp-gateway {
     leaf pciaddr { type pci-address; mandatory true; }
     leaf macaddr { type yang:mac-address; mandatory true; }
     leaf vlan { type uint16 { range "0..4095"; } }
-    leaf mtu { type uint16; }
   }
 
   container private_interface { uses interface; }
@@ -29,6 +28,8 @@ module vita-esp-gateway {
 
   leaf private_nexthop_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
   leaf public_nexthop_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+
+  leaf private_mtu { type uint16 { range "0..8937"; } }
 
   list route {
     key id; unique "net_cidr4 preshared_key spi";
