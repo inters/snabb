@@ -11,9 +11,7 @@ local S = require("syscall")
 local confpath = shm.root.."/"..shm.resolve("group/testconf")
 
 local function commit_conf (conf)
-   local f = assert(io.open(confpath, "w"), "Unable to open file: "..confpath)
-   yang.print_config_for_schema(vita.schemata['esp-gateway'], conf, f)
-   f:close()
+   vita.save_config(vita.schemata['esp-gateway'], confpath, conf)
 end
 
 worker.start(

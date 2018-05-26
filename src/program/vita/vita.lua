@@ -375,6 +375,12 @@ function load_config (schema, confpath)
    )
 end
 
+function save_config (schema, confpath, conf)
+   local f = assert(io.open(confpath, "w"), "Unable to open file: "..confpath)
+   yang.print_config_for_schema(schema, conf, f)
+   f:close()
+end
+
 function listen_confpath (schema, confpath, loader, interval)
    interval = interval or 1e9
 
