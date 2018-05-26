@@ -1,0 +1,247 @@
+#!snabb snsh
+
+-- Use of this source code is governed by the GNU AGPL license; see COPYING.
+
+local vita = require("program.vita.vita")
+local ARP = require("apps.ipv4.arp").ARP
+local ethernet = require("lib.protocol.ethernet")
+local ipv4 = require("lib.protocol.ipv4")
+local basic_apps = require("apps.basic.basic_apps")
+local pcap = require("apps.pcap.pcap")
+local filter = require("apps.packet_filter.pcap_filter")
+local match = require("apps.test.match")
+local counter = require("core.counter")
+local shm = require("core.shm")
+
+-- Synopsis:
+--
+--    sudo selftest.snabb [regenerate]
+--
+-- Basic event-sourced (selftest-*-in.pcap) test that exercises various
+-- non-happy paths of Vita. Regenerates reference outputs (selftest-*-out.pcap)
+-- when called with an argument.
+--
+-- TODO: doesn’t exercise KeyManager yet.
+
+local regenerate_pcaps = main.parameters[1]
+
+local cfg = {
+   private_interface = {
+      pciaddr = "00:00.0",
+      macaddr = "52:54:00:00:00:00"
+   },
+   public_interface = {
+      pciaddr = "00:00.0",
+      macaddr = "52:54:00:00:00:FF"
+   },
+   private_ip4 = "192.168.10.1",
+   public_ip4 = "203.0.113.1",
+   private_nexthop_ip4 = "192.168.0.1",
+   public_nexthop_ip4 = "203.0.0.1",
+   private_mtu = 500,
+   route = {
+      loopback = {
+         net_cidr4 = "192.168.10.0/24",
+         gw_ip4 = "203.0.113.1",
+         preshared_key = string.rep("00", 32),
+         spi = 1001
+      }
+   }
+}
+
+local ephemeral_keys = {
+   esp = {
+      sa = {
+         loopback_outbound = {
+            aead = "aes-gcm-16-icv",
+            spi = 1001,
+            key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            salt = "00 00 00 00"
+         }
+      }
+   },
+   dsp = {
+      sa = {
+         loopback_inbound = {
+            aead = "aes-gcm-16-icv",
+            spi = 1001,
+            key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            salt = "00 00 00 00",
+            auditing = true
+         }
+      }
+   }
+}
+
+-- In order to allow the encapsulator/decapsulator apps to run in the same
+-- process, we make sure they do not collide with the interlink app names of
+-- the routing processes by using different route identifiers in their
+-- ephemeral key configuration above, and alias them to the shared interlink
+-- objects so they connect.
+shm.alias("group/interlink/ESP_loopback_outbound_in.interlink", 
+          "group/interlink/ESP_loopback_in.interlink")
+shm.alias("group/interlink/DSP_loopback_inbound_in.interlink", 
+          "group/interlink/DSP_loopback_in.interlink")
+shm.alias("group/interlink/ESP_loopback_outbound_out.interlink", 
+          "group/interlink/ESP_loopback_out.interlink")
+shm.alias("group/interlink/DSP_loopback_inbound_out.interlink", 
+          "group/interlink/DSP_loopback_out.interlink")
+
+local c = config.new()
+
+-- Configure Vita app network (all-in-one process.)
+local _, private = vita.configure_private_router(cfg, c)
+local _, public = vita.configure_public_router(cfg, c)
+vita.configure_esp(ephemeral_keys.esp, c)
+vita.configure_dsp(ephemeral_keys.dsp, c)
+
+-- Add ARP resolvers.
+config.app(c, "private_arp", ARP, {
+              self_mac = ethernet:pton("52:54:00:00:00:00"),
+              self_ip = ipv4:pton("192.168.0.1"),
+              next_ip = ipv4:pton("192.168.10.1")
+})
+config.app(c, "public_arp", ARP, {
+              self_mac = ethernet:pton("52:54:00:00:00:FE"),
+              self_ip = ipv4:pton("203.0.0.1"),
+              next_ip = ipv4:pton("203.0.113.1")
+})
+config.link(c, "private_arp.south -> "..private.input)
+config.link(c, private.output.." -> private_arp.south")
+config.link(c, "public_arp.south -> "..public.input)
+config.link(c, public.output.." -> public_arp.south")
+
+-- Loopback ESP traffic.
+config.app(c, "public_out", basic_apps.Tee)
+config.app(c, "join", basic_apps.Join)
+config.app(c, "filter", filter.PcapFilter, {filter="ip proto esp"})
+config.link(c, "public_arp.north -> public_out.input")
+config.link(c, "public_out.loopback -> filter.input")
+config.link(c, "filter.output -> join.loopback")
+config.link(c, "join.output -> public_arp.north")
+
+-- Add PCAP sources and sinks.
+config.app(c, "private_pcap_in", pcap.PcapReader,
+           "program/vita/selftest-private-in.pcap")
+config.app(c, "public_pcap_in", pcap.PcapReader,
+           "program/vita/selftest-public-in.pcap")
+config.link(c, "private_pcap_in.output -> private_arp.north")
+config.link(c, "public_pcap_in.output -> join.input")
+if regenerate_pcaps then
+   -- Regenerate reference outputs.
+   config.app(c, "private_pcap_out", pcap.PcapWriter,
+              "program/vita/selftest-private-out.pcap")
+   config.app(c, "public_pcap_out", pcap.PcapWriter,
+              "program/vita/selftest-public-out.pcap")
+   config.link(c, "private_arp.north -> private_pcap_out.input")
+   config.link(c, "public_out.output -> public_pcap_out.input")
+else
+   -- Match reference outputs.
+   config.app(c, "private_pcap_out", pcap.PcapReader,
+              "program/vita/selftest-private-out.pcap")
+   config.app(c, "public_pcap_out", pcap.PcapReader,
+              "program/vita/selftest-public-out.pcap")
+   config.app(c, "match_private", match.Match, {})
+   config.link(c, "private_pcap_out.output -> match_private.comparator")
+   config.link(c, "private_arp.north -> match_private.rx")
+   config.app(c, "match_public", match.Match, {})
+   config.link(c, "public_pcap_out.output -> match_public.comparator")
+   config.link(c, "public_out.output -> match_public.rx")
+end
+
+engine.configure(c)
+
+-- Hack to avoid ESP seq# reuse because of packets from public_in.pcap
+engine.app_table.ESP_loopback_outbound.sa.seq.no = 100
+
+-- Run engine until its idle (all packets have been processed).
+local last_frees = counter.read(engine.frees)
+local function is_idle ()
+   if counter.read(engine.frees) == last_frees then return true
+   else last_frees = counter.read(engine.frees) end
+end
+engine.main({done=is_idle})
+
+if regenerate_pcaps then
+   -- Print final statistics.
+   engine.report_links()
+   for appname, app in pairs(engine.app_table) do
+      if app.shm then
+         print()
+         print(appname)
+         for name, _ in pairs(app.shm.specs) do
+            local value = counter.read(app.shm[name])
+            if value > 0 then
+               print(("%00d %s"):format(tonumber(value), name))
+            end
+         end
+      end
+   end
+else
+   -- Assert application state is as expected.
+   if #engine.app_table.match_private:errors() > 0 then
+      engine.app_table.match_private:report()
+      main.exit(1)
+   end
+   if #engine.app_table.match_public:errors() > 0 then
+      engine.app_table.match_public:report()
+      main.exit(1)
+      end
+   for app, counters in pairs{
+      PrivateRouter = {
+         rxerrors = 2,
+         mtu_errors = 2
+      },
+      PublicRouter = {
+         route_errors = 1,
+      },
+      PrivateDispatch = {
+         rxerrors = 1,
+         checksum_errors = 1
+      },
+      PublicDispatch = {
+         rxerrors = 2,
+         fragment_errors = 2
+      },
+      DSP_loopback_inbound = {
+         rxerrors = 2,
+         protocol_errors = 1,
+         decrypt_errors = 1
+      },
+      PrivateICMP4 = {
+         rxerrors = 15,
+         protocol_errors = 3,
+         redirect = 5,
+         redirect_net = 1,
+         redirect_host = 1,
+         redirect_tos_net = 1,
+         redirect_tos_host = 1,
+         destination_unreachable = 7,
+         net_unreachable = 1,
+         protocol_unreachable = 1,
+         port_unreachable = 1,
+         host_unreachable = 1,
+         fragmentation_needed = 1,
+         source_route_failed = 1,
+         echo_request = 3,
+         time_exceeded = 3,
+         transit_ttl_exceeded = 1,
+         fragment_reassembly_time_exceeded = 1,
+         parameter_problem = 2,
+         type_not_implemented_errors = 12,
+         code_not_implemented_errors = 3
+      },
+      PublicICMP4 = {
+         echo_request = 1
+      },
+      InboundICMP4 = {
+         echo_request = 1
+      }
+   } do
+      for name, should in pairs(counters) do
+         local actual = tonumber(counter.read(engine.app_table[app].shm[name]))
+         assert(should == actual,
+                name.." should be "..should.." but is "..actual)
+      end
+   end
+end

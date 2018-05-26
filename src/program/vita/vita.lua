@@ -311,8 +311,8 @@ end
 
 -- ephemeral_keys := { <id>=(SA), ... }                        (see exchange)
 
-function configure_esp (ephemeral_keys)
-   local c = config.new()
+function configure_esp (ephemeral_keys, append)
+   local c = append or config.new()
 
    for id, sa in pairs(ephemeral_keys.sa) do
       -- Configure interlink receiver/transmitter for inbound SA
@@ -330,8 +330,8 @@ function configure_esp (ephemeral_keys)
    return c
 end
 
-function configure_dsp (ephemeral_keys)
-   local c = config.new()
+function configure_dsp (ephemeral_keys, append)
+   local c = append or config.new()
 
    for id, sa in pairs(ephemeral_keys.sa) do
       -- Configure interlink receiver/transmitter for outbound SA
