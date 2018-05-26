@@ -30,7 +30,10 @@ function Match:push ()
       elseif cmp.length ~= p.length
          or C.memcmp(cmp.data, p.data, cmp.length) ~= 0 then
          if not self.fuzzy then
-            table.insert(self.errs, "Mismatch:\n"..dump(cmp).."\n"..dump(p))
+            table.insert(self.errs,
+                         "Mismatch at packet #"..(self.seen+1)..":\n"
+                            ..dump(cmp).."\n"
+                            ..dump(p))
          end
       else
          self.seen = self.seen + 1
