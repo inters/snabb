@@ -2,6 +2,7 @@
 
 module(...,package.seeall)
 
+local exchange = require("program.vita.exchange")
 local icmp = require("program.vita.icmp")
 local counter = require("core.counter")
 local ethernet = require("lib.protocol.ethernet")
@@ -101,13 +102,13 @@ function PublicDispatch:new (conf)
       dispatch = pf_match.compile(([[match {
          ip[6:2] & 0x3FFF != 0 => reject_fragment
          ip proto esp => forward4
-         ip proto 99 => protocol
+         ip proto %d => protocol
          ip dst host %s and icmp => icmp4
          ip dst host %s => protocol4_unreachable
          ip => reject_protocol
          arp => arp
          otherwise => reject_ethertype
-      }]]):format(conf.node_ip4, conf.node_ip4))
+      }]]):format(exchange.PROTOCOL, conf.node_ip4, conf.node_ip4))
    }
    return setmetatable(o, {__index=PublicDispatch})
 end
