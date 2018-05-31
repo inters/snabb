@@ -1,4 +1,4 @@
-VITA: SIMPLE KEY EXCHANGE (vita-ske, version 1h)
+VITA: SIMPLE KEY EXCHANGE (vita-ske, version 1g)
 
  A simple key negotiation protocol based on pre-shared symmetric keys that
  provides authentication, perfect forward secrecy, and is immune to replay
@@ -8,7 +8,7 @@ Primitives (from libsodium 1.0.15):
 
  • HMAC: crypto_auth_hmacsha512256 (key is 256‑bits, output is 256‑bits)
  • DH: crypto_scalarmult_curve25519 (keys are 256‑bits, output is 256‑bits)
- • HASH: crypto_generichash_blake2b (output is choosen to be 128‑bits)
+ • HASH: crypto_generichash_blake2b (output is choosen to be 160‑bits)
 
 Notational Conventions:
 
@@ -20,9 +20,6 @@ Notational Conventions:
 
  a ‖ b
   Denotes a concatenated with b.
-
- x:i
-  Denotes the i highest bits of x.
 
 Description:
 
@@ -40,9 +37,8 @@ Description:
 
  Ensure that h2 = HMAC(k, spi ‖ n2 ‖ n1 ‖ p2). Let q = DH(s1, p2), and ensure
  that p2 is a valid argument. Let rx = HASH(q ‖ p1 ‖ p2) and
- tx = HASH(q ‖ p2 ‖ p1) be key material. Let rxs = n1:32 and txs = n2:32 be
- salt values. Assign (spi, rx, rxs) to the incoming “Security Association”
- (SA), and (spi, tx, txs) to the outgoing SA.
+ tx = HASH(q ‖ p2 ‖ p1) be key material. Assign (spi, rx) to the incoming
+ “Security Association” (SA), and (spi, tx) to the outgoing SA.
 
  The description above illustrates the perspective of an active party adhering
  to the protocol, i.e. the exchange is initiated by us. An opposite, passive
@@ -71,9 +67,6 @@ Security Proof:
  q = DH(s1, p2) or q = DH(s2, p1), and subsequently derive rx or tx, and thus
  perfect forward secrecy is provided.
 
- Assuming an attacker can not produce h2, and n2 is truly random and hence
- unpredicable, it is provided that txs =n2:32 is authentic and unpredictable.
-
  A party passively adhering to the protocol will not produce a tuple
  (spi, p1, h1) unless it has previously authenticated its counterpart tuple
  (spi, p2, h2), and thus can not be used as an oracle.
@@ -81,7 +74,7 @@ Security Proof:
 Notes:
 
  • The outputs of this protocol are choosen specifically to support the AES-GCM
-   algorithm as used in an IPsec ESP data plane.
+   algorithm with 128‑bit keys as used in an IPsec ESP data plane.
 
  • Future versions of this protocol may introduce the use of a key derivation
    function (KDF), such as libsodium’s crypto_kdf_blake2b_derive_from_key, to

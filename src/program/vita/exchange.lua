@@ -108,7 +108,7 @@ module(...,package.seeall)
 --        receive_nonce
 --        exchange_key
 --        receive_key
---        derive_keying_material
+--        derive_ephemeral_keys
 --        reset_if_expired
 --
 --     which uphold invariants that should ensure any resulting key material is
@@ -330,7 +330,7 @@ function KeyManager:handle_key_request (route, message)
       return false
    else assert(not ecode) end
 
-   local ecode, rx, tx = route.protocol:derive_keying_material()
+   local ecode, rx, tx = route.protocol:derive_ephemeral_keys()
    if ecode == Protocol.code.parameter then
       counter.add(self.shm.public_key_errors)
       return false
@@ -457,7 +457,7 @@ function KeyManager:commit_ephemeral_keys ()
    store_ephemeral_keys(self.dsp_keyfile, dsp_keys)
 end
 
--- Vita: simple key exchange (vita-ske, version 1f). See README.exchange
+-- Vita: simple key exchange (vita-ske, version 1g). See README.exchange
 
 Protocol = {
    status = { idle = 0, wait_nonce = 1, wait_key = 2, complete = 3 },
@@ -466,11 +466,18 @@ Protocol = {
    public_key_bytes = C.crypto_scalarmult_curve25519_BYTES,
    secret_key_bytes = C.crypto_scalarmult_curve25519_SCALARBYTES,
    auth_code_bytes = C.crypto_auth_hmacsha512256_BYTES,
-   nonce_bytes = 32, -- must be >= salt_bytes
-   ephemeral_key_bytes = 16, -- 128 bits
-   salt_bytes = 4, -- 32 bits
+   nonce_bytes = 32,
    spi_t = ffi.typeof("union { uint32_t u32; uint8_t bytes[4]; }"),
    buffer_t = ffi.typeof("uint8_t[?]"),
+   key_t = ffi.typeof[[
+      union {
+         uint8_t bytes[20];
+         struct {
+            uint8_t key[16];
+            uint8_t salt[4];
+         } __attribute__((packed)) slot;
+      }
+   ]],
    nonce_message = subClass(header),
    key_message = subClass(header)
 }
@@ -543,7 +550,7 @@ function Protocol:new (spi, key, timeout)
       p2 = ffi.new(Protocol.buffer_t, Protocol.public_key_bytes),
       h  = ffi.new(Protocol.buffer_t, Protocol.auth_code_bytes),
       q  = ffi.new(Protocol.buffer_t, Protocol.secret_key_bytes),
-      e  = ffi.new(Protocol.buffer_t, Protocol.ephemeral_key_bytes),
+      e  = ffi.new(Protocol.key_t),
       hmac_state = ffi.new("struct crypto_auth_hmacsha512256_state"),
       hash_state = ffi.new("struct crypto_generichash_blake2b_state")
    }
@@ -590,18 +597,12 @@ function Protocol:receive_key (key_message)
    else return Protocol.code.protocol end
 end
 
-function Protocol:derive_keying_material ()
+function Protocol:derive_ephemeral_keys ()
    if self.status == Protocol.status.complete then
       self:reset()
       if self:derive_shared_secret() then
-         local rx = {
-            key = self:derive_ephemeral_key(self.p1, self.p2),
-            salt = self:derive_salt(self.n1)
-         }
-         local tx = {
-            key = self:derive_ephemeral_key(self.p2, self.p1),
-            salt = self:derive_salt(self.n2)
-         }
+         local rx = self:derive_key_material(self.p1, self.p2)
+         local tx = self:derive_key_material(self.p2, self.p1)
          return nil, rx, tx
       else return Protocol.code.paramter end
    else return Protocol.code.protocol end
@@ -659,18 +660,15 @@ function Protocol:derive_shared_secret ()
    return C.crypto_scalarmult_curve25519(self.q, self.s1, self.p2) == 0
 end
 
-function Protocol:derive_ephemeral_key (salt_a, salt_b)
+function Protocol:derive_key_material (salt_a, salt_b)
    local q, e, state = self.q, self.e, self.hash_state
    C.crypto_generichash_blake2b_init(state, nil, 0, ffi.sizeof(e))
    C.crypto_generichash_blake2b_update(state, q, ffi.sizeof(q))
    C.crypto_generichash_blake2b_update(state, salt_a, ffi.sizeof(salt_a))
    C.crypto_generichash_blake2b_update(state, salt_b, ffi.sizeof(salt_b))
-   C.crypto_generichash_blake2b_final(state, e, ffi.sizeof(e))
-   return ffi.string(e, ffi.sizeof(e))
-end
-
-function Protocol:derive_salt (n)
-   return ffi.string(n, Protocol.salt_bytes)
+   C.crypto_generichash_blake2b_final(state, e.bytes, ffi.sizeof(e.bytes))
+   return { key = ffi.string(e.slot.key, ffi.sizeof(e.slot.key)),
+            salt = ffi.string(e.slot.salt, ffi.sizeof(e.slot.salt)) }
 end
 
 function Protocol:reset ()
@@ -687,8 +685,8 @@ end
 assert(Protocol.preshared_key_bytes == 32)
 assert(Protocol.public_key_bytes == 32)
 assert(Protocol.auth_code_bytes == 32)
-assert(Protocol.ephemeral_key_bytes >= C.crypto_generichash_blake2b_BYTES_MIN)
-assert(Protocol.ephemeral_key_bytes <= C.crypto_generichash_blake2b_BYTES_MAX)
+assert(ffi.sizeof(Protocol.key_t) >= C.crypto_generichash_blake2b_BYTES_MIN)
+assert(ffi.sizeof(Protocol.key_t) <= C.crypto_generichash_blake2b_BYTES_MAX)
 
 -- Transport wrapper for vita-ske that encompasses an SPI to map requests to
 -- routes, and a message type to facilitate parsing.
