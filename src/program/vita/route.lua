@@ -88,11 +88,13 @@ function PrivateRouter:route (p)
 end
 
 function PrivateRouter:push ()
-   while not link.empty(self.input.input) do
-      self:route(link.receive(self.input.input))
+   local input = self.input.input
+   while not link.empty(input) do
+      self:route(link.receive(input))
    end
-   while not link.empty(self.input.control) do
-      self:route(link.receive(self.input.control))
+   local control = self.input.control
+   while not link.empty(control) do
+      self:route(link.receive(control))
    end
 end
 

@@ -17,15 +17,17 @@ function DecrementTTL:new ()
 end
 
 function DecrementTTL:push ()
+   local output = self.output.output
+   local time_exceeded = self.output.time_exceeded
    for _, input in ipairs(self.input) do
       while not link.empty(input) do
          local p = link.receive(input)
          local ip4 = self.ip4:new_from_mem(p.data, p.length)
          if ip4 and ip4:ttl() > 0 then
             ip4:ttl_decrement()
-            link.transmit(self.output.output, p)
+            link.transmit(output, p)
          elseif ip4 then
-            link.transmit(self.output.time_exceeded, p)
+            link.transmit(time_exceeded, p)
          else
             packet.free(p)
             counter.add(self.shm.protocol_errors)
