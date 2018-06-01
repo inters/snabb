@@ -40,11 +40,10 @@ function run (args)
       help = "h",
       ["config-help"] = "H",
       ["config-test"] = "t",
-      cpu = "c",
-      membind = "m"
+      cpu = "c"
    }
 
-   local opt, conftest, cpus, memnode = {}, false, {}, nil
+   local opt, conftest, cpus = {}, false, nil
 
    local function exit_usage (status) print(usage) main.exit(status) end
 
@@ -52,19 +51,9 @@ function run (args)
 
    function opt.H () print(confighelp) main.exit(0) end
 
-   function opt.t ()
-      conftest = true
-   end
+   function opt.t () conftest = true end
 
-   function opt.c (arg)
-      for cpu in arg:gmatch('%s*([0-9]+),*') do
-         table.insert(cpus, tonumber(cpu) or exit_usage(1))
-      end
-   end
-
-   function opt.m (arg)
-      memnode = tonumber(arg) or exit_usage(1)
-   end
+   function opt.c (arg) cpus = cpuset(arg) end
 
    args = lib.dogetopt(args, opt, "hHtc:m:", long_opt)
 
@@ -85,23 +74,23 @@ function run (args)
    -- start private and public router processes
    worker.start(
       "PrivatePort",
-      ([[require("program.vita.vita").private_port_worker(%q, %s, %s)]])
-         :format(confpath, cpus[1], memnode)
+      ([[require("program.vita.vita").private_port_worker(%q, %s)]])
+         :format(confpath, cpus[2])
    )
    worker.start(
       "PublicPort",
-      ([[require("program.vita.vita").public_port_worker(%q, %s, %s)]])
-         :format(confpath, cpus[2], memnode)
+      ([[require("program.vita.vita").public_port_worker(%q, %s)]])
+         :format(confpath, cpus[3])
    )
 
    -- start crypto processes
-   worker.start("ESP", ([[require("program.vita.vita").esp_worker(%s, %s)]])
-                   :format(cpus[3], memnode))
-   worker.start("DSP", ([[require("program.vita.vita").dsp_worker(%s, %s)]])
-                   :format(cpus[4], memnode))
+   worker.start("ESP", ([[require("program.vita.vita").esp_worker(%s)]])
+                   :format(cpus[4]))
+   worker.start("DSP", ([[require("program.vita.vita").dsp_worker(%s)]])
+                   :format(cpus[5]))
 
    -- become key exchange protocol handler process
-   exchange_worker(confpath, cpus[5], memnode)
+   exchange_worker(confpath, cpus[1])
 end
 
 function configure_private_router (conf, append)
@@ -218,8 +207,8 @@ function configure_public_router_with_nic (conf, append)
    return c
 end
 
-function private_port_worker (confpath, cpu, memnode)
-   cpubind(cpu, memnode)
+function private_port_worker (confpath, cpu)
+   numa.bind_to_cpu(cpu)
    engine.log = true
    listen_confpath(
       schemata['esp-gateway'],
@@ -228,8 +217,8 @@ function private_port_worker (confpath, cpu, memnode)
    )
 end
 
-function public_port_worker (confpath, cpu, memnode)
-   cpubind(cpu, memnode)
+function public_port_worker (confpath, cpu)
+   numa.bind_to_cpu(cpu)
    engine.log = true
    listen_confpath(
       schemata['esp-gateway'],
@@ -238,13 +227,13 @@ function public_port_worker (confpath, cpu, memnode)
    )
 end
 
-function public_router_loopback_worker (confpath, cpu, memnode)
+function public_router_loopback_worker (confpath, cpu)
    local function configure_public_router_loopback (conf)
       local c, public = configure_public_router(conf)
       config.link(c, public.output.." -> "..public.input)
       return c
    end
-   cpubind(cpu, memnode)
+   numa.bind_to_cpu(cpu)
    engine.log = true
    listen_confpath(
       schemata['esp-gateway'],
@@ -273,8 +262,8 @@ function configure_exchange (conf, append)
    return c
 end
 
-function exchange_worker (confpath, cpu, memnode)
-   cpubind(cpu, memnode)
+function exchange_worker (confpath, cpu)
+   numa.bind_to_cpu(cpu)
    engine.log = true
    listen_confpath(schemata['esp-gateway'], confpath, configure_exchange)
 end
@@ -320,8 +309,8 @@ function configure_dsp (ephemeral_keys)
    return c
 end
 
-function esp_worker (cpu, memnode)
-   cpubind(cpu, memnode)
+function esp_worker (cpu)
+   numa.bind_to_cpu(cpu)
    engine.log = true
    listen_confpath(
       schemata['ephemeral-keys'],
@@ -330,8 +319,8 @@ function esp_worker (cpu, memnode)
    )
 end
 
-function dsp_worker (cpu, memnode)
-   cpubind(cpu, memnode)
+function dsp_worker (cpu)
+   numa.bind_to_cpu(cpu)
    engine.log = true
    listen_confpath(
       schemata['ephemeral-keys'],
@@ -379,11 +368,11 @@ function listen_confpath (schema, confpath, loader, interval)
    end
 end
 
--- Bind to CPU. If this is a NUMA system we bind to a memory node.
-function cpubind (cpu, node)
-   if cpu then
-      numa.bind_to_cpu(cpu)
-   elseif numa.has_numa() then
-      numa.bind_to_numa_node(node)
+-- Parse CPU set from string.
+function cpuset (s)
+   local cpus = {}
+   for cpu in s:gmatch('%s*([0-9]+),*') do
+      table.insert(cpus, assert(tonumber(cpu), "Not a valid CPU id: " .. cpu))
    end
+   return cpus
 end
