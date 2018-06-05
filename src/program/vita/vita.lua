@@ -5,15 +5,19 @@ module(...,package.seeall)
 local lib = require("core.lib")
 local shm = require("core.shm")
 local worker = require("core.worker")
+local dispatch = require("program.vita.dispatch")
+local ttl = require("program.vita.ttl")
 local route = require("program.vita.route")
 local tunnel = require("program.vita.tunnel")
 local nexthop = require("program.vita.nexthop")
 local exchange = require("program.vita.exchange")
+local icmp = require("program.vita.icmp")
       schemata = require("program.vita.schemata")
 local interlink = require("lib.interlink")
 local Receiver = require("apps.interlink.receiver")
 local Transmitter = require("apps.interlink.transmitter")
 local intel_mp = require("apps.intel_mp.intel_mp")
+local ipv4 = require("lib.protocol.ipv4")
 local numa = require("lib.numa")
 local yang = require("lib.yang.yang")
 local S = require("syscall")
@@ -27,6 +31,7 @@ local confspec = {
    public_ip4 = {required=true},
    private_nexthop_ip4 = {required=true},
    public_nexthop_ip4 = {required=true},
+   private_mtu = {default=8937},
    route = {required=true},
    negotiation_ttl = {},
    sa_ttl = {}
@@ -40,11 +45,10 @@ function run (args)
       help = "h",
       ["config-help"] = "H",
       ["config-test"] = "t",
-      cpu = "c",
-      membind = "m"
+      cpu = "c"
    }
 
-   local opt, conftest, cpus, memnode = {}, false, {}, nil
+   local opt, conftest, cpus = {}, false, nil
 
    local function exit_usage (status) print(usage) main.exit(status) end
 
@@ -52,19 +56,9 @@ function run (args)
 
    function opt.H () print(confighelp) main.exit(0) end
 
-   function opt.t ()
-      conftest = true
-   end
+   function opt.t () conftest = true end
 
-   function opt.c (arg)
-      for cpu in arg:gmatch('%s*([0-9]+),*') do
-         table.insert(cpus, tonumber(cpu) or exit_usage(1))
-      end
-   end
-
-   function opt.m (arg)
-      memnode = tonumber(arg) or exit_usage(1)
-   end
+   function opt.c (arg) cpus = cpuset(arg) end
 
    args = lib.dogetopt(args, opt, "hHtc:m:", long_opt)
 
@@ -85,36 +79,67 @@ function run (args)
    -- start private and public router processes
    worker.start(
       "PrivatePort",
-      ([[require("program.vita.vita").private_port_worker(%q, %s, %s)]])
-         :format(confpath, cpus[1], memnode)
+      ([[require("program.vita.vita").private_port_worker(%q, %s)]])
+         :format(confpath, cpus[2])
    )
    worker.start(
       "PublicPort",
-      ([[require("program.vita.vita").public_port_worker(%q, %s, %s)]])
-         :format(confpath, cpus[2], memnode)
+      ([[require("program.vita.vita").public_port_worker(%q, %s)]])
+         :format(confpath, cpus[3])
    )
 
    -- start crypto processes
-   worker.start("ESP", ([[require("program.vita.vita").esp_worker(%s, %s)]])
-                   :format(cpus[3], memnode))
-   worker.start("DSP", ([[require("program.vita.vita").dsp_worker(%s, %s)]])
-                   :format(cpus[4], memnode))
+   worker.start("ESP", ([[require("program.vita.vita").esp_worker(%s)]])
+                   :format(cpus[4]))
+   worker.start("DSP", ([[require("program.vita.vita").dsp_worker(%s)]])
+                   :format(cpus[5]))
 
    -- become key exchange protocol handler process
-   exchange_worker(confpath, cpus[5], memnode)
+   exchange_worker(confpath, cpus[1])
 end
 
 function configure_private_router (conf, append)
    conf = lib.parse(conf, confspec)
    local c = append or config.new()
 
-   config.app(c, "PrivateRouter", route.PrivateRouter, {routes=conf.route})
+   config.app(c, "PrivateDispatch", dispatch.PrivateDispatch, {
+                 node_ip4 = conf.private_ip4
+   })
+   config.app(c, "OutboundTTL", ttl.DecrementTTL)
+   config.app(c, "PrivateRouter", route.PrivateRouter, {
+                 routes = conf.route,
+                 mtu = conf.private_mtu
+   })
+   config.app(c, "PrivateICMP4", icmp.ICMP4, {
+                 node_ip4 = conf.private_ip4,
+                 nexthop_mtu = conf.private_mtu
+   })
+   config.app(c, "InboundDispatch", dispatch.InboundDispatch, {
+                 node_ip4 = conf.private_ip4
+   })
+   config.app(c, "InboundTTL", ttl.DecrementTTL)
+   config.app(c, "InboundICMP4", icmp.ICMP4, {
+                 node_ip4 = conf.private_ip4
+   })
    config.app(c, "PrivateNextHop", nexthop.NextHop4, {
                  node_mac = conf.private_interface.macaddr,
                  node_ip4 = conf.private_ip4,
                  nexthop_ip4 = conf.private_nexthop_ip4
    })
-   config.link(c, "PrivateRouter.arp -> PrivateNextHop.arp")
+   config.link(c, "PrivateDispatch.forward4 -> OutboundTTL.input")
+   config.link(c, "PrivateDispatch.icmp4 -> PrivateICMP4.input")
+   config.link(c, "PrivateDispatch.arp -> PrivateNextHop.arp")
+   config.link(c, "PrivateDispatch.protocol4_unreachable -> PrivateICMP4.protocol_unreachable")
+   config.link(c, "OutboundTTL.output -> PrivateRouter.input")
+   config.link(c, "OutboundTTL.time_exceeded -> PrivateICMP4.transit_ttl_exceeded")
+   config.link(c, "PrivateRouter.fragmentation_needed -> PrivateICMP4.fragmentation_needed")
+   config.link(c, "PrivateICMP4.output -> PrivateNextHop.icmp4")
+   config.link(c, "InboundDispatch.forward4 -> InboundTTL.input")
+   config.link(c, "InboundDispatch.icmp4 -> InboundICMP4.input")
+   config.link(c, "InboundDispatch.protocol4_unreachable -> InboundICMP4.protocol_unreachable")
+   config.link(c, "InboundTTL.output -> PrivateNextHop.forward")
+   config.link(c, "InboundTTL.time_exceeded -> InboundICMP4.transit_ttl_exceeded")
+   config.link(c, "InboundICMP4.output -> PrivateRouter.control")
 
    for id, route in pairs(conf.route) do
       local private_in = "PrivateRouter."..id
@@ -122,14 +147,14 @@ function configure_private_router (conf, append)
       config.app(c, ESP_in, Transmitter)
       config.link(c, private_in.." -> "..ESP_in..".input")
 
-      local private_out = "PrivateNextHop."..id
+      local private_out = "InboundDispatch."..id
       local DSP_out = "DSP_"..id.."_out"
       config.app(c, DSP_out, Receiver)
       config.link(c, DSP_out..".output -> "..private_out)
    end
 
    local private_links = {
-      input = "PrivateRouter.input",
+      input = "PrivateDispatch.input",
       output = "PrivateNextHop.output"
    }
    return c, private_links
@@ -139,8 +164,13 @@ function configure_public_router (conf, append)
    conf = lib.parse(conf, confspec)
    local c = append or config.new()
 
+   config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
+                 node_ip4 = conf.public_ip4
+   })
    config.app(c, "PublicRouter", route.PublicRouter, {
-                 routes = conf.route,
+                 routes = conf.route
+   })
+   config.app(c, "PublicICMP4", icmp.ICMP4, {
                  node_ip4 = conf.public_ip4
    })
    config.app(c, "PublicNextHop", nexthop.NextHop4, {
@@ -148,11 +178,15 @@ function configure_public_router (conf, append)
                  node_ip4 = conf.public_ip4,
                  nexthop_ip4 = conf.public_nexthop_ip4
    })
-   config.link(c, "PublicRouter.arp -> PublicNextHop.arp")
+   config.link(c, "PublicDispatch.forward4 -> PublicRouter.input")
+   config.link(c, "PublicDispatch.icmp4 -> PublicICMP4.input")
+   config.link(c, "PublicDispatch.arp -> PublicNextHop.arp")
+   config.link(c, "PublicDispatch.protocol4_unreachable -> PublicICMP4.protocol_unreachable")
+   config.link(c, "PublicICMP4.output -> PublicNextHop.icmp4")
 
    config.app(c, "Protocol_in", Transmitter)
    config.app(c, "Protocol_out", Receiver)
-   config.link(c, "PublicRouter.protocol -> Protocol_in.input")
+   config.link(c, "PublicDispatch.protocol -> Protocol_in.input")
    config.link(c, "Protocol_out.output -> PublicNextHop.protocol")
 
    for id, route in pairs(conf.route) do
@@ -172,7 +206,7 @@ function configure_public_router (conf, append)
    end
 
    local public_links = {
-      input = "PublicRouter.input",
+      input = "PublicDispatch.input",
       output = "PublicNextHop.output"
    }
 
@@ -186,11 +220,6 @@ function configure_private_router_with_nic (conf, append)
 
    local c, private =
       configure_private_router(conf, append or config.new())
-
-   -- Gracious limit for user defined MTU on private interface to avoid packet
-   -- payload overun due to ESP tunnel overhead.
-   conf.private_interface.mtu =
-      math.min(conf.private_interface.mtu or 8000, 8000)
 
    conf.private_interface.vmdq = true
 
@@ -218,8 +247,8 @@ function configure_public_router_with_nic (conf, append)
    return c
 end
 
-function private_port_worker (confpath, cpu, memnode)
-   cpubind(cpu, memnode)
+function private_port_worker (confpath, cpu)
+   numa.bind_to_cpu(cpu)
    engine.log = true
    listen_confpath(
       schemata['esp-gateway'],
@@ -228,8 +257,8 @@ function private_port_worker (confpath, cpu, memnode)
    )
 end
 
-function public_port_worker (confpath, cpu, memnode)
-   cpubind(cpu, memnode)
+function public_port_worker (confpath, cpu)
+   numa.bind_to_cpu(cpu)
    engine.log = true
    listen_confpath(
       schemata['esp-gateway'],
@@ -238,13 +267,13 @@ function public_port_worker (confpath, cpu, memnode)
    )
 end
 
-function public_router_loopback_worker (confpath, cpu, memnode)
+function public_router_loopback_worker (confpath, cpu)
    local function configure_public_router_loopback (conf)
       local c, public = configure_public_router(conf)
       config.link(c, public.output.." -> "..public.input)
       return c
    end
-   cpubind(cpu, memnode)
+   numa.bind_to_cpu(cpu)
    engine.log = true
    listen_confpath(
       schemata['esp-gateway'],
@@ -273,8 +302,8 @@ function configure_exchange (conf, append)
    return c
 end
 
-function exchange_worker (confpath, cpu, memnode)
-   cpubind(cpu, memnode)
+function exchange_worker (confpath, cpu)
+   numa.bind_to_cpu(cpu)
    engine.log = true
    listen_confpath(schemata['esp-gateway'], confpath, configure_exchange)
 end
@@ -282,8 +311,8 @@ end
 
 -- ephemeral_keys := { <id>=(SA), ... }                        (see exchange)
 
-function configure_esp (ephemeral_keys)
-   local c = config.new()
+function configure_esp (ephemeral_keys, append)
+   local c = append or config.new()
 
    for id, sa in pairs(ephemeral_keys.sa) do
       -- Configure interlink receiver/transmitter for inbound SA
@@ -301,8 +330,8 @@ function configure_esp (ephemeral_keys)
    return c
 end
 
-function configure_dsp (ephemeral_keys)
-   local c = config.new()
+function configure_dsp (ephemeral_keys, append)
+   local c = append or config.new()
 
    for id, sa in pairs(ephemeral_keys.sa) do
       -- Configure interlink receiver/transmitter for outbound SA
@@ -320,8 +349,8 @@ function configure_dsp (ephemeral_keys)
    return c
 end
 
-function esp_worker (cpu, memnode)
-   cpubind(cpu, memnode)
+function esp_worker (cpu)
+   numa.bind_to_cpu(cpu)
    engine.log = true
    listen_confpath(
       schemata['ephemeral-keys'],
@@ -330,8 +359,8 @@ function esp_worker (cpu, memnode)
    )
 end
 
-function dsp_worker (cpu, memnode)
-   cpubind(cpu, memnode)
+function dsp_worker (cpu)
+   numa.bind_to_cpu(cpu)
    engine.log = true
    listen_confpath(
       schemata['ephemeral-keys'],
@@ -344,6 +373,12 @@ function load_config (schema, confpath)
    return yang.load_config_for_schema(
       schema, lib.readfile(confpath, "a*"), confpath
    )
+end
+
+function save_config (schema, confpath, conf)
+   local f = assert(io.open(confpath, "w"), "Unable to open file: "..confpath)
+   yang.print_config_for_schema(schema, conf, f)
+   f:close()
 end
 
 function listen_confpath (schema, confpath, loader, interval)
@@ -386,11 +421,11 @@ function listen_confpath (schema, confpath, loader, interval)
    end
 end
 
--- Bind to CPU. If this is a NUMA system we bind to a memory node.
-function cpubind (cpu, node)
-   if cpu then
-      numa.bind_to_cpu(cpu)
-   elseif numa.has_numa() then
-      numa.bind_to_numa_node(node)
+-- Parse CPU set from string.
+function cpuset (s)
+   local cpus = {}
+   for cpu in s:gmatch('%s*([0-9]+),*') do
+      table.insert(cpus, assert(tonumber(cpu), "Not a valid CPU id: " .. cpu))
    end
+   return cpus
 end

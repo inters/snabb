@@ -98,6 +98,7 @@ function Tunnel4:new (conf)
          src = ipv4:pton(conf.src),
          dst = ipv4:pton(conf.dst),
          protocol = esp.PROTOCOL,
+         flags = 2, -- Don’t Fragment
          ttl = 64
       },
       ip = ipv4:new{}

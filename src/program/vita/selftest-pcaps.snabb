@@ -1,0 +1,315 @@
+#!snabb snsh
+
+-- Use of this source code is governed by the GNU AGPL license; see COPYING.
+
+local pcap = require("lib.pcap.pcap")
+local ethernet = require("lib.protocol.ethernet")
+local ipv4 = require("lib.protocol.ipv4")
+local icmp = require("lib.protocol.icmp.header")
+local esp = require("lib.ipsec.esp")
+local datagram = require("lib.protocol.datagram")
+local ffi = require("ffi")
+
+-- Synopsis:
+--
+--    sudo selftest-pcaps.snabb
+--
+-- Source selftest-*-in.pcap with packets that exercise various corner cases in
+-- Vita. Anything that’s not the happy path.
+
+PcapLog = {}
+
+function PcapLog:new (filename)
+   local o = {}
+   o.file = io.open(filename, "w")
+   pcap.write_file_header(o.file)
+   return setmetatable(o, {__index=PcapLog})
+end
+
+function PcapLog:write (p)
+   pcap.write_record(self.file, p.data, p.length)
+end
+
+local private = PcapLog:new("program/vita/selftest-private-in.pcap")
+local public = PcapLog:new("program/vita/selftest-public-in.pcap")
+
+local private_src = ipv4:pton("192.168.0.1")
+local private_dst = ipv4:pton("192.168.10.1")
+local public_src = ipv4:pton("203.0.0.1")
+local public_dst = ipv4:pton("203.0.113.1")
+local remote_dst = ipv4:pton("192.168.10.2")
+
+function icmp4 (conf)
+   local payload = conf.payload or packet.from_string("0000Hello, World!")
+   local length = conf.payload_length or payload.length
+   local msg = datagram:new(payload)
+   local icm = icmp:new(conf.type, conf.code)
+   icm:checksum(msg:payload(), conf.payload_length or payload.length)
+   icm:header().checksum = conf.icmp_checksum or icm:header().checksum
+   msg:push(icm)
+   local ip4 = ipv4:new{
+      flags = conf.flags,
+      frag_off = conf.frag_off,
+      total_length = ipv4:sizeof() + icmp:sizeof() + length,
+      ttl = conf.ttl or 64,
+      protocol = conf.protocol or 1,
+      src = conf.src,
+      dst = conf.dst
+   }
+   ip4:header().checksum = conf.ipv4_checksum or ip4:header().checksum
+   msg:push(ip4)
+   msg:push(ethernet:new{type=0x0800})
+   return msg:packet()
+end
+
+local sa = esp.encrypt:new{
+   aead = "aes-gcm-16-icv",
+   spi = 1001,
+   key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+   salt = "00 00 00 00"
+}
+
+local sa_bad_spi = esp.encrypt:new{
+   aead = "aes-gcm-16-icv",
+   spi = 0,
+   key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+   salt = "00 00 00 00"
+}
+
+local sa_replay = esp.encrypt:new{
+   aead = "aes-gcm-16-icv",
+   spi = 1001,
+   key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+   salt = "00 00 00 00"
+}
+
+function encap4 (payload, conf)
+   payload = (conf.sa or sa):encapsulate_tunnel(
+      packet.shiftleft(payload, ethernet:sizeof()),
+      conf.nh or 4
+   )
+   local d = datagram:new(payload)
+   d:push(ipv4:new{
+             flags = conf.flags,
+             frag_off = conf.frag_off,
+             total_length = ipv4:sizeof() + (conf.length or payload.length),
+             ttl = conf.ttl or 64,
+             protocol = esp.PROTOCOL,
+             src = conf.src,
+             dst = conf.dst
+   })
+   d:push(ethernet:new{type=0x0800})
+   return d:packet()
+end
+
+-- Echo request
+private:write(icmp4{
+                 type = 8,
+                 src = private_src,
+                 dst = private_dst
+})
+public:write(icmp4{
+                type = 8,
+                src = public_src,
+                dst = public_dst
+})
+-- Broken echo request (too short)
+private:write(icmp4{
+                 type = 8,
+                 src = private_src,
+                 dst = private_dst,
+                 payload_length = 10000
+})
+-- Broken echo request (too long)
+private:write(icmp4{
+                 type = 8,
+                 src = private_src,
+                 dst = private_dst,
+                 payload_length = 4
+})
+-- Fragmented echo requests
+private:write(icmp4{
+                 type = 8,
+                 flags = 0x01,
+                 src = private_src,
+                 dst = private_dst
+})
+private:write(icmp4{
+                 type = 8,
+                 frag_off = 17,
+                 src = private_src,
+                 dst = private_dst
+})
+-- Echo reply
+private:write(icmp4{
+                 type = 0,
+                 src = private_src,
+                 dst = private_dst
+})
+-- Encapsulated echo request
+public:write(encap4(
+                icmp4{
+                   type = 8,
+                   src = remote_dst,
+                   dst = private_dst
+                },
+                {
+                   src = public_src,
+                   dst = public_dst
+                }
+))
+-- Unreachable protocol (private/public/inbound)
+private:write(icmp4{
+                 protocol = 42,
+                 src = private_src,
+                 dst = private_dst
+})
+public:write(icmp4{
+                type = 8,
+                protocol = 42,
+                src = public_src,
+                dst = public_dst
+})
+public:write(encap4(
+                icmp4{
+                   protocol = 42,
+                   src = remote_dst,
+                   dst = private_dst
+                },
+                {
+                   src = public_src,
+                   dst = public_dst
+                }
+))
+-- Fragmentation needed
+private:write(icmp4{
+                 payload = packet.resize(packet.allocate(), 8000),
+                 src = private_src,
+                 dst = remote_dst
+})
+private:write(icmp4{
+                 payload = packet.resize(packet.allocate(), 8000),
+                 flags = 0x02,
+                 src = private_src,
+                 dst = remote_dst
+})
+-- TTL expired (private/inbound)
+private:write(icmp4{
+                 type = 8,
+                 src = private_src,
+                 dst = remote_dst,
+                 ttl = 0
+})
+public:write(encap4(
+                icmp4{
+                   type = 8,
+                   src = remote_dst,
+                   dst = remote_dst,
+                   ttl = 0
+                },
+                {
+                   src = public_src,
+                   dst = public_dst
+                }
+))
+-- Reject ESP fragments
+public:write(encap4(
+                icmp4{
+                   type = 8,
+                   src = remote_dst,
+                   dst = remote_dst
+                },
+                {
+                   src = public_src,
+                   dst = public_dst,
+                   flags = 0x01
+                }
+))
+public:write(encap4(
+                icmp4{
+                   type = 8,
+                   src = remote_dst,
+                   dst = remote_dst
+                },
+                {
+                   src = public_src,
+                   dst = public_dst,
+                   frag_off= 17
+                }
+))
+-- Bogus SPI
+public:write(encap4(
+                icmp4{
+                   type = 8,
+                   src = remote_dst,
+                   dst = private_dst
+                },
+                {
+                   sa = sa_bad_spi,
+                   src = public_src,
+                   dst = public_dst
+                }
+))
+-- Bogus SeqNo
+public:write(encap4(
+                icmp4{
+                   type = 8,
+                   src = remote_dst,
+                   dst = private_dst
+                },
+                {
+                   sa = sa_replay,
+                   src = public_src,
+                   dst = public_dst
+                }
+))
+-- Bogus NextHeader
+public:write(encap4(
+                icmp4{
+                   type = 8,
+                   src = remote_dst,
+                   dst = private_dst
+                },
+                {
+                   src = public_src,
+                   dst = public_dst,
+                   nh = 42
+                }
+))
+-- Bogus checksums
+private:write(icmp4{
+                 type = 8,
+                 src = private_src,
+                 dst = remote_dst,
+                 ipv4_checksum = 42
+})
+private:write(icmp4{
+                 type = 8,
+                 src = private_src,
+                 dst = private_dst,
+                 icmp_checksum = 42
+})
+-- Various ICMP messages
+local payload = packet.from_string("....0123456789012345678901234567")
+for _, msgtype in ipairs({
+      {type=3, codes={0,1,2,3,4,5,100}},
+      {type=11, codes={0,1,100}},
+      {type=12, codes={0,100}},
+      {type=4, codes={0, 100}},
+      {type=5, codes={0,1,2,3,100}},
+      {type=13, codes={0,100}},
+      {type=14, codes={0,100}},
+      {type=15, codes={0,100}},
+      {type=16, codes={0,100}},
+      {type=100, codes={0}}
+}) do
+   for _, code in ipairs(msgtype.codes) do
+      private:write(icmp4{
+                       payload = packet.clone(payload),
+                       type = msgtype.type,
+                       code = code,
+                       src = private_src,
+                       dst = private_dst
+      })
+   end
+end

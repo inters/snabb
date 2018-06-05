@@ -20,9 +20,11 @@ local S = require("syscall")
 
 -- Synopsis:
 --
---    sudo program/vita/test.snabb [<pktsize>|IMIX] [<npackets>] [<nroutes>]
+--    sudo program/vita/test.snabb \
+--       [<pktsize>|IMIX] [<npackets>] [<nroutes>] [<cpu>]
 --
---     Default is 10 million packets at IMIX via one route.                 (-:
+--     Default is 10 million packets at IMIX via one route. Optionally, accepts
+--     a comma-separated list of CPU ids to bind processes to.              (-:
 --
 -- This is a software-only benchmark scenario for Vita. It simulates a single
 -- Vita node with the public ports being connected in loop-back mode (i.e.,
@@ -70,8 +72,8 @@ local conf, sim_packets = gentest.gen_testcase({
       nroutes = tonumber(main.parameters[3])
 })
 
-local current_node = S.getcpu().node
-vita.cpubind(nil, current_node)
+local cpu = vita.cpuset(main.parameters[4] or '')
+numa.bind_to_cpu(cpu[2])
 
 local c, private = vita.configure_private_router(conf, config.new())
 
@@ -91,28 +93,24 @@ engine.configure(c)
 worker.set_exit_on_worker_death(true)
 
 local confpath = shm.root.."/"..shm.resolve("group/testconf")
-do
-   local f = assert(io.open(confpath, "w"), "Unable to open file: "..confpath)
-   yang.print_config_for_schema(vita.schemata['esp-gateway'], conf, f)
-   f:close()
-end
+vita.save_config(vita.schemata['esp-gateway'], confpath, conf)
 
 worker.start(
    "PublicRouterLoopback",
-   ([[require("program.vita.vita").public_router_loopback_worker(%q, %s, %s)]])
-      :format(confpath, nil, current_node)
+   ([[require("program.vita.vita").public_router_loopback_worker(%q, %s)]])
+      :format(confpath, cpu[3])
 )
 
 worker.start(
    "Exchange",
-   ([[require("program.vita.vita").exchange_worker(%q, %s, %s)]])
-      :format(confpath, nil, current_node)
+   ([[require("program.vita.vita").exchange_worker(%q, %s)]])
+      :format(confpath, cpu[1])
 )
 
-worker.start("ESP", ([[require("program.vita.vita").esp_worker(%s, %s)]])
-             :format(nil, current_node))
-worker.start("DSP", ([[require("program.vita.vita").dsp_worker(%s, %s)]])
-                :format(nil, current_node))
+worker.start("ESP", ([[require("program.vita.vita").esp_worker(%s)]])
+             :format(cpu[4]))
+worker.start("DSP", ([[require("program.vita.vita").dsp_worker(%s)]])
+                :format(cpu[5]))
 
 
 -- adapted from snabbnfv traffic

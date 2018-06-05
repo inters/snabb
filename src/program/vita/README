@@ -8,21 +8,16 @@ Usage:
   -t  --config-test
                              Validate configuration and exit.
   -c, --cpu <cpus>
-                             Bind the four Vita processes to <cpus>. Must be a
+                             Bind Vita processes to <cpus>. Must be a
                              comma-separated list of CPU identifiers.
-  -m, --membind <memnode>
-                             If the host is a NUMA system, bind Vita processes
-                             to the specified <memnode>.
 
 Run Vita configured by <confpath>. Vita will fork into four processes which
 individually handle private port routing, public port routing, encryption, and
 decryption.
 
 The resulting processes can be bound to specific CPUs using the “--cpu” option
-in the given order.
-
-If the host is a NUMA system, “--membind” can be used to bind to a specific
-memory node.
+in the given order. The processes are as follows: key manager, outbound router,
+inbound router, encapsulaton worker, decapsulation worker.
 
 Example:
-  vita --cpus 4,5,6,7 /etc/vita.conf
+  vita --cpus 0,1,2,3,4 /etc/vita.conf
