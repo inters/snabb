@@ -392,8 +392,8 @@ function listen_confpath (schema, confpath, loader, interval)
          conf_fd = notify_fd:inotify_add_watch(confpath, "close_write")
          needs_reconfigure = needs_reconfigure or conf_fd
       else
-         local n, err = notify_fd:inotify_read()
-         needs_reconfigure = (not err and assert(err.again)) and n >= 1
+         local events, err = notify_fd:inotify_read()
+         needs_reconfigure = not (err and assert(err.again)) and #events >= 1
       end
    end
    timer.activate(timer.new("check-for-reconfigure",
