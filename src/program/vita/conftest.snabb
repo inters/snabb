@@ -11,21 +11,26 @@ local S = require("syscall")
 local confpath = shm.root.."/"..shm.resolve("group/testconf")
 
 local function commit_conf (conf)
-   local f = assert(io.open(confpath, "w"), "Unable to open file: "..confpath)
-   yang.print_config_for_schema(vita.schemata['esp-gateway'], conf, f)
-   f:close()
+   vita.save_config(vita.schemata['esp-gateway'], confpath, conf)
 end
+
+worker.set_exit_on_worker_death(true)
 
 worker.start(
    "PublicRouterLoopback",
    ([[require("program.vita.vita").public_router_loopback_worker(%q)]])
       :format(confpath)
 )
+worker.start(
+   "Exchange",
+   ([[require("program.vita.vita").exchange_worker(%q)]])
+      :format(confpath)
+)
 S.sleep(1)
 
 local conf0 = {
-   private_interface = { macaddr = "52:54:00:00:00:00" },
-   public_interface = { macaddr = "52:54:00:00:00:FF" },
+   private_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:00" },
+   public_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:FF" },
    private_ip4 = "192.168.10.1",
    public_ip4 = "203.0.113.1",
    private_nexthop_ip4 = "192.168.10.1",
@@ -37,8 +42,8 @@ commit_conf(conf0)
 S.sleep(3)
 
 local conf1 = {
-   private_interface = { macaddr = "52:54:00:00:00:00" },
-   public_interface = { macaddr = "52:54:00:00:00:FF" },
+   private_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:00" },
+   public_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:FF" },
    private_ip4 = "192.168.10.1",
    public_ip4 = "203.0.113.1",
    private_nexthop_ip4 = "192.168.10.1",
@@ -61,8 +66,8 @@ commit_conf(conf1)
 S.sleep(3)
 
 local conf2 = {
-   private_interface = { macaddr = "52:54:00:00:00:00" },
-   public_interface = { macaddr = "52:54:00:00:00:FF" },
+   private_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:00" },
+   public_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:FF" },
    private_ip4 = "192.168.10.1",
    public_ip4 = "203.0.113.1",
    private_nexthop_ip4 = "192.168.10.1",
@@ -81,8 +86,8 @@ commit_conf(conf2)
 S.sleep(3)
 
 local conf3 = {
-   private_interface = { macaddr = "52:54:00:00:00:00" },
-   public_interface = { macaddr = "52:54:00:00:00:FF" },
+   private_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:00" },
+   public_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:FF" },
    private_ip4 = "192.168.10.1",
    public_ip4 = "203.0.113.1",
    private_nexthop_ip4 = "192.168.10.1",
@@ -101,8 +106,8 @@ commit_conf(conf3)
 S.sleep(3)
 
 local conf4 = {
-   private_interface = { macaddr = "52:54:00:00:00:00" },
-   public_interface = { macaddr = "52:54:00:00:00:FF" },
+   private_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:00" },
+   public_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:FF" },
    private_ip4 = "192.168.10.1",
    public_ip4 = "203.0.113.2",
    private_nexthop_ip4 = "192.168.10.1",
@@ -121,8 +126,8 @@ commit_conf(conf4)
 S.sleep(3)
 
 local conf5 = {
-   private_interface = { macaddr = "52:54:00:00:00:00" },
-   public_interface = { macaddr = "52:54:00:00:00:FF" },
+   private_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:00" },
+   public_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:FF" },
    private_ip4 = "192.168.10.1",
    public_ip4 = "203.0.113.2",
    private_nexthop_ip4 = "192.168.10.1",
@@ -141,8 +146,8 @@ commit_conf(conf5)
 S.sleep(3)
 
 local conf6 = {
-   private_interface = { macaddr = "52:54:00:00:00:00" },
-   public_interface = { macaddr = "52:54:00:00:00:FF" },
+   private_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:00" },
+   public_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:FF" },
    private_ip4 = "192.168.10.1",
    public_ip4 = "203.0.113.2",
    private_nexthop_ip4 = "192.168.10.1",

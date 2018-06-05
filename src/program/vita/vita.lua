@@ -5,15 +5,19 @@ module(...,package.seeall)
 local lib = require("core.lib")
 local shm = require("core.shm")
 local worker = require("core.worker")
+local dispatch = require("program.vita.dispatch")
+local ttl = require("program.vita.ttl")
 local route = require("program.vita.route")
 local tunnel = require("program.vita.tunnel")
 local nexthop = require("program.vita.nexthop")
 local exchange = require("program.vita.exchange")
+local icmp = require("program.vita.icmp")
       schemata = require("program.vita.schemata")
 local interlink = require("lib.interlink")
 local Receiver = require("apps.interlink.receiver")
 local Transmitter = require("apps.interlink.transmitter")
 local intel_mp = require("apps.intel_mp.intel_mp")
+local ipv4 = require("lib.protocol.ipv4")
 local numa = require("lib.numa")
 local yang = require("lib.yang.yang")
 local S = require("syscall")
@@ -27,6 +31,7 @@ local confspec = {
    public_ip4 = {required=true},
    private_nexthop_ip4 = {required=true},
    public_nexthop_ip4 = {required=true},
+   private_mtu = {default=8937},
    route = {required=true},
    negotiation_ttl = {},
    sa_ttl = {}
@@ -97,13 +102,44 @@ function configure_private_router (conf, append)
    conf = lib.parse(conf, confspec)
    local c = append or config.new()
 
-   config.app(c, "PrivateRouter", route.PrivateRouter, {routes=conf.route})
+   config.app(c, "PrivateDispatch", dispatch.PrivateDispatch, {
+                 node_ip4 = conf.private_ip4
+   })
+   config.app(c, "OutboundTTL", ttl.DecrementTTL)
+   config.app(c, "PrivateRouter", route.PrivateRouter, {
+                 routes = conf.route,
+                 mtu = conf.private_mtu
+   })
+   config.app(c, "PrivateICMP4", icmp.ICMP4, {
+                 node_ip4 = conf.private_ip4,
+                 nexthop_mtu = conf.private_mtu
+   })
+   config.app(c, "InboundDispatch", dispatch.InboundDispatch, {
+                 node_ip4 = conf.private_ip4
+   })
+   config.app(c, "InboundTTL", ttl.DecrementTTL)
+   config.app(c, "InboundICMP4", icmp.ICMP4, {
+                 node_ip4 = conf.private_ip4
+   })
    config.app(c, "PrivateNextHop", nexthop.NextHop4, {
                  node_mac = conf.private_interface.macaddr,
                  node_ip4 = conf.private_ip4,
                  nexthop_ip4 = conf.private_nexthop_ip4
    })
-   config.link(c, "PrivateRouter.arp -> PrivateNextHop.arp")
+   config.link(c, "PrivateDispatch.forward4 -> OutboundTTL.input")
+   config.link(c, "PrivateDispatch.icmp4 -> PrivateICMP4.input")
+   config.link(c, "PrivateDispatch.arp -> PrivateNextHop.arp")
+   config.link(c, "PrivateDispatch.protocol4_unreachable -> PrivateICMP4.protocol_unreachable")
+   config.link(c, "OutboundTTL.output -> PrivateRouter.input")
+   config.link(c, "OutboundTTL.time_exceeded -> PrivateICMP4.transit_ttl_exceeded")
+   config.link(c, "PrivateRouter.fragmentation_needed -> PrivateICMP4.fragmentation_needed")
+   config.link(c, "PrivateICMP4.output -> PrivateNextHop.icmp4")
+   config.link(c, "InboundDispatch.forward4 -> InboundTTL.input")
+   config.link(c, "InboundDispatch.icmp4 -> InboundICMP4.input")
+   config.link(c, "InboundDispatch.protocol4_unreachable -> InboundICMP4.protocol_unreachable")
+   config.link(c, "InboundTTL.output -> PrivateNextHop.forward")
+   config.link(c, "InboundTTL.time_exceeded -> InboundICMP4.transit_ttl_exceeded")
+   config.link(c, "InboundICMP4.output -> PrivateRouter.control")
 
    for id, route in pairs(conf.route) do
       local private_in = "PrivateRouter."..id
@@ -111,14 +147,14 @@ function configure_private_router (conf, append)
       config.app(c, ESP_in, Transmitter)
       config.link(c, private_in.." -> "..ESP_in..".input")
 
-      local private_out = "PrivateNextHop."..id
+      local private_out = "InboundDispatch."..id
       local DSP_out = "DSP_"..id.."_out"
       config.app(c, DSP_out, Receiver)
       config.link(c, DSP_out..".output -> "..private_out)
    end
 
    local private_links = {
-      input = "PrivateRouter.input",
+      input = "PrivateDispatch.input",
       output = "PrivateNextHop.output"
    }
    return c, private_links
@@ -128,8 +164,13 @@ function configure_public_router (conf, append)
    conf = lib.parse(conf, confspec)
    local c = append or config.new()
 
+   config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
+                 node_ip4 = conf.public_ip4
+   })
    config.app(c, "PublicRouter", route.PublicRouter, {
-                 routes = conf.route,
+                 routes = conf.route
+   })
+   config.app(c, "PublicICMP4", icmp.ICMP4, {
                  node_ip4 = conf.public_ip4
    })
    config.app(c, "PublicNextHop", nexthop.NextHop4, {
@@ -137,11 +178,15 @@ function configure_public_router (conf, append)
                  node_ip4 = conf.public_ip4,
                  nexthop_ip4 = conf.public_nexthop_ip4
    })
-   config.link(c, "PublicRouter.arp -> PublicNextHop.arp")
+   config.link(c, "PublicDispatch.forward4 -> PublicRouter.input")
+   config.link(c, "PublicDispatch.icmp4 -> PublicICMP4.input")
+   config.link(c, "PublicDispatch.arp -> PublicNextHop.arp")
+   config.link(c, "PublicDispatch.protocol4_unreachable -> PublicICMP4.protocol_unreachable")
+   config.link(c, "PublicICMP4.output -> PublicNextHop.icmp4")
 
    config.app(c, "Protocol_in", Transmitter)
    config.app(c, "Protocol_out", Receiver)
-   config.link(c, "PublicRouter.protocol -> Protocol_in.input")
+   config.link(c, "PublicDispatch.protocol -> Protocol_in.input")
    config.link(c, "Protocol_out.output -> PublicNextHop.protocol")
 
    for id, route in pairs(conf.route) do
@@ -161,7 +206,7 @@ function configure_public_router (conf, append)
    end
 
    local public_links = {
-      input = "PublicRouter.input",
+      input = "PublicDispatch.input",
       output = "PublicNextHop.output"
    }
 
@@ -175,11 +220,6 @@ function configure_private_router_with_nic (conf, append)
 
    local c, private =
       configure_private_router(conf, append or config.new())
-
-   -- Gracious limit for user defined MTU on private interface to avoid packet
-   -- payload overun due to ESP tunnel overhead.
-   conf.private_interface.mtu =
-      math.min(conf.private_interface.mtu or 8000, 8000)
 
    conf.private_interface.vmdq = true
 
@@ -271,8 +311,8 @@ end
 
 -- ephemeral_keys := { <id>=(SA), ... }                        (see exchange)
 
-function configure_esp (ephemeral_keys)
-   local c = config.new()
+function configure_esp (ephemeral_keys, append)
+   local c = append or config.new()
 
    for id, sa in pairs(ephemeral_keys.sa) do
       -- Configure interlink receiver/transmitter for inbound SA
@@ -290,8 +330,8 @@ function configure_esp (ephemeral_keys)
    return c
 end
 
-function configure_dsp (ephemeral_keys)
-   local c = config.new()
+function configure_dsp (ephemeral_keys, append)
+   local c = append or config.new()
 
    for id, sa in pairs(ephemeral_keys.sa) do
       -- Configure interlink receiver/transmitter for outbound SA
@@ -333,6 +373,12 @@ function load_config (schema, confpath)
    return yang.load_config_for_schema(
       schema, lib.readfile(confpath, "a*"), confpath
    )
+end
+
+function save_config (schema, confpath, conf)
+   local f = assert(io.open(confpath, "w"), "Unable to open file: "..confpath)
+   yang.print_config_for_schema(schema, conf, f)
+   f:close()
 end
 
 function listen_confpath (schema, confpath, loader, interval)

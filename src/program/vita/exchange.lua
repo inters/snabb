@@ -261,7 +261,7 @@ function KeyManager:push ()
    for _, route in ipairs(self.routes) do
       if route.protocol:reset_if_expired() == Protocol.code.expired then
          counter.add(self.shm.negotiations_expired)
-         audit:log("Negotiation expired for '"..route.id.."' (negotiation_ttl")
+         audit:log("Negotiation expired for '"..route.id.."' (negotiation_ttl)")
       end
       if route.status < status.ready then
          self:negotiate(route)

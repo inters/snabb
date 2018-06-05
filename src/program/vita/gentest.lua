@@ -38,10 +38,13 @@ function gen_packet (conf, route, size)
    local d = datagram:new(packet.resize(packet.allocate(), payload_size))
    d:push(ipv4:new{ src = ipv4:pton(conf.private_nexthop_ip4),
                     dst = ipv4:pton(conf.route_prefix.."."..route..".1"),
+                    total_length = ipv4:sizeof() + payload_size,
                     ttl = 64 })
    d:push(ethernet:new{ dst = ethernet:pton(conf.private_mac),
                         type = 0x0800 })
-   return d:packet()
+   local p = d:packet()
+   -- Pad to minimum Ethernet frame size (excluding four octet CRC)
+   return packet.resize(p, math.max(60, p.length))
 end
 
 function gen_packets (conf)
