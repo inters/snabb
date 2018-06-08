@@ -9,5 +9,5 @@ export SNABB_RECV_DURATION=1
 for i in {1..7}; do ./testrecv.snabb $SNABB_PCI_INTEL1G0 1; done > results.1
 sleep 1
 kill -9 $BLAST
-test `cat results.* | grep "^RPTHC" | awk '{print $2}'` -gt 10000
-exit $?
+test `cat results.0 | grep "^RPTHC" | awk '{print $2}'` -gt 10000 \
+    && test `cat results.1 | grep "^RPTHC" | awk '{print $2}'` -gt 10000
