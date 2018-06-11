@@ -55,5 +55,36 @@ tail -n +2 mapfile.csv | \
     echo "   },"
     echo "  },"
  done
+
+# Incomplete, hand assembled events for AMD family 17h
+cat <<EOF
+  {"AuthenticAMD-F", nil, "core",
+   {
+      ["LsNotHaltedCyc"] = 0x0076,
+      ["cycles"] = 0x0076,
+      ["l1d_all_ref.any"] = 0x077D,
+      ["IcFw32Miss"] = 0x0081,
+      ["BpL1TlbMissL2Hit"] = 0x0084,
+      ["BpL1TlbMissL2Miss"] = 0x0085,
+      ["IcFetchStall"] = 0x0287,
+      ["IcFetchStall.IcStallAny"] = 0x0287,
+      ["ExRetInstr"] = 0x00C0,
+      ["instructions"] = 0x00C0,
+      ["ExRetCops"] = 0x00C1,
+      ["uops_retired.all"] = 0x00C1,
+      ["ExRetBrn"] = 0x00C2,
+      ["ExRetBrnMisp"] = 0x00C3,
+      ["br_misp_retired.all_branches"] = 0x00C3,
+      ["ExRetBrnTknMisp"] = 0x00C5,
+      ["ExRetMmxFpInstr"] = 0x07CB,
+      ["ExRetMmxFpInstr.SseInstr"] = 0x04CB,
+      ["ExRetMmxFpInstr.MmxInstr"] = 0x02CB,
+      ["ExRetMmxFpInstr.X87Instr"] = 0x01CB,
+      ["ExRetCond"] = 0x00D1,
+      ["br_inst_retired.conditional"] = 0x00D1
+   }
+  },
+EOF
+
 echo " }"
 exit
