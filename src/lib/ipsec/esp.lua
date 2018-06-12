@@ -30,6 +30,7 @@ local lib = require("core.lib")
 local ffi = require("ffi")
 local C = ffi.C
 local logger = lib.logger_new({ rate = 32, module = 'esp' })
+local band = bit.band
 
 require("lib.ipsec.track_seq_no_h")
 local window_t = ffi.typeof("uint8_t[?]")
@@ -43,7 +44,8 @@ local ESP_TAIL_SIZE = esp_tail:sizeof()
 
 local TRANSPORT6_PAYLOAD_OFFSET = ETHERNET_SIZE + IPV6_SIZE
 
-local function padding (a, l) return (a - l%a) % a end
+-- NB: `a' must be a power of two
+local function padding (a, l) return bit.band(-l, a-1) end
 
 function esp_new (conf)
    assert(conf.mode == "aes-gcm-128-12", "Only supports 'aes-gcm-128-12'.")
