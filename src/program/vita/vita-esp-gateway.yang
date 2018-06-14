@@ -17,7 +17,6 @@ module vita-esp-gateway {
   grouping interface {
     leaf pciaddr { type pci-address; mandatory true; }
     leaf macaddr { type yang:mac-address; mandatory true; }
-    leaf vlan { type uint16 { range "0..4095"; } }
   }
 
   container private_interface { uses interface; }

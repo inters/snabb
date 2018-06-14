@@ -82,7 +82,7 @@ numa.bind_to_cpu(cpu)
 
 local c = config.new()
 
-config.app(c, "nic", Intel, {pciaddr=pciaddr, macaddr=macaddr, vmdq=true})
+config.app(c, "nic", Intel, {pciaddr=pciaddr})
 config.app(c, "arp", ARP, {self_mac=ethernet:pton(macaddr),
                            self_ip=ipv4:pton(ip),
                            next_ip=ipv4:pton(nh)})

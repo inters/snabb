@@ -20,6 +20,7 @@ local intel_mp = require("apps.intel_mp.intel_mp")
 local ipv4 = require("lib.protocol.ipv4")
 local numa = require("lib.numa")
 local yang = require("lib.yang.yang")
+local pci = require("lib.hardware.pci")
 local S = require("syscall")
 local usage = require("program.vita.README_inc")
 local confighelp = require("program.vita.README_config_inc")
@@ -213,17 +214,25 @@ function configure_public_router (conf, append)
    return c, public_links
 end
 
+local function nic_config (conf, interface)
+   numa.check_affinity_for_pci_addresses({conf[interface].pciaddr})
+   local needs_vmdq = pci.canonical(conf.private_interface.pciaddr)
+                   == pci.canonical(conf.public_interface.pciaddr)
+   return {
+      pciaddr = conf[interface].pciaddr,
+      vmdq = needs_vmdq,
+      macaddr = needs_vmdq and conf[interface].macaddr
+   }
+end
+
 function configure_private_router_with_nic (conf, append)
    conf = lib.parse(conf, confspec)
-
-   numa.check_affinity_for_pci_addresses({conf.private_interface.pciaddr})
 
    local c, private =
       configure_private_router(conf, append or config.new())
 
-   conf.private_interface.vmdq = true
-
-   config.app(c, "PrivateNIC", intel_mp.Intel, conf.private_interface)
+   config.app(c, "PrivateNIC", intel_mp.Intel,
+              nic_config(conf, 'private_interface'))
    config.link(c, "PrivateNIC.output -> "..private.input)
    config.link(c, private.output.." -> PrivateNIC.input")
 
@@ -233,14 +242,11 @@ end
 function configure_public_router_with_nic (conf, append)
    conf = lib.parse(conf, confspec)
 
-   numa.check_affinity_for_pci_addresses({conf.public_interface.pciaddr})
-
    local c, public =
       configure_public_router(conf, append or config.new())
 
-   conf.public_interface.vmdq = true
-
-   config.app(c, "PublicNIC", intel_mp.Intel, conf.public_interface)
+   config.app(c, "PublicNIC", intel_mp.Intel,
+              nic_config(conf, 'public_interface'))
    config.link(c, "PublicNIC.output -> "..public.input)
    config.link(c, public.output.." -> PublicNIC.input")
 
