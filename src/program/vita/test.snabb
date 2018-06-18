@@ -64,10 +64,13 @@ local S = require("syscall")
 --   - it performs additional work (synthesizing traffic and filtering ARP
 --     packets) in the private router process
 --
--- For a more realistic test case see: realtest.snabb
+-- For a more realistic test case see use gentest.snabb in conjunction with
+-- snabb loadtest.
 
 local conf, sim_packets = gentest.gen_testcase({
-      private_nexthop_ip4 = gentest.defaults.private_ip4.default,
+      private_interface = {
+         nexthop_ip4 = gentest.private_interface_defaults.ip4.default
+      },
       packet_size = tonumber(main.parameters[1]) or main.parameters[1],
       nroutes = tonumber(main.parameters[3])
 })

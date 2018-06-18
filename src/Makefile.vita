@@ -1,4 +1,4 @@
-SRCPATTERN = '\([^/\#\.]*\|\(core/\|arch/\|jit/\|syscall/\|lib/lua/\|lib/protocol/\|lib/checksum\|lib/ipsec/\|lib/ptree/\|lib/yang/\|lib/xsd_regexp\|lib/maxpc\|lib/ctable\|lib/binary_search\|lib/multi_copy\|lib/hash/\|lib/cltable\|lib/lpm/\|lib/interlink\|lib/hardware/\|lib/macaddress\|lib/numa\|apps/interlink/\|apps/intel_mp/\|program/vita/\|program/top/\|program/trace/\|program/ps/\|program/pci_bind/\)[^\#]*\)'
+SRCPATTERN = '\([^/\#\.]*\|\(core/\|arch/\|jit/\|syscall/\|lib/lua/\|pf\|lib/protocol/\|lib/checksum\|lib/ipsec/\|lib/ptree/\|lib/yang/\|lib/xsd_regexp\|lib/maxpc\|lib/ctable\|lib/binary_search\|lib/multi_copy\|lib/hash/\|lib/cltable\|lib/lpm/\|lib/interlink\|lib/hardware/\|lib/macaddress\|lib/numa\|apps/interlink/\|apps/intel_mp/\|program/vita/\|program/top/\|program/trace/\|program/ps/\|program/pci_bind/\)[^\#]*\)'
 
 all:
 	SRCPATTERN=$(SRCPATTERN) $(MAKE)

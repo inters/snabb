@@ -19,7 +19,8 @@ NextHop4 = {
    config = {
       node_mac = {required=true},
       node_ip4 = {required=true},
-      nexthop_ip4 = {required=true}
+      nexthop_ip4 = {required=true},
+      nexthop_mac = {}
    },
    shm = {
       arp_requests = {counter},
@@ -71,6 +72,13 @@ function NextHop4:new (conf)
    -- Initially, we don’t know the hardware address of our next hop
    o.connected = false
    o.connect_interval = lib.throttle(5)
+
+   -- ...unless its supplied
+   if conf.nexthop_mac then
+      print("forced")
+      o.eth:dst(ethernet:pton(conf.nexthop_mac))
+      o.connected = true
+   end
 
    return setmetatable(o, {__index = NextHop4})
 end
