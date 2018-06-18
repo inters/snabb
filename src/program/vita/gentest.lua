@@ -15,16 +15,25 @@ local lib = require("core.lib")
 -- destination.
 
 defaults = {
-   private_mac = {default="52:54:00:00:00:01"},
-   private_ip4 = {default="192.168.0.1"},
-   private_nexthop_ip4 = {default="192.168.0.2"},
-   public_mac = {default="52:54:00:00:00:FF"},
-   public_ip4 = {default="203.0.113.1"},
-   public_nexthop_ip4 = {default="203.0.113.1"},
-   next_gw_ip4 = {default="203.0.113.1"},
+   private_interface = {},
+   public_interface = {},
    route_prefix = {default="172.16"},
    nroutes = {default=1},
    packet_size = {default="IMIX"}
+}
+private_interface_defaults = {
+   pci = {default="00:00.0"},
+   mac = {default="02:00:00:00:00:01"}, -- needed because used in sim. packets
+   ip4 = {default="172.16.1.10"},
+   nexthop_ip4 = {default="172.16.1.1"},
+   nexthop_mac = {}
+}
+public_interface_defaults = {
+   pci = {default="00:00.0"},
+   mac = {},
+   ip4 = {default="172.16.1.10"},
+   nexthop_ip4 = {default="172.16.1.10"},
+   nexthop_mac = {}
 }
 
 traffic_templates = {
@@ -36,11 +45,11 @@ function gen_packet (conf, route, size)
    local payload_size = size - ethernet:sizeof() - ipv4:sizeof()
    assert(payload_size >= 0, "Negative payload_size :-(")
    local d = datagram:new(packet.resize(packet.allocate(), payload_size))
-   d:push(ipv4:new{ src = ipv4:pton(conf.private_nexthop_ip4),
+   d:push(ipv4:new{ src = ipv4:pton(conf.private_interface.nexthop_ip4),
                     dst = ipv4:pton(conf.route_prefix.."."..route..".1"),
                     total_length = ipv4:sizeof() + payload_size,
                     ttl = 64 })
-   d:push(ethernet:new{ dst = ethernet:pton(conf.private_mac),
+   d:push(ethernet:new{ dst = ethernet:pton(conf.private_interface.mac),
                         type = 0x0800 })
    local p = d:packet()
    -- Pad to minimum Ethernet frame size (excluding four octet CRC)
@@ -49,7 +58,8 @@ end
 
 function gen_packets (conf)
    local sim_packets = {}
-   local sizes = traffic_templates[conf.packet_size] or {conf.packet_size}
+   local sizes = traffic_templates[conf.packet_size]
+              or {tonumber(conf.packet_size)}
    for _, size in ipairs(sizes) do
       for route = 1, conf.nroutes do
          table.insert(sim_packets, gen_packet(conf, route, size))
@@ -60,19 +70,15 @@ end
 
 function gen_cfg (conf)
    local cfg = {
-      private_interface = { pciaddr = "00:00.0", macaddr = conf.private_mac },
-      public_interface = { pciaddr = "00:00.0", macaddr = conf.public_mac },
-      private_ip4 = conf.private_ip4,
-      public_ip4 = conf.public_ip4,
-      private_nexthop_ip4 = conf.private_nexthop_ip4,
-      public_nexthop_ip4 = conf.public_nexthop_ip4,
+      private_interface = conf.private_interface,
+      public_interface = conf.public_interface,
       route = {},
-      negotiation_ttl = 1
+      negotiation_ttl = conf.nroutes
    }
    for route = 1, conf.nroutes do
       cfg.route["test"..route] = {
          net_cidr4 = conf.route_prefix.."."..route..".0/24",
-         gw_ip4 = conf.next_gw_ip4,
+         gw_ip4 = conf.public_interface.nexthop_ip4,
          preshared_key = string.rep("00", 32),
          spi = 1000+route
       }
@@ -83,7 +89,11 @@ end
 -- Return test configuration and simulation packets according to conf
 function gen_testcase (conf)
    conf = lib.parse(conf, defaults)
-   assert(conf.nroutes >= 1 and conf.nroutes <= 255,
+   conf.private_interface = lib.parse(conf.private_interface,
+                                      private_interface_defaults)
+   conf.public_interface = lib.parse(conf.public_interface,
+                                     public_interface_defaults)
+   assert(conf.nroutes >= 0 and conf.nroutes <= 255,
           "Invalid number of routes: "..conf.nroutes)
    return gen_cfg(conf), gen_packets(conf)
 end

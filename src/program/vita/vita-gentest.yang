@@ -1,0 +1,19 @@
+module vita-gentest {
+  namespace vita:gentest;
+  prefix gentest;
+
+  grouping interface {
+    leaf pci { type string; }
+    leaf ip4 { type string; }
+    leaf mac { type string; }
+    leaf nexthop_ip4 { type string; }
+    leaf nexthop_mac { type string; }
+  }
+
+  container private_interface { uses interface; }
+  container public_interface { uses interface; }
+
+  leaf route_prefix { type string; }
+  leaf nroutes { type uint32; }
+  leaf packet_size { type string; }
+}

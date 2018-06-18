@@ -15,20 +15,17 @@ module vita-esp-gateway {
   typedef time-to-live { type uint32 { range "1..max"; } }
 
   grouping interface {
-    leaf pciaddr { type pci-address; mandatory true; }
-    leaf macaddr { type yang:mac-address; mandatory true; }
+    leaf pci { type pci-address; mandatory true; }
+    leaf ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+    leaf mac { type yang:mac-address; }
+    leaf nexthop_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+    leaf nexthop_mac { type yang:mac-address; }
   }
 
   container private_interface { uses interface; }
   container public_interface { uses interface; }
 
-  leaf private_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
-  leaf public_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
-
-  leaf private_nexthop_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
-  leaf public_nexthop_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
-
-  leaf private_mtu { type uint16 { range "0..8937"; } }
+  leaf mtu { type uint16 { range "0..8937"; } }
 
   list route {
     key id; unique "net_cidr4 preshared_key spi";
