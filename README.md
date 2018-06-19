@@ -88,3 +88,11 @@ machine:
 
 [Snabb](https://github.com/snabbco/snabb) is a simple and fast packet
 networking toolkit with a wonderful community.
+
+
+## Sponsored by
+
+![NLnet](nlnet.png)
+
+[NLnet](https://nlnet.nl) funded Vita development in 2017/2018 with their
+generous donation. 🙇‍♂️
