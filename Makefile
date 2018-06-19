@@ -7,7 +7,7 @@ RECIPE ?= Makefile.vita-test
 
 LUAJIT_CFLAGS := -include $(CURDIR)/gcc-preinclude.h -DLUAJIT_VMPROFILE
 
-all: $(LUAJIT) $(SYSCALL) $(PFLUA) luajit ljsyscall ljndpi libsodium
+all: $(LUAJIT) $(SYSCALL) $(PFLUA) luajit ljsyscall pflua ljndpi libsodium
 	cd src && $(MAKE) -f $(RECIPE)
 luajit: $(LUAJIT)
 	@(cd lib/luajit && \
@@ -22,6 +22,9 @@ ljsyscall: $(SYSCALL)
 	@cp -p  lib/ljsyscall/syscall/linux/*.lua src/syscall/linux/
 	@cp -pr lib/ljsyscall/syscall/linux/x64   src/syscall/linux/
 	@cp -pr lib/ljsyscall/syscall/shared      src/syscall/
+pflua:
+	@cp -p lib/pflua/src/pf.lua src/
+	@cp -pr lib/pflua/src/pf src/pf
 ljndpi:
 	@mkdir -p src/ndpi
 	@cp -p lib/ljndpi/ndpi.lua src/
@@ -35,7 +38,8 @@ install: all
 clean:
 	(cd lib/luajit && $(MAKE) clean)
 	(cd lib/libsodium && $(MAKE) clean || true)
-	(cd src; $(MAKE) clean; rm -rf syscall.lua syscall)
+	(cd src; $(MAKE) clean)
+	(cd src; rm -rf syscall.lua syscall ndpi.lua ndpi pf.lua pf)
 
 PACKAGE:=snabbswitch
 DIST_BINARY:=snabb
@@ -57,4 +61,4 @@ docker:
 	@echo "Usage: docker run -ti --rm snabb <program> ..."
 	@echo "or simply call 'src/snabb <program> ...'"
 .SERIAL: all
-.PHONY: luajit ljsyscall ljndpi libsodium
+.PHONY: luajit ljsyscall pflua ljndpi libsodium

@@ -1,6 +1,25 @@
-SRCPATTERN = '\([^/\#\.]*\|\(core/\|arch/\|jit/\|syscall/\|lib/lua/\|pf\|lib/protocol/\|lib/checksum\|lib/ipsec/\|lib/ptree/\|lib/yang/\|lib/xsd_regexp\|lib/maxpc\|lib/ctable\|lib/binary_search\|lib/multi_copy\|lib/hash/\|lib/cltable\|lib/lpm/\|lib/interlink\|lib/hardware/\|lib/macaddress\|lib/numa\|apps/interlink/\|apps/intel_mp/\|program/vita/\|program/top/\|program/trace/\|program/ps/\|program/pci_bind/\)[^\#]*\)'
+INCLUDE = *.* core arch jit syscall pf \
+          lib/lua lib/protocol lib/checksum.* lib/ipsec lib/yang lib/ptree \
+          lib/xsd_regexp.* lib/maxpc.* lib/ctable.* lib/binary_search.* \
+          lib/multi_copy.* lib/hash lib/cltable.* lib/lpm lib/interlink.* \
+          lib/hardware lib/macaddress.* lib/numa.* \
+          apps/interlink apps/intel_mp \
+          program/vita program/top program/trace program/ps program/pci_bind
+
+INCLUDE_TEST = $(INCLUDE) \
+               lib/pmu.* apps/basic apps/test apps/packet_filter apps/ipv4 \
+               lib/pcap apps/pcap \
+               program/snsh program/snabbmark \
+               lib/virtio apps/vhost apps/ipsec apps/ipv6 \
+               apps/lwaftr/loadgen.* apps/lwaftr/lwutil.* program/loadtest
 
 all:
-	SRCPATTERN=$(SRCPATTERN) $(MAKE)
+	INCLUDE='$(INCLUDE)' $(MAKE)
 
-.PHONY: all
+test:
+	INCLUDE='$(INCLUDE_TEST)' $(MAKE)
+
+clean:
+	INCLUDE='$(INCLUDE_TEST)' $(MAKE) clean
+
+.PHONY: all test clean
