@@ -54,6 +54,7 @@ commit_conf(conf)
 S.sleep(3)
 
 conf.public_interface.ip4 = "172.16.0.11"
+conf.public_interface.nexthop_ip4 = conf.public_interface.ip4
 conf.route.test1.net_cidr4 = "172.16.0.0/16"
 print("Change public_ip4 and route net_cidr4...")
 commit_conf(conf)
@@ -75,7 +76,7 @@ print("Change sa_ttl...")
 commit_conf(conf)
 S.sleep(3)
 
-local conf, _ = gentest.gen_testcase({nroutes=0})
+conf.route.test2 = nil
 print("Remove route...")
 commit_conf(conf)
 S.sleep(3)
