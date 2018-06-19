@@ -27,18 +27,18 @@ local regenerate_pcaps = main.parameters[1]
 
 local cfg = {
    private_interface = {
-      pciaddr = "00:00.0",
-      macaddr = "52:54:00:00:00:00"
+      pci = "00:00.0",
+      ip4 = "192.168.10.1",
+      nexthop_ip4 = "192.168.0.1",
+      mac = "52:54:00:00:00:00"
    },
    public_interface = {
-      pciaddr = "00:00.0",
-      macaddr = "52:54:00:00:00:FF"
+      pci = "00:00.0",
+      ip4 = "203.0.113.1",
+      nexthop_ip4 = "203.0.0.1",
+      mac = "52:54:00:00:00:FF"
    },
-   private_ip4 = "192.168.10.1",
-   public_ip4 = "203.0.113.1",
-   private_nexthop_ip4 = "192.168.0.1",
-   public_nexthop_ip4 = "203.0.0.1",
-   private_mtu = 500,
+   mtu = 500,
    route = {
       loopback = {
          net_cidr4 = "192.168.10.0/24",
