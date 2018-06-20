@@ -66,15 +66,20 @@ while Vita is running, without affecting unrelated routes.
 ## Getting started
 
 Vita runs on any modern Linux/x86-64 distribution, but requires a compatible
-network interface card (currently *Intel* chipsets i210, i350, and 82599).
+network interface card (currently *Intel* chipsets i210, i350, and 82599) as
+well as CPU support for
+[AES-NI](https://en.wikipedia.org/wiki/AES_instruction_set) and
+[AVX-2](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions#Advanced_Vector_Extensions_2).
 
     $ git clone https://github.com/inters/vita
     $ cd vita
     $ RECIPE=Makefile.vita make -j
     $ sudo src/vita --help
 
-The `vita` binary is stand-alone, includes all auxiliary applications, and can
-be copied between machines.
+The `vita` binary is stand-alone, includes useful auxiliary applications (like
+[snabb top](https://github.com/inters/vita/tree/master/src/program/top) and
+[snabb pci_bind](https://github.com/inters/vita/tree/master/src/program/pci_bind)),
+and can be copied between machines.
 
 For example, to install Vita and the Snabb monitoring tool on the local
 machine:
