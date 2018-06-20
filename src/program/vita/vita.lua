@@ -83,7 +83,9 @@ function run (args)
       cpu = "c"
    }
 
-   local opt, conftest, cpus = {}, false, nil
+   local opt = {}
+   local conftest = false
+   local cpus = {}
 
    local function exit_usage (status) print(usage) main.exit(status) end
 
