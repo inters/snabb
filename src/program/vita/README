@@ -11,13 +11,24 @@ Usage:
                              Bind Vita processes to <cpus>. Must be a
                              comma-separated list of CPU identifiers.
 
-Run Vita configured by <confpath>. Vita will fork into four processes which
-individually handle private port routing, public port routing, encryption, and
-decryption.
+Run Vita configured by <confpath>. While running, Vita will continuously reload
+and apply the configuration file at <confpath> whenever it changes, thus you
+can reconfigure Vita on-the-fly without restarting the process.
 
-The resulting processes can be bound to specific CPUs using the “--cpu” option
-in the given order. The processes are as follows: key manager, outbound router,
-inbound router, encapsulaton worker, decapsulation worker.
+Note that Vita needs super-user privileges to run as it needs unrestricted
+access to hardware devices via DMA and system resources like hugepages. Vita
+also requires a CPU that support AES-NI and AVX-2.
+
+Refer to “--config-help” on how to configure Vita. New configurations can be
+validated before applying with “--config-test”. Don’t worry: invalid
+configurations will not bring down a running Vita instance, but merely fail to
+be loaded.
+
+Vita will fork into five processes which individually handle key management,
+outbound routing, inbound routing, encapsulation, and decapsulation. The
+resulting processes can be bound to specific CPUs using the “--cpu” option in
+the given order.
 
 Example:
   vita --cpus 0,1,2,3,4 /etc/vita.conf
+  vita --config-test new.conf && mv new.conf /etc/vita.conf
