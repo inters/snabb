@@ -24,15 +24,15 @@ defaults = {
 private_interface_defaults = {
    pci = {default="00:00.0"},
    mac = {default="02:00:00:00:00:01"}, -- needed because used in sim. packets
-   ip4 = {default="172.16.1.10"},
+   ip4 = {default="172.16.0.10"},
    nexthop_ip4 = {default="172.16.1.1"},
    nexthop_mac = {}
 }
 public_interface_defaults = {
    pci = {default="00:00.0"},
    mac = {},
-   ip4 = {default="172.16.1.10"},
-   nexthop_ip4 = {default="172.16.1.10"},
+   ip4 = {default="172.16.0.10"},
+   nexthop_ip4 = {default="172.16.0.10"},
    nexthop_mac = {}
 }
 
