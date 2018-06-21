@@ -11,7 +11,7 @@ INCLUDE_TEST = $(INCLUDE) \
                lib/pcap apps/pcap \
                program/snsh program/snabbmark \
                lib/virtio apps/vhost apps/ipsec apps/ipv6 \
-               apps/lwaftr/loadgen.* apps/lwaftr/lwutil.* program/loadtest
+               apps/lwaftr/{loadgen,lwutil,constants}.* program/loadtest
 
 all:
 	INCLUDE='$(INCLUDE)' $(MAKE)
