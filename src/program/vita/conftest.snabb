@@ -5,6 +5,7 @@
 local shm = require("core.shm")
 local worker = require("core.worker")
 local vita = require("program.vita.vita")
+local gentest = require("program.vita.gentest")
 local yang = require("lib.yang.yang")
 local S = require("syscall")
 
@@ -28,144 +29,54 @@ worker.start(
 )
 S.sleep(1)
 
-local conf0 = {
-   private_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:00" },
-   public_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:FF" },
-   private_ip4 = "192.168.10.1",
-   public_ip4 = "203.0.113.1",
-   private_nexthop_ip4 = "192.168.10.1",
-   public_nexthop_ip4 = "203.0.113.1",
-   route = {}
-}
+local conf, _  = gentest.gen_testcase({nroutes=0})
 print("Committing base configuration...")
-commit_conf(conf0)
+commit_conf(conf)
 S.sleep(3)
 
-local conf1 = {
-   private_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:00" },
-   public_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:FF" },
-   private_ip4 = "192.168.10.1",
-   public_ip4 = "203.0.113.1",
-   private_nexthop_ip4 = "192.168.10.1",
-   public_nexthop_ip4 = "203.0.113.1",
-   route = {
-      loopback = {
-         net_cidr4 = "192.168.10.0/24",
-         gw_ip4 = "203.0.113.1",
-         preshared_key = string.rep("00", 32),
-         spi = 1001
-      }
-   }
-}
+local conf, _ = gentest.gen_testcase({nroutes=1})
 print("Adding a route...")
-commit_conf(conf1)
+commit_conf(conf)
 S.sleep(3)
 
 print("Update without change...")
-commit_conf(conf1)
+commit_conf(conf)
 S.sleep(3)
 
-local conf2 = {
-   private_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:00" },
-   public_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:FF" },
-   private_ip4 = "192.168.10.1",
-   public_ip4 = "203.0.113.1",
-   private_nexthop_ip4 = "192.168.10.1",
-   public_nexthop_ip4 = "203.0.113.1",
-   route = {
-      loopback = {
-         net_cidr4 = "192.168.10.0/24",
-         gw_ip4 = "203.0.113.1",
-         preshared_key = string.rep("FF", 32),
-         spi = 1001
-      }
-   }
-}
+conf.route.test1.preshared_key = string.rep("FF", 32)
 print("Change route key...")
-commit_conf(conf2)
+commit_conf(conf)
 S.sleep(3)
 
-local conf3 = {
-   private_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:00" },
-   public_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:FF" },
-   private_ip4 = "192.168.10.1",
-   public_ip4 = "203.0.113.1",
-   private_nexthop_ip4 = "192.168.10.1",
-   public_nexthop_ip4 = "203.0.113.1",
-   route = {
-      loopback = {
-         net_cidr4 = "192.168.10.0/24",
-         gw_ip4 = "203.0.113.2",
-         preshared_key = string.rep("FF", 32),
-         spi = 1001
-      }
-   }
-}
+conf.route.test1.gw_ip4 = "172.17.1.10",
 print("Change route gw_ip4...")
-commit_conf(conf3)
+commit_conf(conf)
 S.sleep(3)
 
-local conf4 = {
-   private_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:00" },
-   public_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:FF" },
-   private_ip4 = "192.168.10.1",
-   public_ip4 = "203.0.113.2",
-   private_nexthop_ip4 = "192.168.10.1",
-   public_nexthop_ip4 = "203.0.113.2",
-   route = {
-      loopback = {
-         net_cidr4 = "192.168.10.0/16",
-         gw_ip4 = "203.0.113.2",
-         preshared_key = string.rep("FF", 32),
-         spi = 1001
-      }
-   }
-}
+conf.public_interface.ip4 = "172.16.0.11"
+conf.public_interface.nexthop_ip4 = conf.public_interface.ip4
+conf.route.test1.net_cidr4 = "172.16.0.0/16"
 print("Change public_ip4 and route net_cidr4...")
-commit_conf(conf4)
+commit_conf(conf)
 S.sleep(3)
 
-local conf5 = {
-   private_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:00" },
-   public_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:FF" },
-   private_ip4 = "192.168.10.1",
-   public_ip4 = "203.0.113.2",
-   private_nexthop_ip4 = "192.168.10.1",
-   public_nexthop_ip4 = "203.0.113.2",
-   route = {
-      loopback2 = {
-         net_cidr4 = "192.168.10.0/16",
-         gw_ip4 = "203.0.113.2",
-         preshared_key = string.rep("FF", 32),
-         spi = 1001
-      }
-   }
-}
+conf.route.test2 = conf.route.test1
+conf.route.test1 = nil
 print("Change route id...")
-commit_conf(conf5)
+commit_conf(conf)
 S.sleep(3)
 
-local conf6 = {
-   private_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:00" },
-   public_interface = { pciaddr = "00:00.0", macaddr = "52:54:00:00:00:FF" },
-   private_ip4 = "192.168.10.1",
-   public_ip4 = "203.0.113.2",
-   private_nexthop_ip4 = "192.168.10.1",
-   public_nexthop_ip4 = "203.0.113.2",
-   negotiation_ttl = 1,
-   route = {
-      loopback2 = {
-         net_cidr4 = "192.168.10.0/16",
-         gw_ip4 = "203.0.113.2",
-         preshared_key = string.rep("FF", 32),
-         spi = 1001
-      }
-   }
-}
+conf.negotiation_ttl = 42
 print("Change negotiation_ttl...")
-commit_conf(conf6)
+commit_conf(conf)
 S.sleep(3)
 
+conf.sa_ttl = 42
+print("Change sa_ttl...")
+commit_conf(conf)
+S.sleep(3)
+
+conf.route.test2 = nil
 print("Remove route...")
-commit_conf(conf0)
+commit_conf(conf)
 S.sleep(3)

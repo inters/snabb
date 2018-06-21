@@ -17,30 +17,65 @@ local interlink = require("lib.interlink")
 local Receiver = require("apps.interlink.receiver")
 local Transmitter = require("apps.interlink.transmitter")
 local intel_mp = require("apps.intel_mp.intel_mp")
+local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local numa = require("lib.numa")
 local yang = require("lib.yang.yang")
+local pci = require("lib.hardware.pci")
 local S = require("syscall")
+local ffi = require("ffi")
 local usage = require("program.vita.README_inc")
 local confighelp = require("program.vita.README_config_inc")
 
 local confspec = {
    private_interface = {required=true},
    public_interface = {required=true},
-   private_ip4 = {required=true},
-   public_ip4 = {required=true},
-   private_nexthop_ip4 = {required=true},
-   public_nexthop_ip4 = {required=true},
-   private_mtu = {default=8937},
+   mtu = {default=8937},
    route = {required=true},
    negotiation_ttl = {},
    sa_ttl = {}
 }
 
+local ifspec = {
+   pci = {required=true},
+   ip4 = {required=true},
+   nexthop_ip4 = {required=true},
+   mac = {},
+   nexthop_mac = {}
+}
+
+local function derive_local_unicast_mac (prefix, ip4)
+   local mac = ffi.new("uint8_t[?]", 6)
+   mac[0] = prefix[1]
+   mac[1] = prefix[2]
+   ffi.copy(mac+2, ipv4:pton(ip4), 4)
+   -- First bit = 0 indicates unicast, second bit = 1 means locally
+   -- administered.
+   assert(bit.band(bit.bor(prefix[1], 0x02), 0xFE) == prefix[1],
+          "Non-unicast or non-local MAC address: "..ethernet:ntop(mac))
+   return ethernet:ntop(mac)
+end
+
+local function parse_ifconf (conf, mac_prefix)
+   conf = lib.parse(conf, ifspec)
+   conf.mac = conf.mac or derive_local_unicast_mac(mac_prefix, conf.ip4)
+   return conf
+end
+
+local function parse_conf (conf)
+   conf = lib.parse(conf, confspec)
+   conf.private_interface = parse_ifconf(conf.private_interface, {0x2a, 0xbb})
+   conf.public_interface = parse_ifconf(conf.public_interface, {0x3a, 0xbb})
+   return conf
+end
+
 local esp_keyfile = "group/esp_ephemeral_keys"
 local dsp_keyfile = "group/dsp_ephemeral_keys"
 
 function run (args)
+   io.stdout:setvbuf("line")
+   io.stderr:setvbuf("line")
+
    local long_opt = {
       help = "h",
       ["config-help"] = "H",
@@ -48,7 +83,9 @@ function run (args)
       cpu = "c"
    }
 
-   local opt, conftest, cpus = {}, false, nil
+   local opt = {}
+   local conftest = false
+   local cpus = {}
 
    local function exit_usage (status) print(usage) main.exit(status) end
 
@@ -99,32 +136,33 @@ function run (args)
 end
 
 function configure_private_router (conf, append)
-   conf = lib.parse(conf, confspec)
+   conf = parse_conf(conf)
    local c = append or config.new()
 
    config.app(c, "PrivateDispatch", dispatch.PrivateDispatch, {
-                 node_ip4 = conf.private_ip4
+                 node_ip4 = conf.private_interface.ip4
    })
    config.app(c, "OutboundTTL", ttl.DecrementTTL)
    config.app(c, "PrivateRouter", route.PrivateRouter, {
                  routes = conf.route,
-                 mtu = conf.private_mtu
+                 mtu = conf.mtu
    })
    config.app(c, "PrivateICMP4", icmp.ICMP4, {
-                 node_ip4 = conf.private_ip4,
-                 nexthop_mtu = conf.private_mtu
+                 node_ip4 = conf.private_interface.ip4,
+                 nexthop_mtu = conf.mtu
    })
    config.app(c, "InboundDispatch", dispatch.InboundDispatch, {
-                 node_ip4 = conf.private_ip4
+                 node_ip4 = conf.private_interface.ip4
    })
    config.app(c, "InboundTTL", ttl.DecrementTTL)
    config.app(c, "InboundICMP4", icmp.ICMP4, {
-                 node_ip4 = conf.private_ip4
+                 node_ip4 = conf.private_interface.ip4
    })
    config.app(c, "PrivateNextHop", nexthop.NextHop4, {
-                 node_mac = conf.private_interface.macaddr,
-                 node_ip4 = conf.private_ip4,
-                 nexthop_ip4 = conf.private_nexthop_ip4
+                 node_mac = conf.private_interface.mac,
+                 node_ip4 = conf.private_interface.ip4,
+                 nexthop_ip4 = conf.private_interface.nexthop_ip4,
+                 nexthop_mac = conf.private_interface.nexthop_mac
    })
    config.link(c, "PrivateDispatch.forward4 -> OutboundTTL.input")
    config.link(c, "PrivateDispatch.icmp4 -> PrivateICMP4.input")
@@ -161,22 +199,23 @@ function configure_private_router (conf, append)
 end
 
 function configure_public_router (conf, append)
-   conf = lib.parse(conf, confspec)
+   conf = parse_conf(conf)
    local c = append or config.new()
 
    config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
-                 node_ip4 = conf.public_ip4
+                 node_ip4 = conf.public_interface.ip4
    })
    config.app(c, "PublicRouter", route.PublicRouter, {
                  routes = conf.route
    })
    config.app(c, "PublicICMP4", icmp.ICMP4, {
-                 node_ip4 = conf.public_ip4
+                 node_ip4 = conf.public_interface.ip4
    })
    config.app(c, "PublicNextHop", nexthop.NextHop4, {
-                 node_mac = conf.public_interface.macaddr,
-                 node_ip4 = conf.public_ip4,
-                 nexthop_ip4 = conf.public_nexthop_ip4
+                 node_mac = conf.public_interface.mac,
+                 node_ip4 = conf.public_interface.ip4,
+                 nexthop_ip4 = conf.public_interface.nexthop_ip4,
+                 nexthop_mac = conf.public_interface.nexthop_mac
    })
    config.link(c, "PublicDispatch.forward4 -> PublicRouter.input")
    config.link(c, "PublicDispatch.icmp4 -> PublicICMP4.input")
@@ -200,7 +239,7 @@ function configure_public_router (conf, append)
       local Tunnel = "Tunnel_"..id
       config.app(c, ESP_out, Receiver)
       config.app(c, Tunnel, tunnel.Tunnel4,
-                 {src=conf.public_ip4, dst=route.gw_ip4})
+                 {src=conf.public_interface.ip4, dst=route.gw_ip4})
       config.link(c, ESP_out..".output -> "..Tunnel..".input")
       config.link(c, Tunnel..".output -> "..public_out)
    end
@@ -213,17 +252,25 @@ function configure_public_router (conf, append)
    return c, public_links
 end
 
-function configure_private_router_with_nic (conf, append)
-   conf = lib.parse(conf, confspec)
+local function nic_config (conf, interface)
+   numa.check_affinity_for_pci_addresses({conf[interface].pci})
+   local needs_vmdq = pci.canonical(conf.private_interface.pci)
+                   == pci.canonical(conf.public_interface.pci)
+   return {
+      pciaddr = conf[interface].pci,
+      vmdq = needs_vmdq,
+      macaddr = needs_vmdq and conf[interface].mac
+   }
+end
 
-   numa.check_affinity_for_pci_addresses({conf.private_interface.pciaddr})
+function configure_private_router_with_nic (conf, append)
+   conf = parse_conf(conf)
 
    local c, private =
       configure_private_router(conf, append or config.new())
 
-   conf.private_interface.vmdq = true
-
-   config.app(c, "PrivateNIC", intel_mp.Intel, conf.private_interface)
+   config.app(c, "PrivateNIC", intel_mp.Intel,
+              nic_config(conf, 'private_interface'))
    config.link(c, "PrivateNIC.output -> "..private.input)
    config.link(c, private.output.." -> PrivateNIC.input")
 
@@ -231,16 +278,13 @@ function configure_private_router_with_nic (conf, append)
 end
 
 function configure_public_router_with_nic (conf, append)
-   conf = lib.parse(conf, confspec)
-
-   numa.check_affinity_for_pci_addresses({conf.public_interface.pciaddr})
+   conf = parse_conf(conf)
 
    local c, public =
       configure_public_router(conf, append or config.new())
 
-   conf.public_interface.vmdq = true
-
-   config.app(c, "PublicNIC", intel_mp.Intel, conf.public_interface)
+   config.app(c, "PublicNIC", intel_mp.Intel,
+              nic_config(conf, 'public_interface'))
    config.link(c, "PublicNIC.output -> "..public.input)
    config.link(c, public.output.." -> PublicNIC.input")
 
@@ -283,11 +327,11 @@ function public_router_loopback_worker (confpath, cpu)
 end
 
 function configure_exchange (conf, append)
-   conf = lib.parse(conf, confspec)
+   conf = parse_conf(conf)
    local c = append or config.new()
 
    config.app(c, "KeyExchange", exchange.KeyManager, {
-                 node_ip4 = conf.public_ip4,
+                 node_ip4 = conf.public_interface.ip4,
                  routes = conf.route,
                  esp_keyfile = esp_keyfile,
                  dsp_keyfile = dsp_keyfile,
