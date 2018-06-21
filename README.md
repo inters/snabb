@@ -70,11 +70,16 @@ network interface card (currently *Intel* chipsets i210, i350, and 82599) as
 well as CPU support for
 [AES-NI](https://en.wikipedia.org/wiki/AES_instruction_set) and
 [AVX-2](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions#Advanced_Vector_Extensions_2).
+Important note: Snabb needs Linux to be booted with `iommu=off` for its device
+drivers to function.
 
     $ git clone https://github.com/inters/vita
     $ cd vita
     $ RECIPE=Makefile.vita make -j
     $ sudo src/vita --help
+
+Setting `RECIPE=Makefile.vita` causes a release build to be built (as opposed
+to a test build.)
 
 The `vita` binary is stand-alone, includes useful auxiliary applications (like
 [snabb top](https://github.com/inters/vita/tree/master/src/program/top) and

@@ -17,7 +17,8 @@ can reconfigure Vita on-the-fly without restarting the process.
 
 Note that Vita needs super-user privileges to run as it needs unrestricted
 access to hardware devices via DMA and system resources like hugepages. Vita
-also requires a CPU that support AES-NI and AVX-2.
+also requires a CPU that support AES-NI and AVX-2. It is also required to boot
+Linux with the kernel parameter iommu=off for Snabb device drivers to function.
 
 Refer to “--config-help” on how to configure Vita. New configurations can be
 validated before applying with “--config-test”. Don’t worry: invalid
