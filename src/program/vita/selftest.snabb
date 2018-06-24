@@ -12,6 +12,8 @@ local filter = require("apps.packet_filter.pcap_filter")
 local match = require("apps.test.match")
 local counter = require("core.counter")
 local shm = require("core.shm")
+local cltable = require("lib.cltable")
+local ffi = require("ffi")
 
 -- Synopsis:
 --
@@ -49,28 +51,25 @@ local cfg = {
    }
 }
 
-local ephemeral_keys = {
-   esp = {
-      sa = {
-         loopback_outbound = {
-            aead = "aes-gcm-16-icv",
-            spi = 1001,
-            key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
-            salt = "00 00 00 00"
-         }
-      }
-   },
-   dsp = {
-      sa = {
-         loopback_inbound = {
-            aead = "aes-gcm-16-icv",
-            spi = 1001,
-            key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
-            salt = "00 00 00 00",
-            auditing = true
-         }
-      }
-   }
+local sa_db_spec = {key_type=ffi.typeof("struct { uint32_t spi; }")}
+local sa_db = {
+   outbound_sa = cltable.new(sa_db_spec),
+   inbound_sa =  cltable.new(sa_db_spec)
+}
+sa_db.outbound_sa[ffi.new(sa_db_spec.key_type, 1001)] = {
+   route = "loopback_outbound",
+   spi = 1001,
+   aead = "aes-gcm-16-icv",
+   key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+   salt = "00 00 00 00"
+}
+sa_db.inbound_sa[ffi.new(sa_db_spec.key_type, 1001)] = {
+   route = "loopback_inbound",
+   spi = 1001,
+   aead = "aes-gcm-16-icv",
+   key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+   salt = "00 00 00 00",
+   auditing = true
 }
 
 -- In order to allow the encapsulator/decapsulator apps to run in the same
@@ -92,8 +91,8 @@ local c = config.new()
 -- Configure Vita app network (all-in-one process.)
 local _, private = vita.configure_private_router(cfg, c)
 local _, public = vita.configure_public_router(cfg, c)
-vita.configure_esp(ephemeral_keys.esp, c)
-vita.configure_dsp(ephemeral_keys.dsp, c)
+vita.configure_esp(sa_db, c)
+vita.configure_dsp(sa_db, c)
 
 -- Add ARP resolvers.
 config.app(c, "private_arp", ARP, {

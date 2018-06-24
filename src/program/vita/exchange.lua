@@ -135,6 +135,7 @@ local header = require("lib.protocol.header")
 local lib = require("core.lib")
 local ipv4 = require("lib.protocol.ipv4")
 local yang = require("lib.yang.yang")
+local cltable = require("lib.cltable")
 local schemata = require("program.vita.schemata")
 local audit = lib.logger_new({rate=32, module='KeyManager'})
 require("program.vita.sodium_h")
@@ -147,8 +148,7 @@ KeyManager = {
    config = {
       node_ip4 = {required=true},
       routes = {required=true},
-      esp_keyfile = {required=true},
-      dsp_keyfile = {required=true},
+      sa_db_path = {required=true},
       negotiation_ttl = {default=10},
       sa_ttl = {default=(24 * 60 * 60)}
    },
@@ -242,8 +242,7 @@ function KeyManager:reconfig (conf)
    -- switch to new configuration
    self.node_ip4n = ipv4:pton(conf.node_ip4)
    self.routes = new_routes
-   self.esp_keyfile = shm.root.."/"..shm.resolve(conf.esp_keyfile)
-   self.dsp_keyfile = shm.root.."/"..shm.resolve(conf.dsp_keyfile)
+   self.sa_db_file = shm.root.."/"..shm.resolve(conf.sa_db_path)
    self.negotiation_ttl = conf.negotiation_ttl
    self.sa_ttl = conf.sa_ttl
 end
@@ -351,20 +350,22 @@ end
 function KeyManager:configure_route (route, rx, tx)
    route.status = status.ready
    route.rx_sa = {
-      aead = "aes-gcm-16-icv",
+      route = route.id,
       spi = route.spi,
+      aead = "aes-gcm-16-icv",
       key = lib.hexdump(rx.key),
       salt = lib.hexdump(rx.salt)
    }
    route.tx_sa = {
-      aead = "aes-gcm-16-icv",
+      route = route.id,
       spi = route.spi,
+      aead = "aes-gcm-16-icv",
       key = lib.hexdump(tx.key),
       salt = lib.hexdump(tx.salt)
    }
    route.sa_timeout = lib.timeout(self.sa_ttl)
    route.rekey_timeout = lib.timeout(self.sa_ttl/2)
-   self:commit_ephemeral_keys()
+   self:commit_sa_db()
 end
 
 function KeyManager:expire_route (route)
@@ -373,7 +374,7 @@ function KeyManager:expire_route (route)
    route.rx_sa = nil
    route.sa_timeout = nil
    route.rekey_timeout = nil
-   self:commit_ephemeral_keys()
+   self:commit_sa_db()
 end
 
 function KeyManager:request (route, message)
@@ -437,24 +438,27 @@ function KeyManager:parse_request (request)
    return route, message
 end
 
-local function store_ephemeral_keys (path, keys)
-   local f = assert(io.open(path, "w"), "Unable to open file: "..path)
-   yang.print_config_for_schema(schemata['ephemeral-keys'], {sa=keys}, f)
-   f:close()
-end
+-- sa_db := { outbound_sa={<spi>=(SA), ...}, inbound_sa={<spi>=(SA), ...} }
 
--- ephemeral_keys := { <id>=(SA), ... }
-
-function KeyManager:commit_ephemeral_keys ()
-   local esp_keys, dsp_keys = {}, {}
+function KeyManager:commit_sa_db ()
+   -- Collect currently active SAs
+   local sa_db_spec = {key_type=ffi.typeof("struct { uint32_t spi; }")}
+   local esp_keys, dsp_keys = cltable.new(sa_db_spec), cltable.new(sa_db_spec)
    for _, route in ipairs(self.routes) do
       if route.status == status.ready then
-         esp_keys[route.id] = route.tx_sa
-         dsp_keys[route.id] = route.rx_sa
+         esp_keys[ffi.new(sa_db_spec.key_type, route.spi)] = route.tx_sa
+         dsp_keys[ffi.new(sa_db_spec.key_type, route.spi)] = route.rx_sa
       end
    end
-   store_ephemeral_keys(self.esp_keyfile, esp_keys)
-   store_ephemeral_keys(self.dsp_keyfile, dsp_keys)
+   -- Commit active SAs to SA database
+   local db = assert(io.open(self.sa_db_file, "w"),
+                     "Unable to open SA database: "..self.sa_db_file)
+   yang.print_config_for_schema(
+      schemata['ephemeral-keys'],
+      {outbound_sa=esp_keys, inbound_sa=dsp_keys},
+      db
+   )
+   db:close()
 end
 
 -- Vita: simple key exchange (vita-ske, version 1g). See README.exchange

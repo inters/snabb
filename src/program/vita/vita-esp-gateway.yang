@@ -1,19 +1,13 @@
 module vita-esp-gateway {
+  // Metadata
   namespace vita:esp-gateway;
   prefix esp-gateway;
 
+  // Imports
   import ietf-yang-types { prefix yang; }
   import ietf-inet-types { prefix inet; }
-  import vita-ephemeral-keys { prefix ephemeral-keys; }
 
-  typedef pci-address {
-    type string {
-      pattern '([0-9a-fA-F]{4}:)?[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]';
-    }
-  }
-  typedef key32 { type string { pattern '([0-9a-fA-F]{2}\s*){32}'; } }
-  typedef time-to-live { type uint32 { range "1..max"; } }
-
+  // Application model
   grouping interface {
     leaf pci { type pci-address; mandatory true; }
     leaf ip4 { type inet:ipv4-address-no-zone; mandatory true; }
@@ -29,13 +23,40 @@ module vita-esp-gateway {
 
   list route {
     key id; unique "net_cidr4 preshared_key spi";
-    leaf id { type string { pattern '[\w_]+'; } mandatory true; }
+    leaf id { type id; mandatory true; }
     leaf net_cidr4 { type inet:ipv4-prefix; mandatory true; }
     leaf gw_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+    leaf spi { type spi; mandatory true; }
     leaf preshared_key { type key32; mandatory true; }
-    leaf spi { type ephemeral-keys:spi; mandatory true; }
   }
 
   leaf negotiation_ttl { type time-to-live; }
   leaf sa_ttl { type time-to-live; }
+
+  // Negotiated by Key Manager
+  grouping sa {
+    leaf route { type id; mandatory true; } // Parent route identifier
+    leaf spi { type spi; mandatory true; }
+    leaf aead { type string; mandatory true; }
+    leaf key { type key16; mandatory true; }
+    leaf salt { type key4; mandatory true; }
+  }
+
+  // Active outbound SAs (at most one per route) and inbound SAs (possibly
+  // multiple per route.) 
+  list outbound_sa { uses sa; unique "route spi"; config false; }
+  list inbound_sa { uses sa; unique "spi"; config false; }
+
+  // Types 
+  typedef id { type string { pattern '[\w_]+'; } }
+  typedef pci-address {
+    type string {
+      pattern '([0-9a-fA-F]{4}:)?[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]';
+    }
+  }
+  typedef spi { type uint32 { range "256..max"; } }
+  typedef key32 { type string { pattern '([0-9a-fA-F]{2}\s*){32}'; } }
+  typedef key16 { type string { pattern '([0-9a-fA-F]{2}\s*){16}'; } }
+  typedef key4  { type string { pattern '([0-9a-fA-F]{2}\s*){4}'; } }
+  typedef time-to-live { type uint32 { range "1..max"; } }
 }

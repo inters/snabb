@@ -7,8 +7,8 @@ module(...,package.seeall)
 local yang = require("lib.yang.yang")
 
 return {
-   ['ephemeral-keys'] =
-      yang.load_schema_by_name('vita-ephemeral-keys', nil, "program.vita"),
    ['esp-gateway'] =
-      yang.load_schema_by_name('vita-esp-gateway', nil, "program.vita")
+      yang.load_schema_by_name('vita-esp-gateway', nil, "program.vita"),
+   ['ephemeral-keys'] =
+      yang.load_schema_by_name('vita-ephemeral-keys', nil, "program.vita")
 }

@@ -21,6 +21,7 @@ local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local numa = require("lib.numa")
 local yang = require("lib.yang.yang")
+local cltable = require("lib.cltable")
 local pci = require("lib.hardware.pci")
 local S = require("syscall")
 local ffi = require("ffi")
@@ -69,8 +70,7 @@ local function parse_conf (conf)
    return conf
 end
 
-local esp_keyfile = "group/esp_ephemeral_keys"
-local dsp_keyfile = "group/dsp_ephemeral_keys"
+local sa_db_path = "group/sa_db"
 
 function run (args)
    io.stdout:setvbuf("line")
@@ -333,8 +333,7 @@ function configure_exchange (conf, append)
    config.app(c, "KeyExchange", exchange.KeyManager, {
                  node_ip4 = conf.public_interface.ip4,
                  routes = conf.route,
-                 esp_keyfile = esp_keyfile,
-                 dsp_keyfile = dsp_keyfile,
+                 sa_db_path = sa_db_path,
                  negotiation_ttl = conf.negotiation_ttl,
                  sa_ttl = conf.sa_ttl
    })
@@ -353,20 +352,26 @@ function exchange_worker (confpath, cpu)
 end
 
 
--- ephemeral_keys := { <id>=(SA), ... }                        (see exchange)
+-- sa_db := { outbound_sa={<spi>=(SA), ...}, inbound_sa={<spi>=(SA), ...} }
+-- (see exchange)
 
-function configure_esp (ephemeral_keys, append)
+function configure_esp (sa_db, append)
    local c = append or config.new()
 
-   for id, sa in pairs(ephemeral_keys.sa) do
-      -- Configure interlink receiver/transmitter for inbound SA
-      local ESP_in = "ESP_"..id.."_in"
-      local ESP_out = "ESP_"..id.."_out"
+   for key, sa in cltable.pairs(sa_db.outbound_sa) do
+      -- Configure interlink receiver/transmitter for outbound SA
+      local ESP_in = "ESP_"..sa.route.."_in"
+      local ESP_out = "ESP_"..sa.route.."_out"
       config.app(c, ESP_in, Receiver)
       config.app(c, ESP_out, Transmitter)
-      -- Configure inbound SA
-      local ESP = "ESP_"..id
-      config.app(c, ESP, tunnel.Encapsulate, sa)
+      -- Configure outbound SA
+      local ESP = "ESP_"..sa.route
+      config.app(c, ESP, tunnel.Encapsulate, {
+                    spi = key.spi,
+                    aead = sa.aead,
+                    key = sa.key,
+                    salt = sa.salt
+      })
       config.link(c, ESP_in..".output -> "..ESP..".input4")
       config.link(c, ESP..".output -> "..ESP_out..".input")
    end
@@ -374,18 +379,23 @@ function configure_esp (ephemeral_keys, append)
    return c
 end
 
-function configure_dsp (ephemeral_keys, append)
+function configure_dsp (sa_db, append)
    local c = append or config.new()
 
-   for id, sa in pairs(ephemeral_keys.sa) do
-      -- Configure interlink receiver/transmitter for outbound SA
-      local DSP_in = "DSP_"..id.."_in"
-      local DSP_out = "DSP_"..id.."_out"
+   for key, sa in cltable.pairs(sa_db.inbound_sa) do
+      -- Configure interlink receiver/transmitter for inbound SA
+      local DSP_in = "DSP_"..sa.route.."_in"
+      local DSP_out = "DSP_"..sa.route.."_out"
       config.app(c, DSP_in, Receiver)
       config.app(c, DSP_out, Transmitter)
-      -- Configure outbound SA
-      local DSP = "DSP_"..id
-      config.app(c, DSP, tunnel.Decapsulate, sa)
+      -- Configure inbound SA
+      local DSP = "DSP_"..sa.route
+      config.app(c, DSP, tunnel.Decapsulate, {
+                    spi = key.spi,
+                    aead = sa.aead,
+                    key = sa.key,
+                    salt = sa.salt
+      })
       config.link(c, DSP_in..".output -> "..DSP..".input")
       config.link(c, DSP..".output4 -> "..DSP_out..".input")
    end
@@ -398,7 +408,7 @@ function esp_worker (cpu)
    engine.log = true
    listen_confpath(
       schemata['ephemeral-keys'],
-      shm.root.."/"..shm.resolve(esp_keyfile),
+      shm.root.."/"..shm.resolve(sa_db_path),
       configure_esp
    )
 end
@@ -408,7 +418,7 @@ function dsp_worker (cpu)
    engine.log = true
    listen_confpath(
       schemata['ephemeral-keys'],
-      shm.root.."/"..shm.resolve(dsp_keyfile),
+      shm.root.."/"..shm.resolve(sa_db_path),
       configure_dsp
    )
 end

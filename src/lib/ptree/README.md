@@ -110,7 +110,7 @@ Optional entries that may be present in the *parameters* table include:
 The return value is a ptree manager object, whose public methods are as
 follows:
 
-— Manager method **:run** *duration*
+— Manager method **:main** *duration*
 
 Run a process tree, servicing configuration and state queries and
 updates from remote `snabb config` clients, managing a tree of workers,
