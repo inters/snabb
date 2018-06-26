@@ -46,79 +46,79 @@ The results suggest that setup should be able to handle 1 GbE line-rate at any 
 
 `loadtest` takes Pcap records, replays the contained packets in a loop on its interfaces, and checks if the number of packets received match the number of packets it sent. So we need to configure our Vita nodes to form such a loop and generate Pcap records to use as test traffic accordingly. This is the configuration `node1.conf` for the first Vita node with a single route (do not start copying it yet, you will not have to write these by hand for testing purposes):
 
-    private_interface {
+    private-interface {
       pci 23:00.0;
       ip4 172.16.0.10;
-      nexthop_ip4 172.16.0.1;
-      nexthop_mac 02:00:00:00:00:00;
+      nexthop-ip4 172.16.0.1;
+      nexthop-mac 02:00:00:00:00:00;
     }
-    public_interface {
+    public-interface {
       pci 22:00.1;
       ip4 172.16.0.10;
-      nexthop_ip4 172.17.0.10;
+      nexthop-ip4 172.17.0.10;
     }
     route {
       id test1;
-      gw_ip4 172.17.0.10;
-      net_cidr4 "172.17.1.0/24";
-      preshared_key 0000000000000000000000000000000000000000000000000000000000000000;
+      gw-ip4 172.17.0.10;
+      net-cidr4 "172.17.1.0/24";
+      preshared-key 0000000000000000000000000000000000000000000000000000000000000000;
       spi 1001;
     }
 
 Most of it should be fairly self explanatory: we assign the desired ports via their PCI bus addresses, and set the interface’s own addresses as well as the addresses of the next hops. In this case, the private and public interface addresses are the same, but they need not be. The next hop of the private interface (this would normally be your local router) will be `snabb loadtest`. Since `loadtest` does not speak ARP, we configure a fixed MAC destination address for this next hop. This will prevent Vita from attempting to look up the next hop’s MAC addresses via ARP, and instead use the preconfigured address. The next hop of the public interface (this would normally be your gateway to the Internet) is configured to be the other Vita node in the test setup. Finally, we define a single route to the subnet `172.17.1.0/24` via the second Vita node with a dummy key. For the other Vita node, `node2.conf` is symmetric:
 
-    private_interface {
+    private-interface {
       pci 22:00.2;
       ip4 172.17.0.10;
-      nexthop_ip4 172.17.0.1;
-      nexthop_mac 02:00:00:00:00:00;
+      nexthop-ip4 172.17.0.1;
+      nexthop-mac 02:00:00:00:00:00;
     }
-    public_interface {
+    public-interface {
       pci 23:00.1;
       ip4 172.17.0.10;
-      nexthop_ip4 172.16.0.10;
+      nexthop-ip4 172.16.0.10;
     }
     route {
       id test1;
-      gw_ip4 172.16.0.10;
-      net_cidr4 "172.16.1.0/24";
-      preshared_key 0000000000000000000000000000000000000000000000000000000000000000;
+      gw-ip4 172.16.0.10;
+      net-cidr4 "172.16.1.0/24";
+      preshared-key 0000000000000000000000000000000000000000000000000000000000000000;
       spi 1001;
     }
 
 Because typing out configuration files for testing gets old fast, and we still need matching Pcap records, Vita comes with a utility that generates both of these from a meta-configuration file. For the first node we have `gentest-node1.conf`:
 
-    private_interface {
+    private-interface {
       pci 23:00.0;
       ip4 172.16.0.10;
-      nexthop_ip4 172.16.0.1;
-      nexthop_mac 02:00:00:00:00:00;
+      nexthop-ip4 172.16.0.1;
+      nexthop-mac 02:00:00:00:00:00;
     }
-    public_interface {
+    public-interface {
       pci 22:00.1;
       ip4 172.16.0.10;
-      nexthop_ip4 172.17.0.10;
+      nexthop-ip4 172.17.0.10;
     }
-    route_prefix "172.17";
+    route-prefix "172.17";
     nroutes 1;
-    packet_size 60;
+    packet-size 60;
 
 …and for the second node `gentest-node2.conf`:
 
-    private_interface {
+    private-interface {
       pci 22:00.2;
       ip4 172.17.0.10;
-      nexthop_ip4 172.17.0.1;
-      nexthop_mac 02:00:00:00:00:00;
+      nexthop-ip4 172.17.0.1;
+      nexthop-mac 02:00:00:00:00:00;
     }
-    public_interface {
+    public-interface {
       pci 23:00.1;
       ip4 172.17.0.10;
-      nexthop_ip4 172.16.0.10;
+      nexthop-ip4 172.16.0.10;
     }
-    route_prefix "172.16";
+    route-prefix "172.16";
     nroutes 1;
-    packet_size 60;
+    packet-size 60;
 
 These meta-configurations allows us to define the number of routes to use in the test case, as well the packet size of the packets in the generated Pcap records. We can then generate equivalent configurations to the above, and more importantly Pcap records with adequate test traffic using `gentest.snabb`:
 
@@ -173,7 +173,7 @@ The `-b` flag tells it that the maximum rate is 1 GbE as limited by the NIC, an
 
 Huh, 0.609 Gbps. How come? This figure is explained if you consider the IPsec ESP overhead added to the packets while in transit between Vita nodes. In tunnel mode, the overhead for 60 byte packets will be 54 bytes (encapsulating IP header + ESP protocol header overhead + zero bytes of padding to four byte boundary), so the effective packet size between the public interfaces is 114 bytes. If we add the 24 bytes of Ethernet overhead (7 bytes preamble + 1 byte start-of-frame + 4 bytes CRC + 12 bytes interframe gap) and calculate the ratio we get `(84 / 138) * 100 = ~60.869%`. This adds up.
 
-You can test with different configurations (try `packet_size IMIX`, or `nroutes 40`) by editing `gentest-node?.conf` and rerunning the `gentest.snabb` commands from above.  The Vita nodes will pick up the new configurations while they are running. With increasing packet sizes the packet overhead in transit will be less visible.
+You can test with different configurations (try `packet-size IMIX`, or `nroutes 40`) by editing `gentest-node?.conf` and rerunning the `gentest.snabb` commands from above.  The Vita nodes will pick up the new configurations while they are running. With increasing packet sizes the packet overhead in transit will be less visible.
 
 There is also [snabb loadtest transient](https://github.com/inters/vita/tree/master/src/program/loadtest/transient) which can simulate basic traffic patterns like `ramp_up_down`:
 

@@ -12,26 +12,26 @@ module vita-esp-gateway {
     leaf pci { type pci-address; mandatory true; }
     leaf ip4 { type inet:ipv4-address-no-zone; mandatory true; }
     leaf mac { type yang:mac-address; }
-    leaf nexthop_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
-    leaf nexthop_mac { type yang:mac-address; }
+    leaf nexthop-ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+    leaf nexthop-mac { type yang:mac-address; }
   }
 
-  container private_interface { uses interface; }
-  container public_interface { uses interface; }
+  container private-interface { uses interface; }
+  container public-interface { uses interface; }
 
   leaf mtu { type uint16 { range "0..8937"; } }
 
   list route {
-    key id; unique "net_cidr4 preshared_key spi";
+    key id; unique "net-cidr4 preshared-key spi";
     leaf id { type id; mandatory true; }
-    leaf net_cidr4 { type inet:ipv4-prefix; mandatory true; }
-    leaf gw_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+    leaf net-cidr4 { type inet:ipv4-prefix; mandatory true; }
+    leaf gw-ip4 { type inet:ipv4-address-no-zone; mandatory true; }
     leaf spi { type spi; mandatory true; }
-    leaf preshared_key { type key32; mandatory true; }
+    leaf preshared-key { type key32; mandatory true; }
   }
 
-  leaf negotiation_ttl { type time-to-live; }
-  leaf sa_ttl { type time-to-live; }
+  leaf negotiation-ttl { type time-to-live; }
+  leaf sa-ttl { type time-to-live; }
 
   // Negotiated by Key Manager
   grouping sa {
@@ -44,8 +44,8 @@ module vita-esp-gateway {
 
   // Active outbound SAs (at most one per route) and inbound SAs (possibly
   // multiple per route.) 
-  list outbound_sa { uses sa; unique "route spi"; config false; }
-  list inbound_sa { uses sa; unique "spi"; config false; }
+  list outbound-sa { uses sa; unique "route spi"; config false; }
+  list inbound-sa { uses sa; unique "spi"; config false; }
 
   // Types 
   typedef id { type string { pattern '[\w_]+'; } }
