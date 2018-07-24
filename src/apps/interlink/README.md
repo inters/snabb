@@ -5,19 +5,19 @@ of packets between Snabb processes within the same process group (see
 [Multiprocess operation (core.worker)](#multiprocess-operation-core.worker)).
 
     DIAGRAM: Transmitter and Receiver
-             +----------------------------+  +-------------------------+
-             |                            |  |                         |
-             |                            |  |                         |
-    input----* apps.interlink.transmitter |  | apps.interlink.reciever *---- output
-             |                            |  |                         |
-             |                            |  |                         |
-             +----------------------------+  +-------------------------+
+           +-------------+  +-------------+
+           |             |  |             |
+    input  |             |  |             |
+       ----* Transmitter |  |   Reciever  *----
+           |             |  |             |  output
+           |             |  |             |
+           +-------------+  +-------------+
 
 To make packets from an output port available to other processes, configure a
 transmitter app, and link the appropriate output port to its `input` port.
 
 ```lua
-local Transmitter = require("apps.interlink.transmitter)
+local Transmitter = require("apps.interlink.transmitter")
 
 config.app(c, "interlink", Transmitter)
 config.link(c, "myapp.output -> interlink.input")
@@ -27,7 +27,7 @@ Then, in the process that should receive the packets, configure a receiver app
 with the same name, and link its `output` port as suitable.
 
 ```lua
-local Receiver = require("apps.interlink.receiver)
+local Receiver = require("apps.interlink.receiver")
 
 config.app(c, "interlink", Receiver)
 config.link(c, "interlink.output -> otherapp.input")
@@ -36,10 +36,19 @@ config.link(c, "interlink.output -> otherapp.input")
 Subsequently, packets transmitted to the transmitter’s `input` port will appear
 on the receiver’s `output` port.
 
+Alternatively, a name can be supplied as a configuration argument to be used
+instead of the app’s name:
+
+```lua
+config.app(c, "mylink", Receiver, "interlink")
+config.link(c, "mylink.output -> otherapp.input")
+```
+
 ## Configuration
 
-None, but the configured app names are globally unique within the process
-group.
+The configured app names denote globally unique queues within the process
+group. Alternativelyy, the receiver and transmitter apps can instead be passed
+a string that names the shared queue to which to attach to.
 
 Starting either the transmitter or receiver app attaches them to a shared
 packet queue visible to the process group under the name that was given to the
