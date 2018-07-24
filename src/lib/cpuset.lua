@@ -48,6 +48,7 @@ function CPUSet:add_from_string(cpus)
       end
       for cpu=lo,hi do self:add(cpu) end
    end
+   return self
 end
 
 function CPUSet:add(cpu)
@@ -56,6 +57,7 @@ function CPUSet:add(cpu)
    if self.by_node[node] == nil then self.by_node[node] = {} end
    assert(self.by_node[node][cpu] == nil, 'CPU already in set: '..cpu)
    self.by_node[node][cpu] = true
+   return self
 end
 
 function CPUSet:acquire_for_pci_addresses(addrs)
