@@ -118,6 +118,7 @@ worker.start("DSP", ([[require("program.vita.vita").dsp_worker(%s)]])
 
 -- adapted from snabbnfv traffic
 
+local report = lib.throttle(5)
 local npackets = tonumber(main.parameters[2]) or 10e6
 local get_monotonic_time = require("ffi").C.get_monotonic_time
 local start, packets, bytes = 0, 0, 0
@@ -131,6 +132,9 @@ local function done ()
       packets = txpackets
       bytes = txbytes
       start = get_monotonic_time()
+   end
+   if report() then
+      engine.report_load()
    end
    return txpackets - packets >= npackets
 end
