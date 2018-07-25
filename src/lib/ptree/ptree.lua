@@ -164,12 +164,12 @@ function Manager:start ()
    self.socket = open_socket(self.socket_file_name)
 end
 
-function Manager:start_worker(sched_opts)
+function Manager:start_worker(name, sched_opts)
    local code = {
       scheduling.stage(sched_opts),
       "require('lib.ptree.worker').main()"
    }
-   return worker.start("worker", table.concat(code, "\n"))
+   return worker.start(name, table.concat(code, "\n"))
 end
 
 function Manager:stop_worker(id)
@@ -224,7 +224,7 @@ function Manager:start_worker_for_graph(id, graph)
    local scheduling = self:compute_scheduling_for_worker(id, graph)
    self:info('Starting worker %s.', id)
    self.workers[id] = { scheduling=scheduling,
-                        pid=self:start_worker(scheduling),
+                        pid=self:start_worker(id, scheduling),
                         queue={}, graph=graph }
    self:state_change_event('worker_starting', id)
    self:debug('Worker %s has PID %s.', id, self.workers[id].pid)
