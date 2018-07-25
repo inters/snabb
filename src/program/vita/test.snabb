@@ -2,21 +2,7 @@
 
 -- Use of this source code is governed by the GNU AGPL license; see COPYING.
 
-local shm = require("core.shm")
-local lib = require("core.lib")
-local worker = require("core.worker")
-local counter = require("core.counter")
-local vita = require("program.vita.vita")
-local gentest = require("program.vita.gentest")
-local basic_apps = require("apps.basic.basic_apps")
-local Synth = require("apps.test.synth").Synth
-local PcapFilter = require("apps.packet_filter.pcap_filter").PcapFilter
-local ethernet= require("lib.protocol.ethernet")
-local ipv4 = require("lib.protocol.ipv4")
-local datagram = require("lib.protocol.datagram")
-local numa = require("lib.numa")
-local yang = require("lib.yang.yang")
-local S = require("syscall")
+local vita_test = require("program.vita.test")
 
 -- Synopsis:
 --
@@ -57,97 +43,15 @@ local S = require("syscall")
 --
 -- While this benchmark should be suitable to evaluate relative performance
 -- differences between Vita versions, it is not representative of real-world
--- performance since…
+-- performance since it does not involve NIC drivers present in an actual L2
+-- network.
 --
---   - it does not involve NIC drivers present in a real-world setup
---
---   - it performs additional work (synthesizing traffic and filtering ARP
---     packets) in the private router process
---
--- For a more realistic test case see use gentest.snabb in conjunction with
--- snabb loadtest.
+-- For a more realistic test case use genconf.snabb and genpcap.snabb in
+-- conjunction with snabb loadtest.
 
-local conf, sim_packets = gentest.gen_testcase({
-      private_interface = {
-         nexthop_ip4 = gentest.private_interface_defaults.ip4.default
-      },
-      packet_size = tonumber(main.parameters[1]) or main.parameters[1],
-      nroutes = tonumber(main.parameters[3])
-})
-
-local cpu = vita.cpuset(main.parameters[4] or '')
-numa.bind_to_cpu(cpu[2])
-
-local c, private = vita.configure_private_router(conf, config.new())
-
-config.app(c, "bridge", basic_apps.Join)
-config.link(c, "bridge.output -> "..private.input)
-
-config.app(c, "synth", Synth, {packets=sim_packets})
-config.link(c, "synth.output -> bridge.synth")
-
-config.app(c, "sieve", PcapFilter, {filter="arp"})
-config.link(c, private.output.." -> sieve.input")
-config.link(c, "sieve.output -> bridge.arp")
-
-engine.log = true
-engine.configure(c)
-
-worker.set_exit_on_worker_death(true)
-
-local confpath = shm.root.."/"..shm.resolve("group/testconf")
-vita.save_config(vita.schemata['esp-gateway'], confpath, conf)
-
-worker.start(
-   "PublicRouterLoopback",
-   ([[require("program.vita.vita").public_router_loopback_worker(%q, %s)]])
-      :format(confpath, cpu[3])
-)
-
-worker.start(
-   "Exchange",
-   ([[require("program.vita.vita").exchange_worker(%q, %s)]])
-      :format(confpath, cpu[1])
-)
-
-worker.start("ESP", ([[require("program.vita.vita").esp_worker(%s)]])
-             :format(cpu[4]))
-worker.start("DSP", ([[require("program.vita.vita").dsp_worker(%s)]])
-                :format(cpu[5]))
-
-
--- adapted from snabbnfv traffic
-
+local pktsize = tonumber(main.parameters[1]) or main.parameters[1]
 local npackets = tonumber(main.parameters[2]) or 10e6
-local get_monotonic_time = require("ffi").C.get_monotonic_time
-local start, packets, bytes = 0, 0, 0
-local dest_link = engine.app_table.sieve.input.input
-local function done ()
-   local txpackets = counter.read(dest_link.stats.txpackets)
-   local txbytes = counter.read(dest_link.stats.txbytes)
-   if start == 0 and txpackets > 100 then
-      -- started receiving, record time and packet count
-      print("TEST START")
-      packets = txpackets
-      bytes = txbytes
-      start = get_monotonic_time()
-   end
-   return txpackets - packets >= npackets
-end
+local nroutes = tonumber(main.parameters[3])
+local cpuspec = main.parameters[4]
 
-engine.main({done=done, report={showlinks=true}})
-local finish = get_monotonic_time()
-
-local runtime = finish - start
-local breaths = tonumber(counter.read(engine.breaths))
-packets = tonumber(counter.read(dest_link.stats.txpackets) - packets)
-bytes = tonumber(counter.read(dest_link.stats.txbytes) - bytes)
-
-for w, s in pairs(worker.status()) do
-   print(("worker %s: pid=%s alive=%s status=%s"):format(
-         w, s.pid, s.alive, s.status))
-end
-
-print(("Processed %.1f million packets in %.2f seconds (%d bytes; %.2f Gbps)"):format(packets / 1e6, runtime, bytes, bytes * 8.0 / 1e9 / runtime))
-print(("Made %s breaths: %.2f packets per breath; %.2fus per breath"):format(lib.comma_value(breaths), packets / breaths, runtime / breaths * 1e6))
-print(("Rate(Mpps):\t%.3f"):format(packets / runtime / 1e6))
+vita_test.run_softbench(pktsize, npackets, nroutes, cpuspec)

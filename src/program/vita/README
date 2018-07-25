@@ -1,29 +1,28 @@
 Usage:
-  vita [OPTIONS] <confpath>
+  vita [OPTIONS]
 
   -h, --help
                              Print usage information and exit.
   -H, --config-help
                              Print configuration help and exit.
-  -t  --config-test
-                             Validate configuration and exit.
+  -n, --name <id>
+                             Claim <id> for this Vita node.
   -c, --cpu <cpus>
                              Bind Vita processes to <cpus>. Must be a
                              comma-separated list of CPU identifiers.
+  -b, --busywait
+                             Run in busy-wait loop, trading CPU cycles for
+                             latency.
+  -r, --realtime
+                             Use real-time scheduling.
 
-Run Vita configured by <confpath>. While running, Vita will continuously reload
-and apply the configuration file at <confpath> whenever it changes, thus you
-can reconfigure Vita on-the-fly without restarting the process.
+Run Vita, configurable via `snabb config'. Refer to “--config-help” for a
+description of the documentation schema.
 
 Note that Vita needs super-user privileges to run as it needs unrestricted
 access to hardware devices via DMA and system resources like hugepages. Vita
 also requires a CPU that support AES-NI and AVX-2. It is also required to boot
 Linux with the kernel parameter iommu=off for Snabb device drivers to function.
-
-Refer to “--config-help” on how to configure Vita. New configurations can be
-validated before applying with “--config-test”. Don’t worry: invalid
-configurations will not bring down a running Vita instance, but merely fail to
-be loaded.
 
 Vita will fork into five processes which individually handle key management,
 outbound routing, inbound routing, encapsulation, and decapsulation. The
@@ -31,5 +30,4 @@ resulting processes can be bound to specific CPUs using the “--cpu” option i
 the given order.
 
 Example:
-  vita --cpus 0,1,2,3,4 /etc/vita.conf
-  vita --config-test new.conf && mv new.conf /etc/vita.conf
+  vita --name my-vita --cpus 0,1,2,3,4

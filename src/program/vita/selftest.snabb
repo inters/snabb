@@ -57,34 +57,20 @@ local sa_db = {
    inbound_sa =  cltable.new(sa_db_spec)
 }
 sa_db.outbound_sa[ffi.new(sa_db_spec.key_type, 1001)] = {
-   route = "loopback_outbound",
+   route = "loopback",
    spi = 1001,
    aead = "aes-gcm-16-icv",
    key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
    salt = "00 00 00 00"
 }
 sa_db.inbound_sa[ffi.new(sa_db_spec.key_type, 1001)] = {
-   route = "loopback_inbound",
+   route = "loopback",
    spi = 1001,
    aead = "aes-gcm-16-icv",
    key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
    salt = "00 00 00 00",
    auditing = true
 }
-
--- In order to allow the encapsulator/decapsulator apps to run in the same
--- process, we make sure they do not collide with the interlink app names of
--- the routing processes by using different route identifiers in their
--- ephemeral key configuration above, and alias them to the shared interlink
--- objects so they connect.
-shm.alias("group/interlink/ESP_loopback_outbound_in.interlink", 
-          "group/interlink/ESP_loopback_in.interlink")
-shm.alias("group/interlink/DSP_loopback_inbound_in.interlink", 
-          "group/interlink/DSP_loopback_in.interlink")
-shm.alias("group/interlink/ESP_loopback_outbound_out.interlink", 
-          "group/interlink/ESP_loopback_out.interlink")
-shm.alias("group/interlink/DSP_loopback_inbound_out.interlink", 
-          "group/interlink/DSP_loopback_out.interlink")
 
 local c = config.new()
 
@@ -151,7 +137,7 @@ end
 engine.configure(c)
 
 -- Hack to avoid ESP seq# reuse because of packets from public_in.pcap
-engine.app_table.ESP_loopback_outbound.sa.seq.no = 100
+engine.app_table.ESP_loopback.sa.seq.no = 100
 
 -- Run engine until its idle (all packets have been processed).
 local last_frees = counter.read(engine.frees)
@@ -202,7 +188,7 @@ else
          rxerrors = 2,
          fragment_errors = 2
       },
-      DSP_loopback_inbound = {
+      DSP_loopback = {
          rxerrors = 2,
          protocol_errors = 1,
          decrypt_errors = 1

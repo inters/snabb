@@ -92,6 +92,11 @@ machine:
     $ sudo cp src/vita /usr/local/bin/vita
     $ sudo ln -s vita /usr/local/bin/snabb-top
 
+## Benchmarking
+
+End-to-end benchmarking procedures are documented in
+[vita-loadtest.md](https://github.com/inters/vita/tree/master/src/program/vita/vita-loadtest.md).
+
 ## Powered by
 
 ![Snabb](snabb.png)

@@ -21,28 +21,35 @@ So lets get started by cloning Vita, building a test build, and switching to the
 
 We can start by running the the software-based benchmark test to get a baseline of what we can expect from this machine:
 
-    $ sudo program/vita/test.snabb IMIX 10e6 1 1,2,3,4,5
-                                   ^    ^    ^ ^
-                                   |    |    | \- CPU hdw. threads to bind to
-                                   |    |    \- # of routes to test with
+    $ sudo program/vita/test.snabb IMIX 100e6 1 1,2,3,4,5
+                                   ^    ^     ^ ^
+                                   |    |     | \- CPU hdw. threads to bind to
+                                   |    |     \- # of routes to test with
                                    |    \- # of packets
                                    \- packet size
 
 That will print a bunch of output and then something like:
 
-    Processed 10.0 million packets in 4.77 seconds (3425807426 bytes; 5.74 Gbps)
-    Made 180,398 breaths: 55.43 packets per breath; 26.45us per breath
-    Rate(Mpps):	2.096
+    Jul 24 2018 15:25:00 SoftBench: Processed 100.0 million packets in 29.08 seconds
+    Jul 24 2018 15:25:00 SoftBench: 3.439 Mpps
+    Jul 24 2018 15:25:00 SoftBench: 34185635876 Bytes
+    Jul 24 2018 15:25:00 SoftBench: 9.652 Gbps (on GbE)
 
 And once more for 60 byte packets:
     
-    $ sudo program/vita/test.snabb 60 10e6 1 1,2,3,4,5
+    $ sudo program/vita/test.snabb 60 100e6 1 1,2,3,4,5
     ...
-    Processed 10.0 million packets in 2.29 seconds (600004080 bytes; 2.10 Gbps)
-    Made 135,754 breaths: 73.66 packets per breath; 16.87us per breath
-    Rate(Mpps):	4.367
+    Jul 24 2018 15:24:15 SoftBench: Processed 100.0 million packets in 21.21 seconds
+    Jul 24 2018 15:24:15 SoftBench: 4.715 Mpps
+    Jul 24 2018 15:24:15 SoftBench: 6000004260 Bytes
+    Jul 24 2018 15:24:15 SoftBench: 2.603 Gbps (on GbE)
 
 The results suggest that setup should be able to handle 1 GbE line-rate at any packet size without breaking a sweat. So let’s confirm that with an end-to-end test using [snabb loadtest find-limit](https://github.com/inters/vita/tree/master/src/program/loadtest/find-limit).
+
+First of all, we start two Vita nodes, and assign them the names `node1` and `node2` respectively (these names are later used as handles for `snabb config`):
+
+    $ sudo ./vita --name node1 --cpu 1,2,3,4,5 &> node1.log &
+    $ sudo ./vita --name node2 --cpu 6,7,8,9,10 &> node2.log &
 
 `loadtest` takes Pcap records, replays the contained packets in a loop on its interfaces, and checks if the number of packets received match the number of packets it sent. So we need to configure our Vita nodes to form such a loop and generate Pcap records to use as test traffic accordingly. This is the configuration `node1.conf` for the first Vita node with a single route (do not start copying it yet, you will not have to write these by hand for testing purposes):
 
@@ -120,19 +127,20 @@ Because typing out configuration files for testing gets old fast, and we still n
     nroutes 1;
     packet-size 60;
 
-These meta-configurations allows us to define the number of routes to use in the test case, as well the packet size of the packets in the generated Pcap records. We can then generate equivalent configurations to the above, and more importantly Pcap records with adequate test traffic using `gentest.snabb`:
+These meta-configurations allows us to define the number of routes to use in the test case, as well the packet size of the packets in the generated Pcap records. We can then generate equivalent configurations to the above using `genconf.snabb` and, more importantly, Pcap records with adequate test traffic using `genpcap.snabb`:
 
-    $ sudo program/vita/gentest.snabb gentest-node1.conf node1.conf node1-private-in.pcap
-    $ sudo program/vita/gentest.snabb gentest-node2.conf node2.conf node2-private-in.pcap
-
-Enough prologue, now we have everything to start testing. To start the two vita nodes in the background (we bind both key manager processes to the same hardware thread as they are not CPU hungry under normal circumstances):
-
-    $ sudo ./vita --cpu 1,2,3,4,5 node1.conf &> node1.log &
-    $ sudo ./vita --cpu 1,6,7,8,9 node2.conf &> node2.log &
+    $ sudo program/vita/genconf.snabb < gentest-node1.conf \
+       | sudo ./snabb config set node1 /
+    $ sudo program/vita/genpcap.snabb < gentest-node1.conf \
+       > node1-private-in.pcap
+    $ sudo program/vita/genconf.snabb < gentest-node2.conf \
+       | sudo ./snabb config set node2 /
+    $ sudo program/vita/genpcap.snabb < gentest-node2.conf \
+       > node2-private-in.pcap
 
 And now we can run `find-limit`, which will determine the No-Drop-Rate (NDR) by means of a binary search:
 
-    $ sudo ./snabb loadtest find-limit -b 1e9 --cpu 10 \
+    $ sudo ./snabb loadtest find-limit -b 1e9 --cpu 11 \
         node1-private-in.pcap node1 node2 22:00.0 \
         node2-private-in.pcap node2 node1 23:00.2
 
@@ -173,10 +181,10 @@ The `-b` flag tells it that the maximum rate is 1 GbE as limited by the NIC, an
 
 Huh, 0.609 Gbps. How come? This figure is explained if you consider the IPsec ESP overhead added to the packets while in transit between Vita nodes. In tunnel mode, the overhead for 60 byte packets will be 54 bytes (encapsulating IP header + ESP protocol header overhead + zero bytes of padding to four byte boundary), so the effective packet size between the public interfaces is 114 bytes. If we add the 24 bytes of Ethernet overhead (7 bytes preamble + 1 byte start-of-frame + 4 bytes CRC + 12 bytes interframe gap) and calculate the ratio we get `(84 / 138) * 100 = ~60.869%`. This adds up.
 
-You can test with different configurations (try `packet-size IMIX`, or `nroutes 40`) by editing `gentest-node?.conf` and rerunning the `gentest.snabb` commands from above.  The Vita nodes will pick up the new configurations while they are running. With increasing packet sizes the packet overhead in transit will be less visible.
+You can test with different configurations (try `packet-size IMIX`, or `nroutes 40`) by editing `gentest-node?.conf` and rerunning the `genconf.snabb`/`genpcap.snabb` commands from above. Vita nodes can be reconfigured via `snabb config` while they are running. With increasing packet sizes the packet overhead in transit will be less visible.
 
 There is also [snabb loadtest transient](https://github.com/inters/vita/tree/master/src/program/loadtest/transient) which can simulate basic traffic patterns like `ramp_up_down`:
 
-    $ sudo ./snabb loadtest transient -b 1e9 --cpu 10 \
+    $ sudo ./snabb loadtest transient -b 1e9 --cpu 11 \
         node1-private-in.pcap node1 node2 22:00.0 \
         node2-private-in.pcap node2 node1 23:00.2
