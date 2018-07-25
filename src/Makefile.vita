@@ -9,7 +9,7 @@ INCLUDE = *.* core arch jit syscall pf \
           program/top program/trace
 
 INCLUDE_TEST = $(INCLUDE) \
-               lib/pmu.* apps/basic apps/test apps/packet_filter apps/ipv4 \
+               lib/pmu* apps/basic apps/test apps/packet_filter apps/ipv4 \
                lib/pcap apps/pcap \
                program/snsh program/snabbmark \
                lib/virtio apps/vhost apps/ipsec apps/ipv6 \
