@@ -40,6 +40,7 @@ local manager_config_spec = {
    -- Could relax this requirement.
    initial_configuration = {required=true},
    schema_name = {required=true},
+   schema_support = {},
    worker_default_scheduling = {default={}},
    default_schema = {},
    log_level = {default=default_log_level},
@@ -72,7 +73,8 @@ function new_manager (conf)
    end
    ret.schema_name = conf.schema_name
    ret.default_schema = conf.default_schema or conf.schema_name
-   ret.support = support.load_schema_config_support(conf.schema_name)
+   ret.support = conf.schema_support
+      or support.load_schema_config_support(conf.schema_name)
    ret.peers = {}
    ret.setup_fn = conf.setup_fn
    ret.period = 1/conf.Hz
