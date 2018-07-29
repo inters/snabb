@@ -199,6 +199,9 @@ function run_vita (opt)
    io.stdout:setvbuf("line")
    io.stderr:setvbuf("line")
 
+   -- Ensure exit on worker failure (while we lack proper process supervision.)
+   worker.set_exit_on_worker_death(true)
+
    -- Run the supervisor while keeping up to date with SA database changes.
    while true do
       supervisor:main(1)
