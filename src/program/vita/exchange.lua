@@ -15,7 +15,6 @@ module(...,package.seeall)
 --               <config> --> KeyManager *--> esp_worker
 --                                       |
 --                                       \--> dsp_worker
-
 --
 -- All things considered, this is the hairy part of Vita, as it covers touchy
 -- things such as key generation and expiration, and ultimately presents Vita’s
@@ -224,8 +223,8 @@ function KeyManager:reconfig (conf)
             preshared_key = new_key,
             spi = route.spi,
             status = status.expired,
-            rx_sa = nil, tx_sa = nil,
-            sa_timeout = nil, rekey_timeout = nil,
+            rx_sa = nil, prev_rx_sa = nil, tx_sa = nil,
+            sa_timeout = nil, prev_sa_timeout = nil, rekey_timeout = nil,
             protocol = Protocol:new(route.spi, new_key, conf.negotiation_ttl)
          }
          table.insert(new_routes, new_route)
@@ -262,14 +261,18 @@ function KeyManager:push ()
          counter.add(self.shm.negotiations_expired)
          audit:log("Negotiation expired for '"..route.id.."' (negotiation_ttl)")
       end
-      if route.status < status.ready then
-         self:negotiate(route)
-      elseif route.rekey_timeout() then
-         route.status = status.rekey
-      elseif route.sa_timeout() then
+      if route.status > status.expired and route.sa_timeout() then
          counter.add(self.shm.keypairs_expired)
          audit:log("Keys expired for '"..route.id.."' (sa_ttl)")
          self:expire_route(route)
+      elseif route.prev_sa_timeout and route.prev_sa_timeout() then
+         self:expire_prev_sa(route)
+      end
+      if route.status > status.rekey and route.rekey_timeout() then
+         route.status = status.rekey
+      end
+      if route.status < status.ready then
+         self:negotiate(route)
       end
    end
 end
@@ -348,17 +351,25 @@ function KeyManager:handle_key_request (route, message)
 end
 
 function KeyManager:configure_route (route, rx, tx)
+   for _, route in ipairs(self.routes) do
+      if (route.rx_sa and route.rx_sa.spi == rx.spi)
+      or (route.prev_rx_sa and route.prev_rx_sa.spi == rx.spi) then
+         error("PANIC: SPI collision detected.")
+      end
+   end
    route.status = status.ready
+   route.prev_rx_sa = route.rx_sa
+   route.prev_sa_timeout = route.sa_timeout
    route.rx_sa = {
       route = route.id,
-      spi = route.spi,
+      spi = rx.spi,
       aead = "aes-gcm-16-icv",
       key = lib.hexdump(rx.key),
       salt = lib.hexdump(rx.salt)
    }
    route.tx_sa = {
       route = route.id,
-      spi = route.spi,
+      spi = tx.spi,
       aead = "aes-gcm-16-icv",
       key = lib.hexdump(tx.key),
       salt = lib.hexdump(tx.salt)
@@ -372,8 +383,16 @@ function KeyManager:expire_route (route)
    route.status = status.expired
    route.tx_sa = nil
    route.rx_sa = nil
+   route.prev_rx_sa = nil
+   route.prev_sa_timeout = nil
    route.sa_timeout = nil
    route.rekey_timeout = nil
+   self:commit_sa_db()
+end
+
+function KeyManager:expire_prev_sa (route)
+   route.prev_rx_sa = nil
+   route.prev_sa_timeout = nil
    self:commit_sa_db()
 end
 
@@ -446,8 +465,13 @@ function KeyManager:commit_sa_db ()
    local esp_keys, dsp_keys = cltable.new(sa_db_spec), cltable.new(sa_db_spec)
    for _, route in ipairs(self.routes) do
       if route.status == status.ready then
-         esp_keys[ffi.new(sa_db_spec.key_type, route.spi)] = route.tx_sa
-         dsp_keys[ffi.new(sa_db_spec.key_type, route.spi)] = route.rx_sa
+         local rx_sa, prev_rx_sa, tx_sa =
+            route.rx_sa, route.prev_rx_sa, route.tx_sa
+         esp_keys[ffi.new(sa_db_spec.key_type, tx_sa.spi)] = tx_sa
+         dsp_keys[ffi.new(sa_db_spec.key_type, rx_sa.spi)] = rx_sa
+         if prev_rx_sa then
+            dsp_keys[ffi.new(sa_db_spec.key_type, prev_rx_sa.spi)] = prev_rx_sa
+         end
       end
    end
    -- Commit active SAs to SA database
@@ -461,11 +485,12 @@ function KeyManager:commit_sa_db ()
    db:close()
 end
 
--- Vita: simple key exchange (vita-ske, version 1g). See README.exchange
+-- Vita: simple key exchange (vita-ske, version 1i). See README.exchange
 
 Protocol = {
    status = { idle = 0, wait_nonce = 1, wait_key = 2, complete = 3 },
    code = { protocol = 0, authentication = 1, parameter = 2, expired = 3},
+   spi_counter = 0,
    preshared_key_bytes = C.crypto_auth_hmacsha512256_KEYBYTES,
    public_key_bytes = C.crypto_scalarmult_curve25519_BYTES,
    secret_key_bytes = C.crypto_scalarmult_curve25519_SCALARBYTES,
@@ -495,6 +520,7 @@ Protocol.nonce_message:init({
 Protocol.key_message:init({
       [1] = ffi.typeof([[
             struct {
+               uint8_t spi[]]..ffi.sizeof(Protocol.spi_t)..[[];
                uint8_t public_key[]]..Protocol.public_key_bytes..[[];
                uint8_t auth_code[]]..Protocol.auth_code_bytes..[[];
             } __attribute__((packed))
@@ -519,9 +545,18 @@ end
 
 function Protocol.key_message:new (config)
    local o = Protocol.key_message:superClass().new(self)
+   o:spi(config.spi)
    o:public_key(config.public_key)
    o:auth_code(config.auth_code)
    return o
+end
+
+function Protocol.key_message:spi (spi)
+   local h = self:header()
+   if spi ~= nil then
+      ffi.copy(h.spi, spi, ffi.sizeof(h.spi))
+   end
+   return h.spi
 end
 
 function Protocol.key_message:public_key (public_key)
@@ -540,15 +575,17 @@ function Protocol.key_message:auth_code (auth_code)
    return h.auth_code
 end
 
-function Protocol:new (spi, key, timeout)
+function Protocol:new (r, key, timeout)
    local o = {
       status = Protocol.status.idle,
       timeout = timeout,
       deadline = nil,
       k = ffi.new(Protocol.buffer_t, Protocol.preshared_key_bytes),
-      spi = ffi.new(Protocol.spi_t),
+      r = ffi.new(Protocol.spi_t),
       n1 = ffi.new(Protocol.buffer_t, Protocol.nonce_bytes),
       n2 = ffi.new(Protocol.buffer_t, Protocol.nonce_bytes),
+      spi1 = ffi.new(Protocol.spi_t),
+      spi2 = ffi.new(Protocol.spi_t),
       s1 = ffi.new(Protocol.buffer_t, Protocol.secret_key_bytes),
       p1 = ffi.new(Protocol.buffer_t, Protocol.public_key_bytes),
       p2 = ffi.new(Protocol.buffer_t, Protocol.public_key_bytes),
@@ -559,7 +596,7 @@ function Protocol:new (spi, key, timeout)
       hash_state = ffi.new("struct crypto_generichash_blake2b_state")
    }
    ffi.copy(o.k, key, ffi.sizeof(o.k))
-   o.spi.u32 = lib.htonl(spi)
+   o.r.u32 = lib.htonl(r)
    return setmetatable(o, {__index=Protocol})
 end
 
@@ -605,8 +642,8 @@ function Protocol:derive_ephemeral_keys ()
    if self.status == Protocol.status.complete then
       self:reset()
       if self:derive_shared_secret() then
-         local rx = self:derive_key_material(self.p1, self.p2)
-         local tx = self:derive_key_material(self.p2, self.p1)
+         local rx = self:derive_key_material(self.spi1, self.p1, self.p2)
+         local tx = self:derive_key_material(self.spi2, self.p2, self.p1)
          return nil, rx, tx
       else return Protocol.code.paramter end
    else return Protocol.code.protocol end
@@ -631,30 +668,35 @@ function Protocol:intern_nonce (nonce_message)
 end
 
 function Protocol:send_key (key_message)
-   local spi, k, n1, n2, s1, p1 =
-      self.spi, self.k, self.n1, self.n2, self.s1, self.p1
+   local r, k, n1, n2, spi1, s1, p1 =
+      self.r, self.k, self.n1, self.n2, self.spi1, self.s1, self.p1
    local state, h1 = self.hmac_state, self.h
+   spi1.u32 = lib.htonl(Protocol:next_spi())
    C.randombytes_buf(s1, ffi.sizeof(s1))
    C.crypto_scalarmult_curve25519_base(p1, s1)
    C.crypto_auth_hmacsha512256_init(state, k, ffi.sizeof(k))
-   C.crypto_auth_hmacsha512256_update(state, spi.bytes, ffi.sizeof(spi))
+   C.crypto_auth_hmacsha512256_update(state, r.bytes, ffi.sizeof(r))
    C.crypto_auth_hmacsha512256_update(state, n1, ffi.sizeof(n1))
    C.crypto_auth_hmacsha512256_update(state, n2, ffi.sizeof(n2))
+   C.crypto_auth_hmacsha512256_update(state, spi1.bytes, ffi.sizeof(spi1))
    C.crypto_auth_hmacsha512256_update(state, p1, ffi.sizeof(p1))
    C.crypto_auth_hmacsha512256_final(state, h1)
-   return key_message:new({public_key=p1, auth_code=h1})
+   return key_message:new({spi = spi1.bytes, public_key=p1, auth_code=h1})
 end
 
 function Protocol:intern_key (m)
-   local spi, k, n1, n2, p2 = self.spi, self.k, self.n1, self.n2, self.p2
+   local r, k, n1, n2, spi2, p2 =
+      self.r, self.k, self.n1, self.n2, self.spi2, self.p2
    local state, h2 = self.hmac_state, self.h
    C.crypto_auth_hmacsha512256_init(state, k, ffi.sizeof(k))
-   C.crypto_auth_hmacsha512256_update(state, spi.bytes, ffi.sizeof(spi))
+   C.crypto_auth_hmacsha512256_update(state, r.bytes, ffi.sizeof(r))
    C.crypto_auth_hmacsha512256_update(state, n2, ffi.sizeof(n2))
    C.crypto_auth_hmacsha512256_update(state, n1, ffi.sizeof(n1))
+   C.crypto_auth_hmacsha512256_update(state, m:spi(), ffi.sizeof(spi2))
    C.crypto_auth_hmacsha512256_update(state, m:public_key(), ffi.sizeof(p2))
    C.crypto_auth_hmacsha512256_final(state, h2)
    if C.sodium_memcmp(h2, m:auth_code(), ffi.sizeof(h2)) == 0 then
+      ffi.copy(spi2.bytes, m:spi(), ffi.sizeof(spi2))
       ffi.copy(p2, m:public_key(), ffi.sizeof(p2))
       return true
    end
@@ -664,14 +706,15 @@ function Protocol:derive_shared_secret ()
    return C.crypto_scalarmult_curve25519(self.q, self.s1, self.p2) == 0
 end
 
-function Protocol:derive_key_material (salt_a, salt_b)
+function Protocol:derive_key_material (spi, salt_a, salt_b)
    local q, e, state = self.q, self.e, self.hash_state
    C.crypto_generichash_blake2b_init(state, nil, 0, ffi.sizeof(e))
    C.crypto_generichash_blake2b_update(state, q, ffi.sizeof(q))
    C.crypto_generichash_blake2b_update(state, salt_a, ffi.sizeof(salt_a))
    C.crypto_generichash_blake2b_update(state, salt_b, ffi.sizeof(salt_b))
    C.crypto_generichash_blake2b_final(state, e.bytes, ffi.sizeof(e.bytes))
-   return { key = ffi.string(e.slot.key, ffi.sizeof(e.slot.key)),
+   return { spi = lib.ntohl(spi.u32),
+            key = ffi.string(e.slot.key, ffi.sizeof(e.slot.key)),
             salt = ffi.string(e.slot.salt, ffi.sizeof(e.slot.salt)) }
 end
 
@@ -682,6 +725,12 @@ end
 
 function Protocol:set_deadline ()
    self.deadline = lib.timeout(self.timeout)
+end
+
+function Protocol:next_spi ()
+   local current_spi = Protocol.spi_counter + 256
+   Protocol.spi_counter = (Protocol.spi_counter + 1) % (2^32 - 1 - 256)
+   return current_spi
 end
 
 -- Assertions about the world                                              (-:

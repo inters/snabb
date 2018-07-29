@@ -101,7 +101,7 @@ end
 PublicRouter = {
    name = "PublicRouter",
    config = {
-      routes = {required=true}
+      spi_to_route = {required=true}
    },
    shm = {
       route_errors = {counter}
@@ -119,11 +119,11 @@ function PublicRouter:new (conf)
       },
       esp = esp:new({})
    }
-   for id, route in pairs(conf.routes) do
+   for _, sa in pairs(conf.spi_to_route) do
       local index = #o.ports+1
       assert(ffi.cast(index_t, index) == index, "index overflow")
-      o.routing_table4:add(assert(route.spi, "Missing SPI"), index)
-      o.ports[index] = id
+      o.routing_table4:add(assert(sa.spi, "Missing SPI"), index)
+      o.ports[index] = sa.route.."_"..sa.spi
    end
    return setmetatable(o, {__index = PublicRouter})
 end

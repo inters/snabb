@@ -280,11 +280,15 @@ function configure_private_router (conf, append)
       local ESP_in = "ESP_"..id.."_in"
       config.app(c, ESP_in.."_Tx", Transmitter, ESP_in)
       config.link(c, private_in.." -> "..ESP_in.."_Tx.input")
+   end
 
-      local private_out = "InboundDispatch."..id
-      local DSP_out = "DSP_"..id.."_out"
-      config.app(c, DSP_out.."_Rx", Receiver, DSP_out)
-      config.link(c, DSP_out.."_Rx.output -> "..private_out)
+   if conf.inbound_sa then
+      for key, sa in cltable.pairs(conf.inbound_sa) do
+         local private_out = "InboundDispatch."..sa.route.."_"..key.spi
+         local DSP_out = "DSP_"..sa.route.."_"..key.spi.."_out"
+         config.app(c, DSP_out.."_Rx", Receiver, DSP_out)
+         config.link(c, DSP_out.."_Rx.output -> "..private_out)
+      end
    end
 
    local private_links = {
@@ -303,8 +307,17 @@ function configure_public_router (conf, append)
    config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
                  node_ip4 = conf.public_interface.ip4
    })
+   local spi_to_route = {}
+   if conf.inbound_sa then
+      for key, sa in cltable.pairs(conf.inbound_sa) do
+         spi_to_route[sa.route.."_"..key.spi] = {
+            spi = key.spi,
+            route = sa.route
+         }
+      end
+   end
    config.app(c, "PublicRouter", route.PublicRouter, {
-                 routes = conf.route
+                 spi_to_route = spi_to_route
    })
    config.app(c, "PublicICMP4", icmp.ICMP4, {
                  node_ip4 = conf.public_interface.ip4
@@ -327,11 +340,6 @@ function configure_public_router (conf, append)
    config.link(c, "Protocol_out_Rx.output -> PublicNextHop.protocol")
 
    for id, route in pairs(conf.route) do
-      local public_in = "PublicRouter."..id
-      local DSP_in = "DSP_"..id.."_in"
-      config.app(c, DSP_in.."_Tx", Transmitter, DSP_in)
-      config.link(c, public_in.." -> "..DSP_in.."_Tx.input")
-
       local public_out = "PublicNextHop."..id
       local ESP_out = "ESP_"..id.."_out"
       local Tunnel = "Tunnel_"..id
@@ -340,6 +348,15 @@ function configure_public_router (conf, append)
                  {src=conf.public_interface.ip4, dst=route.gw_ip4})
       config.link(c, ESP_out.."_Rx.output -> "..Tunnel..".input")
       config.link(c, Tunnel..".output -> "..public_out)
+   end
+
+   if conf.inbound_sa then
+      for key, sa in cltable.pairs(conf.inbound_sa) do
+         local public_in = "PublicRouter."..sa.route.."_"..key.spi
+         local DSP_in = "DSP_"..sa.route.."_"..key.spi.."_in"
+         config.app(c, DSP_in.."_Tx", Transmitter, DSP_in)
+         config.link(c, public_in.." -> "..DSP_in.."_Tx.input")
+      end
    end
 
    local public_links = {
@@ -444,12 +461,12 @@ function configure_dsp (sa_db, append)
 
    for key, sa in cltable.pairs(sa_db.inbound_sa) do
       -- Configure interlink receiver/transmitter for inbound SA
-      local DSP_in = "DSP_"..sa.route.."_in"
-      local DSP_out = "DSP_"..sa.route.."_out"
+      local DSP_in = "DSP_"..sa.route.."_"..key.spi.."_in"
+      local DSP_out = "DSP_"..sa.route.."_"..key.spi.."_out"
       config.app(c, DSP_in.."_Rx", Receiver, DSP_in)
       config.app(c, DSP_out.."_Tx", Transmitter, DSP_out)
       -- Configure inbound SA
-      local DSP = "DSP_"..sa.route
+      local DSP = "DSP_"..sa.route.."_"..key.spi
       config.app(c, DSP, tunnel.Decapsulate, {
                     spi = key.spi,
                     aead = sa.aead,
