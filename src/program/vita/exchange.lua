@@ -40,7 +40,7 @@ module(...,package.seeall)
 --     lifetime of a SA pair has expired (sa_ttl), it is destroyed, and
 --     eventually re-negotiated if applicable.
 --
---     Note that the KeyManager app will attempts to re-negotiate SAs long
+--     Note that the KeyManager app will attempt to re-negotiate SAs long
 --     before they expire (specifically, once half of sa_ttl has passed), in
 --     order to avoid loss of tunnel connectivity during re-negotiation.
 --
