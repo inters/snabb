@@ -101,7 +101,7 @@ end
 PublicRouter = {
    name = "PublicRouter",
    config = {
-      spi_to_route = {required=true}
+      sa = {required=true}
    },
    shm = {
       route_errors = {counter}
@@ -119,11 +119,12 @@ function PublicRouter:new (conf)
       },
       esp = esp:new({})
    }
-   for _, sa in pairs(conf.spi_to_route) do
+   -- XXX: move into :reconfig() to remove pressure on rekey?
+   for spi, sa in pairs(conf.sa) do
       local index = #o.ports+1
       assert(ffi.cast(index_t, index) == index, "index overflow")
-      o.routing_table4:add(assert(sa.spi, "Missing SPI"), index)
-      o.ports[index] = sa.route.."_"..sa.spi
+      o.routing_table4:add(spi, index)
+      o.ports[index] = sa.route.."_"..spi
    end
    return setmetatable(o, {__index = PublicRouter})
 end

@@ -461,16 +461,13 @@ end
 
 function KeyManager:commit_sa_db ()
    -- Collect currently active SAs
-   local sa_db_spec = {key_type=ffi.typeof("struct { uint32_t spi; }")}
-   local esp_keys, dsp_keys = cltable.new(sa_db_spec), cltable.new(sa_db_spec)
+   local esp_keys, dsp_keys = {}, {}
    for _, route in ipairs(self.routes) do
       if route.status == status.ready then
-         local rx_sa, prev_rx_sa, tx_sa =
-            route.rx_sa, route.prev_rx_sa, route.tx_sa
-         esp_keys[ffi.new(sa_db_spec.key_type, tx_sa.spi)] = tx_sa
-         dsp_keys[ffi.new(sa_db_spec.key_type, rx_sa.spi)] = rx_sa
-         if prev_rx_sa then
-            dsp_keys[ffi.new(sa_db_spec.key_type, prev_rx_sa.spi)] = prev_rx_sa
+         esp_keys[route.tx_sa.spi] = route.tx_sa
+         dsp_keys[route.rx_sa.spi] = route.rx_sa
+         if route.prev_rx_sa then
+            dsp_keys[route.prev_rx_sa.spi] = route.prev_rx_sa
          end
       end
    end
