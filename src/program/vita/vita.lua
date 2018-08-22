@@ -38,8 +38,8 @@ local confspec = {
    route = {default={}},
    negotiation_ttl = {},
    sa_ttl = {},
-   inbound_sa = {},
-   outbound_sa = {}
+   inbound_sa = {default={}},
+   outbound_sa = {default={}}
 }
 
 local ifspec = {
@@ -411,11 +411,10 @@ end
 -- (see exchange)
 
 function configure_esp (sa_db, append)
+   sa_db = parse_conf(sa_db)
    local c = append or config.new()
 
-   if not sa_db.outbound_sa then return c end
-
-   for key, sa in cltable.pairs(sa_db.outbound_sa) do
+   for spi, sa in pairs(sa_db.outbound_sa) do
       -- Configure interlink receiver/transmitter for outbound SA
       local ESP_in = "ESP_"..sa.route.."_in"
       local ESP_out = "ESP_"..sa.route.."_out"
@@ -424,7 +423,7 @@ function configure_esp (sa_db, append)
       -- Configure outbound SA
       local ESP = "ESP_"..sa.route
       config.app(c, ESP, tunnel.Encapsulate, {
-                    spi = key.spi,
+                    spi = spi,
                     aead = sa.aead,
                     key = sa.key,
                     salt = sa.salt
@@ -437,11 +436,10 @@ function configure_esp (sa_db, append)
 end
 
 function configure_dsp (sa_db, append)
+   sa_db = parse_conf(sa_db)
    local c = append or config.new()
 
-   if not sa_db.inbound_sa then return c end
-
-   for key, sa in cltable.pairs(sa_db.inbound_sa) do
+   for spi, sa in pairs(sa_db.inbound_sa) do
       -- Configure interlink receiver/transmitter for inbound SA
       local DSP_in = "DSP_"..sa.route.."_in"
       local DSP_out = "DSP_"..sa.route.."_out"
@@ -450,7 +448,7 @@ function configure_dsp (sa_db, append)
       -- Configure inbound SA
       local DSP = "DSP_"..sa.route
       config.app(c, DSP, tunnel.Decapsulate, {
-                    spi = key.spi,
+                    spi = spi,
                     aead = sa.aead,
                     key = sa.key,
                     salt = sa.salt

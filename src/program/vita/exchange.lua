@@ -351,14 +351,12 @@ function KeyManager:configure_route (route, rx, tx)
    route.status = status.ready
    route.rx_sa = {
       route = route.id,
-      spi = route.spi,
       aead = "aes-gcm-16-icv",
       key = lib.hexdump(rx.key),
       salt = lib.hexdump(rx.salt)
    }
    route.tx_sa = {
       route = route.id,
-      spi = route.spi,
       aead = "aes-gcm-16-icv",
       key = lib.hexdump(tx.key),
       salt = lib.hexdump(tx.salt)
@@ -442,12 +440,11 @@ end
 
 function KeyManager:commit_sa_db ()
    -- Collect currently active SAs
-   local sa_db_spec = {key_type=ffi.typeof("struct { uint32_t spi; }")}
-   local esp_keys, dsp_keys = cltable.new(sa_db_spec), cltable.new(sa_db_spec)
+   local esp_keys, dsp_keys = {}, {}
    for _, route in ipairs(self.routes) do
       if route.status == status.ready then
-         esp_keys[ffi.new(sa_db_spec.key_type, route.spi)] = route.tx_sa
-         dsp_keys[ffi.new(sa_db_spec.key_type, route.spi)] = route.rx_sa
+         esp_keys[route.spi] = route.tx_sa
+         dsp_keys[route.spi] = route.rx_sa
       end
    end
    -- Commit active SAs to SA database
