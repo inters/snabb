@@ -42,6 +42,7 @@ local manager_config_spec = {
    schema_name = {required=true},
    schema_support = {},
    worker_default_scheduling = {default={}},
+   worker_jit_flush = {default=true},
    default_schema = {},
    log_level = {default=default_log_level},
    rpc_trace_file = {},
@@ -79,6 +80,7 @@ function new_manager (conf)
    ret.setup_fn = conf.setup_fn
    ret.period = 1/conf.Hz
    ret.worker_default_scheduling = conf.worker_default_scheduling
+   ret.worker_jit_flush = conf.worker_jit_flush
    ret.workers = {}
    ret.state_change_listeners = {}
 
@@ -164,10 +166,11 @@ function Manager:start ()
    self.socket = open_socket(self.socket_file_name)
 end
 
-function Manager:start_worker(name, sched_opts)
+function Manager:start_worker(name, sched_opts, jit_flush)
    local code = {
       scheduling.stage(sched_opts),
-      "require('lib.ptree.worker').main()"
+      ("require('lib.ptree.worker').main{jit_flush=%s}")
+         :format(self.worker_jit_flush)
    }
    return worker.start(name, table.concat(code, "\n"))
 end

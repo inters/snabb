@@ -262,7 +262,8 @@ function gen_configuration (conf)
       private_interface = conf.private_interface,
       public_interface = conf.public_interface,
       route = {},
-      negotiation_ttl = conf.nroutes
+      negotiation_ttl = conf.nroutes,
+      sa_ttl = 16
    }
    for route = 1, conf.nroutes do
       cfg.route["test"..route] = {

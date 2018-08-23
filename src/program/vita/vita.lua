@@ -153,7 +153,8 @@ function run_vita (opt)
       initial_configuration = opt.initial_configuration or {},
       setup_fn = purify(opt.setup_fn or vita_workers),
       worker_default_scheduling = {busywait=opt.busywait or false,
-                                   real_time=opt.realtime or false}
+                                   real_time=opt.realtime or false},
+      worker_jit_flush = false
    }
 
    -- Listen for SA database changes.
