@@ -743,7 +743,7 @@ assert(Protocol.auth_code_bytes == 32)
 -- requests through protocol filters.
 
 Transport = {
-   message_type = { nonce = 1, key = 2 },
+   message_type = { nonce = 1, key = 3 },
    header = subClass(header)
 }
 Transport.header:init({
