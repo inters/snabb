@@ -74,6 +74,9 @@ Security Proof:
 
 Notes:
 
+ • The outputs of this protocol are choosen specifically to support the AES-GCM
+   algorithm with 128‑bit keys as used in an IPsec ESP data plane.
+
  • Future versions of this protocol may introduce the use of a key derivation
    function (KDF), such as libsodium’s crypto_kdf_blake2b_derive_from_key, to
    derive additional key material from rx or tx.
@@ -82,9 +85,15 @@ References:
 
  • The spiped protocol:
    https://github.com/Tarsnap/spiped/blob/d1e62a8/DESIGN.md#spiped-design
+
  • Additional discussion of the spiped protocol:
    https://github.com/Tarsnap/spiped/issues/151
+
  • The Sodium crypto library (libsodium):
    https://download.libsodium.org/doc/
+
  • Security Architecture for the Internet Protocol:
    https://tools.ietf.org/html/rfc4301
+
+ • The use of AES-GCM in IPsec ESP:
+   https://tools.ietf.org/html/rfc4106

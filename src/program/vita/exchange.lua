@@ -735,6 +735,8 @@ end
 assert(Protocol.preshared_key_bytes == 32)
 assert(Protocol.public_key_bytes == 32)
 assert(Protocol.auth_code_bytes == 32)
+assert(ffi.sizeof(Protocol.key_t) >= C.crypto_generichash_blake2b_BYTES_MIN)
+assert(ffi.sizeof(Protocol.key_t) <= C.crypto_generichash_blake2b_BYTES_MAX)
 
 -- Transport wrapper for vita-ske that encompasses an SPI to map requests to
 -- routes, and a message type to facilitate parsing.
