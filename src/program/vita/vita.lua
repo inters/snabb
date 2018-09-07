@@ -13,7 +13,6 @@ local nexthop = require("program.vita.nexthop")
 local exchange = require("program.vita.exchange")
 local icmp = require("program.vita.icmp")
       schemata = require("program.vita.schemata")
-local interlink = require("lib.interlink")
 local Receiver = require("apps.interlink.receiver")
 local Transmitter = require("apps.interlink.transmitter")
 local intel_mp = require("apps.intel_mp.intel_mp")
@@ -21,19 +20,26 @@ local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local numa = require("lib.numa")
 local yang = require("lib.yang.yang")
+local cltable = require("lib.cltable")
 local pci = require("lib.hardware.pci")
 local S = require("syscall")
 local ffi = require("ffi")
 local usage = require("program.vita.README_inc")
 local confighelp = require("program.vita.README_config_inc")
 
+local ptree = require("lib.ptree.ptree")
+local generic_schema_support = require("lib.ptree.support").generic_schema_config_support
+local CPUSet = require("lib.cpuset")
+
 local confspec = {
-   private_interface = {required=true},
-   public_interface = {required=true},
+   private_interface = {},
+   public_interface = {},
    mtu = {default=8937},
-   route = {required=true},
+   route = {default={}},
    negotiation_ttl = {},
-   sa_ttl = {}
+   sa_ttl = {},
+   inbound_sa = {default={}},
+   outbound_sa = {default={}}
 }
 
 local ifspec = {
@@ -57,6 +63,7 @@ local function derive_local_unicast_mac (prefix, ip4)
 end
 
 local function parse_ifconf (conf, mac_prefix)
+   if not conf then return end
    conf = lib.parse(conf, ifspec)
    conf.mac = conf.mac or derive_local_unicast_mac(mac_prefix, conf.ip4)
    return conf
@@ -69,23 +76,20 @@ local function parse_conf (conf)
    return conf
 end
 
-local esp_keyfile = "group/esp_ephemeral_keys"
-local dsp_keyfile = "group/dsp_ephemeral_keys"
+local sa_db_path = "group/sa_db"
 
+-- Vita command-line interface (CLI)
 function run (args)
-   io.stdout:setvbuf("line")
-   io.stderr:setvbuf("line")
-
    local long_opt = {
       help = "h",
       ["config-help"] = "H",
-      ["config-test"] = "t",
-      cpu = "c"
+      name = "n",
+      cpu = "c",
+      busywait = "b",
+      realtime = "r",
    }
 
    local opt = {}
-   local conftest = false
-   local cpus = {}
 
    local function exit_usage (status) print(usage) main.exit(status) end
 
@@ -93,51 +97,143 @@ function run (args)
 
    function opt.H () print(confighelp) main.exit(0) end
 
-   function opt.t () conftest = true end
+   local cpuset
+   function opt.c (arg) cpuset = CPUSet:new():add_from_string(arg) end
 
-   function opt.c (arg) cpus = cpuset(arg) end
+   local name
+   function opt.n (arg) name = arg end
 
-   args = lib.dogetopt(args, opt, "hHtc:m:", long_opt)
+   local busywait, realtime
+   function opt.b () busywait = true end
+   function opt.r () realtime = true end
 
-   if #args ~= 1 then exit_usage(1) end
-   local confpath = args[1]
+   args = lib.dogetopt(args, opt, "hHn:c:br", long_opt)
 
-   if conftest then
-      local success, error = pcall(
-         load_config, schemata['esp-gateway'], confpath
-      )
-      if success then main.exit(0)
-      else print(error) main.exit(1) end
+   if #args > 0 then exit_usage(1) end
+   run_vita{name=name, cpuset=cpuset, busywait=busywait, realtime=realtime}
+end
+
+-- Vita runs as a process tree that reconfigures itself at runtime based on key
+-- exchange and expiration. The key manager maintains a current SA database in
+-- sa_db_path (relative to the process group) which is polled and applied by
+-- the supervisor. NB: naturally, the SA database must not affect key manager
+-- configuration.
+-- This function does not halt except for fatal error situations.
+function run_vita (opt)
+   local sa_db_path = shm.root.."/"..shm.resolve(sa_db_path)
+
+   -- Schema support: because Vita configurations are generally shallow we
+   -- choose to reliably delegate all configuration transitions to core.app by
+   -- making sure that setup_fn receives a fresh configuration every time it is
+   -- called.
+   local schema_support = {
+      compute_config_actions = function(old_graph, new_graph)
+         local actions = engine.compute_config_actions(old_graph, new_graph)
+         table.insert(actions, {'commit', {}})
+         return actions
+      end,
+      update_mutable_objects_embedded_in_app_initargs = function () end,
+      compute_state_reader = generic_schema_support.compute_state_reader,
+      configuration_for_worker = generic_schema_support.configuration_for_worker,
+      process_states = generic_schema_support.process_states,
+      compute_apps_to_restart_after_configuration_update = function () end,
+      translators = {}
+   }
+   local function purify (setup_fn)
+      return function (new_conf)
+         return setup_fn(lib.deepcopy(new_conf))
+      end
    end
 
-   -- “link” with worker processes
+   -- Setup supervisor
+   local supervisor = ptree.new_manager{
+      name = opt.name,
+      schema_name = 'vita-esp-gateway',
+      schema_support = schema_support,
+      initial_configuration = opt.initial_configuration or {},
+      setup_fn = purify(opt.setup_fn or vita_workers),
+      worker_default_scheduling = {busywait=opt.busywait or false,
+                                   real_time=opt.realtime or false},
+      worker_jit_flush = false
+   }
+
+   -- Listen for SA database changes.
+   local notify_fd, sa_db_wd = assert(S.inotify_init("cloexec, nonblock"))
+   local function sa_db_needs_reload ()
+      if not sa_db_wd then
+         sa_db_wd = notify_fd:inotify_add_watch(sa_db_path, "close_write")
+         -- sa_db_wd ~= nil means the SA database was newly created and we
+         -- should load it.
+         return (sa_db_wd ~= nil)
+      else
+         local events, err = notify_fd:inotify_read()
+         -- Any event indicates the SA database was written to and we should
+         -- reload it.
+         return not (err and assert(err.again, err)) and #events > 0
+      end
+   end
+
+   -- Helper for loading the SA database as a configuration file in Snabb YANG
+   -- text format.
+   local function try_load_sa_db ()
+      local function load_sa_db ()
+         return yang.load_config_for_schema(
+            schemata['ephemeral-keys'],
+            lib.readfile(sa_db_path, "a*"),
+            sa_db_path
+         )
+      end
+      return pcall(load_sa_db)
+   end
+
+   -- This is how we imperatively incorporate the SA database into the
+   -- configuration proper. NB: see schema_support and the use of purify above.
+   local function merge_sa_db (sa_db)
+      return function (current_config)
+         current_config.outbound_sa = sa_db.outbound_sa
+         current_config.inbound_sa = sa_db.inbound_sa
+         return current_config
+      end
+   end
+
+   -- Ensure I/O is line-buffered.
+   io.stdout:setvbuf("line")
+   io.stderr:setvbuf("line")
+
+   -- Ensure exit on worker failure (while we lack proper process supervision.)
    worker.set_exit_on_worker_death(true)
 
-   -- start private and public router processes
-   worker.start(
-      "PrivatePort",
-      ([[require("program.vita.vita").private_port_worker(%q, %s)]])
-         :format(confpath, cpus[2])
-   )
-   worker.start(
-      "PublicPort",
-      ([[require("program.vita.vita").public_port_worker(%q, %s)]])
-         :format(confpath, cpus[3])
-   )
+   -- Run the supervisor while keeping up to date with SA database changes.
+   while true do
+      supervisor:main(1)
+      if sa_db_needs_reload() then
+         local success, sa_db = try_load_sa_db()
+         if success then
+            supervisor:info("Reloading SA database: %s", sa_db_path)
+            supervisor:update_configuration(merge_sa_db(sa_db), 'set', '/')
+         else
+            supervisor:warn("Failed to read SA database %s: %s",
+                            sa_db_path, sa_db)
+         end
+      end
+   end
+end
 
-   -- start crypto processes
-   worker.start("ESP", ([[require("program.vita.vita").esp_worker(%s)]])
-                   :format(cpus[4]))
-   worker.start("DSP", ([[require("program.vita.vita").dsp_worker(%s)]])
-                   :format(cpus[5]))
-
-   -- become key exchange protocol handler process
-   exchange_worker(confpath, cpus[1])
+function vita_workers (conf)
+   return {
+      key_manager = configure_exchange(conf),
+      outbound_router = configure_private_router_with_nic(conf),
+      inbound_router = configure_public_router_with_nic(conf),
+      encapsulate = configure_esp(conf),
+      decapsulate =  configure_dsp(conf)
+   }
 end
 
 function configure_private_router (conf, append)
    conf = parse_conf(conf)
    local c = append or config.new()
+
+   if not conf.private_interface then return c end
 
    config.app(c, "PrivateDispatch", dispatch.PrivateDispatch, {
                  node_ip4 = conf.private_interface.ip4
@@ -182,13 +278,13 @@ function configure_private_router (conf, append)
    for id, route in pairs(conf.route) do
       local private_in = "PrivateRouter."..id
       local ESP_in = "ESP_"..id.."_in"
-      config.app(c, ESP_in, Transmitter)
-      config.link(c, private_in.." -> "..ESP_in..".input")
+      config.app(c, ESP_in.."_Tx", Transmitter, ESP_in)
+      config.link(c, private_in.." -> "..ESP_in.."_Tx.input")
 
       local private_out = "InboundDispatch."..id
       local DSP_out = "DSP_"..id.."_out"
-      config.app(c, DSP_out, Receiver)
-      config.link(c, DSP_out..".output -> "..private_out)
+      config.app(c, DSP_out.."_Rx", Receiver, DSP_out)
+      config.link(c, DSP_out.."_Rx.output -> "..private_out)
    end
 
    local private_links = {
@@ -201,6 +297,8 @@ end
 function configure_public_router (conf, append)
    conf = parse_conf(conf)
    local c = append or config.new()
+
+   if not conf.public_interface then return c end
 
    config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
                  node_ip4 = conf.public_interface.ip4
@@ -223,24 +321,24 @@ function configure_public_router (conf, append)
    config.link(c, "PublicDispatch.protocol4_unreachable -> PublicICMP4.protocol_unreachable")
    config.link(c, "PublicICMP4.output -> PublicNextHop.icmp4")
 
-   config.app(c, "Protocol_in", Transmitter)
-   config.app(c, "Protocol_out", Receiver)
-   config.link(c, "PublicDispatch.protocol -> Protocol_in.input")
-   config.link(c, "Protocol_out.output -> PublicNextHop.protocol")
+   config.app(c, "Protocol_in_Tx", Transmitter, "Protocol_in")
+   config.app(c, "Protocol_out_Rx", Receiver, "Protocol_out")
+   config.link(c, "PublicDispatch.protocol -> Protocol_in_Tx.input")
+   config.link(c, "Protocol_out_Rx.output -> PublicNextHop.protocol")
 
    for id, route in pairs(conf.route) do
       local public_in = "PublicRouter."..id
       local DSP_in = "DSP_"..id.."_in"
-      config.app(c, DSP_in, Transmitter)
-      config.link(c, public_in.." -> "..DSP_in..".input")
+      config.app(c, DSP_in.."_Tx", Transmitter, DSP_in)
+      config.link(c, public_in.." -> "..DSP_in.."_Tx.input")
 
       local public_out = "PublicNextHop."..id
       local ESP_out = "ESP_"..id.."_out"
       local Tunnel = "Tunnel_"..id
-      config.app(c, ESP_out, Receiver)
+      config.app(c, ESP_out.."_Rx", Receiver, ESP_out)
       config.app(c, Tunnel, tunnel.Tunnel4,
                  {src=conf.public_interface.ip4, dst=route.gw_ip4})
-      config.link(c, ESP_out..".output -> "..Tunnel..".input")
+      config.link(c, ESP_out.."_Rx.output -> "..Tunnel..".input")
       config.link(c, Tunnel..".output -> "..public_out)
    end
 
@@ -264,10 +362,9 @@ local function nic_config (conf, interface)
 end
 
 function configure_private_router_with_nic (conf, append)
-   conf = parse_conf(conf)
+   local c, private = configure_private_router(conf, append)
 
-   local c, private =
-      configure_private_router(conf, append or config.new())
+   if not conf.private_interface then return c end
 
    config.app(c, "PrivateNIC", intel_mp.Intel,
               nic_config(conf, 'private_interface'))
@@ -278,11 +375,10 @@ function configure_private_router_with_nic (conf, append)
 end
 
 function configure_public_router_with_nic (conf, append)
-   conf = parse_conf(conf)
+   local c, public = configure_public_router(conf, append)
 
-   local c, public =
-      configure_public_router(conf, append or config.new())
-
+   if not conf.public_interface then return c end
+   
    config.app(c, "PublicNIC", intel_mp.Intel,
               nic_config(conf, 'public_interface'))
    config.link(c, "PublicNIC.output -> "..public.input)
@@ -291,185 +387,76 @@ function configure_public_router_with_nic (conf, append)
    return c
 end
 
-function private_port_worker (confpath, cpu)
-   numa.bind_to_cpu(cpu)
-   engine.log = true
-   listen_confpath(
-      schemata['esp-gateway'],
-      confpath,
-      configure_private_router_with_nic
-   )
-end
-
-function public_port_worker (confpath, cpu)
-   numa.bind_to_cpu(cpu)
-   engine.log = true
-   listen_confpath(
-      schemata['esp-gateway'],
-      confpath,
-      configure_public_router_with_nic
-   )
-end
-
-function public_router_loopback_worker (confpath, cpu)
-   local function configure_public_router_loopback (conf)
-      local c, public = configure_public_router(conf)
-      config.link(c, public.output.." -> "..public.input)
-      return c
-   end
-   numa.bind_to_cpu(cpu)
-   engine.log = true
-   listen_confpath(
-      schemata['esp-gateway'],
-      confpath,
-      configure_public_router_loopback
-   )
-end
-
 function configure_exchange (conf, append)
    conf = parse_conf(conf)
    local c = append or config.new()
 
+   if not conf.public_interface then return c end
+
    config.app(c, "KeyExchange", exchange.KeyManager, {
                  node_ip4 = conf.public_interface.ip4,
                  routes = conf.route,
-                 esp_keyfile = esp_keyfile,
-                 dsp_keyfile = dsp_keyfile,
+                 sa_db_path = sa_db_path,
                  negotiation_ttl = conf.negotiation_ttl,
                  sa_ttl = conf.sa_ttl
    })
-   config.app(c, "Protocol_in", Receiver)
-   config.app(c, "Protocol_out", Transmitter)
-   config.link(c, "Protocol_in.output -> KeyExchange.input")
-   config.link(c, "KeyExchange.output -> Protocol_out.input")
+   config.app(c, "Protocol_in_Rx", Receiver, "Protocol_in")
+   config.app(c, "Protocol_out_Tx", Transmitter, "Protocol_out")
+   config.link(c, "Protocol_in_Rx.output -> KeyExchange.input")
+   config.link(c, "KeyExchange.output -> Protocol_out_Tx.input")
 
    return c
 end
 
-function exchange_worker (confpath, cpu)
-   numa.bind_to_cpu(cpu)
-   engine.log = true
-   listen_confpath(schemata['esp-gateway'], confpath, configure_exchange)
-end
+-- sa_db := { outbound_sa={<spi>=(SA), ...}, inbound_sa={<spi>=(SA), ...} }
+-- (see exchange)
 
-
--- ephemeral_keys := { <id>=(SA), ... }                        (see exchange)
-
-function configure_esp (ephemeral_keys, append)
+function configure_esp (sa_db, append)
+   sa_db = parse_conf(sa_db)
    local c = append or config.new()
 
-   for id, sa in pairs(ephemeral_keys.sa) do
-      -- Configure interlink receiver/transmitter for inbound SA
-      local ESP_in = "ESP_"..id.."_in"
-      local ESP_out = "ESP_"..id.."_out"
-      config.app(c, ESP_in, Receiver)
-      config.app(c, ESP_out, Transmitter)
-      -- Configure inbound SA
-      local ESP = "ESP_"..id
-      config.app(c, ESP, tunnel.Encapsulate, sa)
-      config.link(c, ESP_in..".output -> "..ESP..".input4")
-      config.link(c, ESP..".output -> "..ESP_out..".input")
-   end
-
-   return c
-end
-
-function configure_dsp (ephemeral_keys, append)
-   local c = append or config.new()
-
-   for id, sa in pairs(ephemeral_keys.sa) do
+   for spi, sa in pairs(sa_db.outbound_sa) do
       -- Configure interlink receiver/transmitter for outbound SA
-      local DSP_in = "DSP_"..id.."_in"
-      local DSP_out = "DSP_"..id.."_out"
-      config.app(c, DSP_in, Receiver)
-      config.app(c, DSP_out, Transmitter)
+      local ESP_in = "ESP_"..sa.route.."_in"
+      local ESP_out = "ESP_"..sa.route.."_out"
+      config.app(c, ESP_in.."_Rx", Receiver, ESP_in)
+      config.app(c, ESP_out.."_Tx", Transmitter, ESP_out)
       -- Configure outbound SA
-      local DSP = "DSP_"..id
-      config.app(c, DSP, tunnel.Decapsulate, sa)
-      config.link(c, DSP_in..".output -> "..DSP..".input")
-      config.link(c, DSP..".output4 -> "..DSP_out..".input")
+      local ESP = "ESP_"..sa.route
+      config.app(c, ESP, tunnel.Encapsulate, {
+                    spi = spi,
+                    aead = sa.aead,
+                    key = sa.key,
+                    salt = sa.salt
+      })
+      config.link(c, ESP_in.."_Rx.output -> "..ESP..".input4")
+      config.link(c, ESP..".output -> "..ESP_out.."_Tx.input")
    end
 
    return c
 end
 
-function esp_worker (cpu)
-   numa.bind_to_cpu(cpu)
-   engine.log = true
-   listen_confpath(
-      schemata['ephemeral-keys'],
-      shm.root.."/"..shm.resolve(esp_keyfile),
-      configure_esp
-   )
-end
+function configure_dsp (sa_db, append)
+   sa_db = parse_conf(sa_db)
+   local c = append or config.new()
 
-function dsp_worker (cpu)
-   numa.bind_to_cpu(cpu)
-   engine.log = true
-   listen_confpath(
-      schemata['ephemeral-keys'],
-      shm.root.."/"..shm.resolve(dsp_keyfile),
-      configure_dsp
-   )
-end
-
-function load_config (schema, confpath)
-   return yang.load_config_for_schema(
-      schema, lib.readfile(confpath, "a*"), confpath
-   )
-end
-
-function save_config (schema, confpath, conf)
-   local f = assert(io.open(confpath, "w"), "Unable to open file: "..confpath)
-   yang.print_config_for_schema(schema, conf, f)
-   f:close()
-end
-
-function listen_confpath (schema, confpath, loader, interval)
-   interval = interval or 1e9
-
-   local notify_fd = assert(S.inotify_init("cloexec, nonblock"))
-   local conf_fd
-   local needs_reconfigure = true
-   local function check_reconfigure ()
-      if not conf_fd then
-         conf_fd = notify_fd:inotify_add_watch(confpath, "close_write")
-         needs_reconfigure = needs_reconfigure or conf_fd
-      else
-         local events, err = notify_fd:inotify_read()
-         needs_reconfigure = not (err and assert(err.again)) and #events >= 1
-      end
-   end
-   timer.activate(timer.new("check-for-reconfigure",
-                            check_reconfigure,
-                            interval,
-                            "repeating"))
-
-   local function run_loader ()
-      return loader(load_config(schema, confpath))
-   end
-
-   while true do
-      needs_reconfigure = false
-      local success, c = pcall(run_loader)
-      if success then
-         print("Reconfigure: loaded "..confpath)
-         engine.configure(c)
-      else
-         print("Reconfigure: error: "..c)
-      end
-      engine.main({
-         done = function() return needs_reconfigure end,
-         no_report = true
+   for spi, sa in pairs(sa_db.inbound_sa) do
+      -- Configure interlink receiver/transmitter for inbound SA
+      local DSP_in = "DSP_"..sa.route.."_in"
+      local DSP_out = "DSP_"..sa.route.."_out"
+      config.app(c, DSP_in.."_Rx", Receiver, DSP_in)
+      config.app(c, DSP_out.."_Tx", Transmitter, DSP_out)
+      -- Configure inbound SA
+      local DSP = "DSP_"..sa.route
+      config.app(c, DSP, tunnel.Decapsulate, {
+                    spi = spi,
+                    aead = sa.aead,
+                    key = sa.key,
+                    salt = sa.salt
       })
+      config.link(c, DSP_in.."_Rx.output -> "..DSP..".input")
+      config.link(c, DSP..".output4 -> "..DSP_out.."_Tx.input")
    end
-end
 
--- Parse CPU set from string.
-function cpuset (s)
-   local cpus = {}
-   for cpu in s:gmatch('%s*([0-9]+),*') do
-      table.insert(cpus, assert(tonumber(cpu), "Not a valid CPU id: " .. cpu))
-   end
-   return cpus
+   return c
 end

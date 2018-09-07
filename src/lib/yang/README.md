@@ -222,14 +222,13 @@ of the documented interface.
 Load a YANG schema from the file named *filename*.  Returns a YANG
 schema object.
 
-— Function **load_schema_by_name** *name* *revision* *path*
+— Function **load_schema_by_name** *name* *revision*
 
 Load the given named YANG schema.  The *name* indicates the canonical
 name of the schema, which appears as `module *name* { ... }` in the YANG
 schema itself, or as `import *name* { ... }` in other YANG modules that
 import this module.  *revision* optionally indicates that a certain
-revision data should be required. The *path* is used to resolve the module
-containing the schema by *name*, it defaults to `'lib.yang'`.
+revision data should be required.
 
 — Function **add_schema** *src* *filename*
 

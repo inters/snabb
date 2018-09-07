@@ -40,7 +40,9 @@ local manager_config_spec = {
    -- Could relax this requirement.
    initial_configuration = {required=true},
    schema_name = {required=true},
+   schema_support = {},
    worker_default_scheduling = {default={}},
+   worker_jit_flush = {default=true},
    default_schema = {},
    log_level = {default=default_log_level},
    rpc_trace_file = {},
@@ -72,11 +74,13 @@ function new_manager (conf)
    end
    ret.schema_name = conf.schema_name
    ret.default_schema = conf.default_schema or conf.schema_name
-   ret.support = support.load_schema_config_support(conf.schema_name)
+   ret.support = conf.schema_support
+      or support.load_schema_config_support(conf.schema_name)
    ret.peers = {}
    ret.setup_fn = conf.setup_fn
    ret.period = 1/conf.Hz
    ret.worker_default_scheduling = conf.worker_default_scheduling
+   ret.worker_jit_flush = conf.worker_jit_flush
    ret.workers = {}
    ret.state_change_listeners = {}
 
@@ -162,12 +166,13 @@ function Manager:start ()
    self.socket = open_socket(self.socket_file_name)
 end
 
-function Manager:start_worker(sched_opts)
+function Manager:start_worker(name, sched_opts, jit_flush)
    local code = {
       scheduling.stage(sched_opts),
-      "require('lib.ptree.worker').main()"
+      ("require('lib.ptree.worker').main{jit_flush=%s}")
+         :format(self.worker_jit_flush)
    }
-   return worker.start("worker", table.concat(code, "\n"))
+   return worker.start(name, table.concat(code, "\n"))
 end
 
 function Manager:stop_worker(id)
@@ -222,7 +227,7 @@ function Manager:start_worker_for_graph(id, graph)
    local scheduling = self:compute_scheduling_for_worker(id, graph)
    self:info('Starting worker %s.', id)
    self.workers[id] = { scheduling=scheduling,
-                        pid=self:start_worker(scheduling),
+                        pid=self:start_worker(id, scheduling),
                         queue={}, graph=graph }
    self:state_change_event('worker_starting', id)
    self:debug('Worker %s has PID %s.', id, self.workers[id].pid)

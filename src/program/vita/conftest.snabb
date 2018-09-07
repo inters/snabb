@@ -2,81 +2,56 @@
 
 -- Use of this source code is governed by the GNU AGPL license; see COPYING.
 
-local shm = require("core.shm")
-local worker = require("core.worker")
 local vita = require("program.vita.vita")
-local gentest = require("program.vita.gentest")
-local yang = require("lib.yang.yang")
-local S = require("syscall")
+local vita_test = require("program.vita.test")
+local lib = require("core.lib")
 
-local confpath = shm.root.."/"..shm.resolve("group/testconf")
+--engine.log = true 
 
-local function commit_conf (conf)
-   vita.save_config(vita.schemata['esp-gateway'], confpath, conf)
+local function test_conf (conf)
+   conf = lib.deepcopy(conf) -- ensure purity
+   engine.configure(vita_test.configure_public_router_loopback(
+                       conf, vita.configure_exchange(conf)))
+   engine.main{duration=3, report={showlinks=false}}
 end
 
-worker.set_exit_on_worker_death(true)
-
-worker.start(
-   "PublicRouterLoopback",
-   ([[require("program.vita.vita").public_router_loopback_worker(%q)]])
-      :format(confpath)
-)
-worker.start(
-   "Exchange",
-   ([[require("program.vita.vita").exchange_worker(%q)]])
-      :format(confpath)
-)
-S.sleep(1)
-
-local conf, _  = gentest.gen_testcase({nroutes=0})
 print("Committing base configuration...")
-commit_conf(conf)
-S.sleep(3)
+test_conf(vita_test.gen_configuration({nroutes=0}))
 
-local conf, _ = gentest.gen_testcase({nroutes=1})
 print("Adding a route...")
-commit_conf(conf)
-S.sleep(3)
+test_conf(vita_test.gen_configuration({nroutes=1}))
 
 print("Update without change...")
-commit_conf(conf)
-S.sleep(3)
+test_conf(vita_test.gen_configuration({nroutes=1}))
 
-conf.route.test1.preshared_key = string.rep("FF", 32)
 print("Change route key...")
-commit_conf(conf)
-S.sleep(3)
+local conf = vita_test.gen_configuration({nroutes=1})
+conf.route.test1.preshared_key = string.rep("FF", 32)
+test_conf(conf)
 
-conf.route.test1.gw_ip4 = "172.17.1.10",
 print("Change route gw_ip4...")
-commit_conf(conf)
-S.sleep(3)
+conf.route.test1.gw_ip4 = "172.17.1.10"
+test_conf(conf)
 
+print("Change public_ip4 and route net_cidr4...")
 conf.public_interface.ip4 = "172.16.0.11"
 conf.public_interface.nexthop_ip4 = conf.public_interface.ip4
 conf.route.test1.net_cidr4 = "172.16.0.0/16"
-print("Change public_ip4 and route net_cidr4...")
-commit_conf(conf)
-S.sleep(3)
+test_conf(conf)
 
+print("Change route id...")
 conf.route.test2 = conf.route.test1
 conf.route.test1 = nil
-print("Change route id...")
-commit_conf(conf)
-S.sleep(3)
+test_conf(conf)
 
-conf.negotiation_ttl = 42
 print("Change negotiation_ttl...")
-commit_conf(conf)
-S.sleep(3)
+conf.negotiation_ttl = 42
+test_conf(conf)
 
-conf.sa_ttl = 42
 print("Change sa_ttl...")
-commit_conf(conf)
-S.sleep(3)
+conf.sa_ttl = 42
+test_conf(conf)
 
-conf.route.test2 = nil
 print("Remove route...")
-commit_conf(conf)
-S.sleep(3)
+conf.route.test2 = nil
+test_conf(conf)

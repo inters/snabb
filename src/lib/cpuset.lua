@@ -48,14 +48,16 @@ function CPUSet:add_from_string(cpus)
       end
       for cpu=lo,hi do self:add(cpu) end
    end
+   return self
 end
 
 function CPUSet:add(cpu)
    local node = numa.cpu_get_numa_node(cpu)
    assert(node ~= nil, 'Failed to get NUMA node for CPU: '..cpu)
    if self.by_node[node] == nil then self.by_node[node] = {} end
-   assert(self.by_node[cpu] == nil, 'CPU already in set: '..cpu)
+   assert(self.by_node[node][cpu] == nil, 'CPU already in set: '..cpu)
    self.by_node[node][cpu] = true
+   return self
 end
 
 function CPUSet:acquire_for_pci_addresses(addrs)

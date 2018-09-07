@@ -423,6 +423,12 @@ Allocate packet and fill it with the contents of *string*.
 Creates an exact copy of at memory pointed to by *pointer*. *Pointer* must
 point to a `packet.packet_t`.
 
+— Function **packet.physical_bits* *packet*
+
+Returns the phyiscal capacity in bits required for *packet* on 10 GbE,
+accounting for minimum frame size and overhead of Ethernet checksum and
+inter-packet gap.
+
 ## Memory (core.memory)
 
 Snabb allocates special

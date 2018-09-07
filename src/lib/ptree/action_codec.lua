@@ -79,15 +79,22 @@ end
 
 local public_names = {}
 local function find_public_name(obj)
+   local function intern(obj, modname, name)
+      name = name or ''
+      public_names[obj] = { modname, name }
+      return modname, name
+   end
+   local function is_class(val)
+      return type(val) == 'table' and type(val.new) == 'function'
+   end
    if public_names[obj] then return unpack(public_names[obj]) end
    for modname, mod in pairs(package.loaded) do
-      if type(mod) == 'table' then
+      if mod == obj and is_class(mod) then
+         return intern(mod, modname)
+      elseif type(mod) == 'table' then
          for name, val in pairs(mod) do
-            if val == obj then
-               if type(val) == 'table' and type(val.new) == 'function' then
-                  public_names[obj] = { modname, name }
-                  return modname, name
-               end
+            if val == obj and is_class(val) then
+               return intern(obj, modname, name)
             end
          end
       end
@@ -176,7 +183,8 @@ local function decoder(buf, len)
    end
    function decoder:class()
       local require_path, name = self:string(), self:string()
-      return assert(require(require_path)[name])
+      local mod = require(require_path)
+      return assert((#name > 0 and mod[name]) or mod)
    end
    function decoder:config()
       return binary.load_compiled_data_file(self:string()).data
