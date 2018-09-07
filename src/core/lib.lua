@@ -214,7 +214,7 @@ end
 
 function comma_value(n) -- credit http://richard.warburton.it
    if type(n) == 'cdata' then
-      n = tonumber(n)
+      n = string.match(tostring(n), '^-?([0-9]+)U?LL$') or tonumber(n)
    end
    if n ~= n then return "NaN" end
    local left,num,right = string.match(n,'^([^%d]*%d)(%d*)(.-)$')
@@ -458,84 +458,8 @@ function root_check (message)
    end
 end
 
--- Simple token bucket for rate-limiting of events.  A token bucket is
--- created through
---
---  local tb = token_bucket_new({ rate = <rate> })
---
--- where <rate> is the maximum allowed rate in Hz, which defaults to
--- 10.  Conceptually, <rate> tokens are added to the bucket each
--- second and the bucket can hold no more than <rate> tokens but at
--- least one.
---
-
-local token_bucket = {}
-token_bucket.mt = { __index = token_bucket }
-token_bucket.default = { rate = 10 }
-function token_bucket_new (config)
-   local config = config or token_bucket.default
-   local tb = setmetatable({}, token_bucket.mt)
-   tb:rate(config.rate or token_bucket.default.rate)
-   tb._tstamp = C.get_monotonic_time()
-   return tb
-end
-
--- The rate can be set with the rate() method at any time, which fills
--- the token bucket an also returns the previous value.  If called
--- with a nil argument, returns the currently configured rate.
-function token_bucket:rate (rate)
-   if rate ~= nil then
-      local old_rate = self._rate
-      self._rate = rate
-      self._max_tokens = math.max(rate, 1)
-      self._tokens = self._max_tokens
-      return old_rate
-   end
-   return self._rate
-end
-
-function token_bucket:_update (tokens)
-   local now = C.get_monotonic_time()
-   local tokens = math.min(self._max_tokens, tokens + self._rate*(now-self._tstamp))
-   self._tstamp = now
-   return tokens
-end
-
--- The take() method tries to remove <n> tokens from the bucket.  If
--- enough tokens are available, they are subtracted from the bucket
--- and a true value is returned.  Otherwise, the bucket remains
--- unchanged and a false value is returned.  For efficiency, the
--- tokens accumulated since the last call to take() or can_take() are
--- only added if the request can not be fulfilled by the state of the
--- bucket when the method is called.
-function token_bucket:take (n)
-   local n = n or 1
-   local result = false
-   local tokens = self._tokens
-   if n > tokens then
-      tokens = self:_update(tokens)
-   end
-   if n <= tokens then
-      tokens = tokens - n
-      result = true
-   end
-   self._tokens = tokens
-   return result
-end
-
--- The can_take() method returns a true value if the bucket contains
--- at least <n> tokens, false otherwise.  The bucket is updated in a
--- layz fashion as described for the take() method.
-function token_bucket:can_take (n)
-   local n = n or 1
-   local tokens = self._tokens
-   if n <= tokens then
-      return true
-   end
-   tokens = self:_update(tokens)
-   self._tokens = tokens
-   return n <= tokens
-end
+-- Backward compatibility
+token_bucket_new = require("lib.token_bucket").new
 
 -- Simple rate-limited logging facility.  Usage:
 --
@@ -804,6 +728,17 @@ function set(...)
    local ret = {}
    for k, v in pairs({...}) do ret[v] = true end
    return ret
+end
+
+-- Check if 'name' is a kernel network interface.
+function is_iface (name)
+   local f = io.open('/proc/net/dev')
+   for line in f:lines() do
+      local iface = line:match("^%s*(%w+):")
+      if iface and iface == name then f:close() return true end
+   end
+   f:close()
+   return false
 end
 
 function selftest ()

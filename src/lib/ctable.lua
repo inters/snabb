@@ -46,24 +46,28 @@ local function make_entry_type(key_type, value_type)
    else
       entry_types[key_type] = {}
    end
+   local raw_size = ffi.sizeof(key_type) + ffi.sizeof(value_type) + 4
+   local padding = 2^ceil(math.log(raw_size)/math.log(2)) - raw_size
    local ret = ffi.typeof([[struct {
          uint32_t hash;
          $ key;
          $ value;
+         uint8_t padding[$];
       } __attribute__((packed))]],
       key_type,
-      value_type)
+      value_type,
+      padding)
    entry_types[key_type][value_type] = ret
    return ret
 end
 
 local function make_entries_type(entry_type)
-   return ffi.typeof('$[?]', entry_type)
+   return (ffi.typeof('$[?]', entry_type))
 end
 
 -- hash := [0,HASH_MAX); scale := size/HASH_MAX
 local function hash_to_index(hash, scale)
-   return floor(hash*scale)
+   return (floor(hash*scale))
 end
 
 local function make_equal_fn(key_type)
@@ -122,7 +126,8 @@ local optional_params = {
    hash_seed = false,
    initial_size = 8,
    max_occupancy_rate = 0.9,
-   min_occupancy_rate = 0.0
+   min_occupancy_rate = 0.0,
+   resize_callback = false
 }
 
 function new(params)
@@ -143,6 +148,7 @@ function new(params)
    ctab.occupancy = 0
    ctab.max_occupancy_rate = params.max_occupancy_rate
    ctab.min_occupancy_rate = params.min_occupancy_rate
+   ctab.resize_callback = params.resize_callback
    ctab = setmetatable(ctab, { __index = CTable })
    ctab:reseed_hash_function(params.hash_seed)
    ctab:resize(params.initial_size)
@@ -228,6 +234,9 @@ function CTable:resize(size)
          self:add(old_entries[i].key, old_entries[i].value)
       end
    end
+   if self.resize_callback then
+      self.resize_callback(self, old_size)
+   end
 end
 
 function CTable:get_backing_size()
@@ -246,7 +255,7 @@ struct {
 ]]
 
 function load(stream, params)
-   local header = stream:read_ptr(header_t)
+   local header = stream:read_struct(nil, header_t)
    local params_copy = {}
    for k,v in pairs(params) do params_copy[k] = v end
    params_copy.initial_size = header.size
@@ -261,20 +270,18 @@ function load(stream, params)
 
    -- Slurp the entries directly into the ctable's backing store.
    -- This ensures that the ctable is in hugepages.
-   C.memcpy(ctab.entries,
-            stream:read_array(ctab.entry_type, entry_count),
-            ffi.sizeof(ctab.entry_type) * entry_count)
+   stream:read_array(ctab.entries, ctab.entry_type, entry_count)
 
    return ctab
 end
 
 function CTable:save(stream)
-   stream:write_ptr(header_t(self.size, self.occupancy, self.max_displacement,
-                             self.hash_seed, self.max_occupancy_rate,
-                             self.min_occupancy_rate),
-                    header_t)
-   stream:write_array(self.entries,
-                      self.entry_type,
+   stream:write_struct(header_t,
+                       header_t(self.size, self.occupancy, self.max_displacement,
+                                self.hash_seed, self.max_occupancy_rate,
+                                self.min_occupancy_rate))
+   stream:write_array(self.entry_type,
+                      self.entries,
                       self.size + self.max_displacement)
 end
 
@@ -662,42 +669,16 @@ function selftest()
       -- Save the table out to disk, reload it, and run the same
       -- checks.
       local tmp = os.tmpname()
+      local file = require("lib.stream.file")
       do
-         local file = io.open(tmp, 'wb')
-         local function write(ptr, size)
-            file:write(ffi.string(ptr, size))
-         end
-         local stream = {}
-         function stream:write_ptr(ptr, type)
-            assert(ffi.sizeof(ptr) == ffi.sizeof(type))
-            write(ptr, ffi.sizeof(type))
-         end
-         function stream:write_array(ptr, type, count)
-            write(ptr, ffi.sizeof(type) * count)
-         end
+         local stream = file.open(tmp, 'wb')
          ctab:save(stream)
-         file:close()
+         stream:close()
       end
       do
-         local file = io.open(tmp, 'rb')
-         -- keep references to avoid GCing too early
-         local handle = {}
-         local function read(size)
-            local buf = ffi.new('uint8_t[?]', size)
-            ffi.copy(buf, file:read(size), size)
-            table.insert(handle, buf)
-            return buf
-         end
-         local stream = {}
-         function stream:read_ptr(type)
-            return ffi.cast(ffi.typeof('$*', type), read(ffi.sizeof(type)))
-         end
-         function stream:read_array(type, count)
-            return ffi.cast(ffi.typeof('$*', type),
-                            read(ffi.sizeof(type) * count))
-         end
+         local stream = file.open(tmp, 'rb')
          ctab = load(stream, params)
-         file:close()
+         stream:close()
       end         
       os.remove(tmp)
    end

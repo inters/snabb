@@ -20,6 +20,7 @@ local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local numa = require("lib.numa")
 local yang = require("lib.yang.yang")
+local file = require("lib.stream.file")
 local cltable = require("lib.cltable")
 local pci = require("lib.hardware.pci")
 local S = require("syscall")
@@ -173,19 +174,6 @@ function run_vita (opt)
       end
    end
 
-   -- Helper for loading the SA database as a configuration file in Snabb YANG
-   -- text format.
-   local function try_load_sa_db ()
-      local function load_sa_db ()
-         return yang.load_config_for_schema(
-            schemata['ephemeral-keys'],
-            lib.readfile(sa_db_path, "a*"),
-            sa_db_path
-         )
-      end
-      return pcall(load_sa_db)
-   end
-
    -- This is how we imperatively incorporate the SA database into the
    -- configuration proper. NB: see schema_support and the use of purify above.
    local function merge_sa_db (sa_db)
@@ -207,7 +195,8 @@ function run_vita (opt)
    while true do
       supervisor:main(1)
       if sa_db_needs_reload() then
-         local success, sa_db = try_load_sa_db()
+         local success, sa_db = pcall(yang.load_configuration, sa_db_path,
+                                      {schema_name='vita-ephemeral-keys'})
          if success then
             supervisor:info("Reloading SA database: %s", sa_db_path)
             supervisor:update_configuration(merge_sa_db(sa_db), 'set', '/')
