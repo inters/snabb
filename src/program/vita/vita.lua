@@ -152,6 +152,7 @@ function run_vita (opt)
       schema_support = schema_support,
       initial_configuration = opt.initial_configuration or {},
       setup_fn = purify(opt.setup_fn or vita_workers),
+      cpuset = opt.cpuset,
       worker_default_scheduling = {busywait=opt.busywait or false,
                                    real_time=opt.realtime or false},
       worker_jit_flush = false
