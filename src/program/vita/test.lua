@@ -113,7 +113,8 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
          nexthop_ip4 = private_interface_defaults.ip4.default
       },
       packet_size = pktsize,
-      nroutes = nroutes
+      nroutes = nroutes,
+      negotiation_ttl = nroutes
    }
 
    local function configure_private_router_softbench (conf)
@@ -193,7 +194,9 @@ defaults = {
    public_interface = {},
    route_prefix = {default="172.16"},
    nroutes = {default=1},
-   packet_size = {default="IMIX"}
+   packet_size = {default="IMIX"},
+   sa_ttl = {default=16},
+   negotiation_ttl = {default=1}
 }
 private_interface_defaults = {
    pci = {default="00:00.0"},
@@ -262,8 +265,8 @@ function gen_configuration (conf)
       private_interface = conf.private_interface,
       public_interface = conf.public_interface,
       route = {},
-      negotiation_ttl = conf.nroutes,
-      sa_ttl = 16
+      negotiation_ttl = conf.negotiation_ttl,
+      sa_ttl = conf.sa_ttl
    }
    for route = 1, conf.nroutes do
       cfg.route["test"..route] = {
