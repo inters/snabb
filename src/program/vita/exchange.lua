@@ -459,9 +459,14 @@ function KeyManager:commit_sa_db ()
 end
 
 -- Vita: simple key exchange (vita-ske, version 1g). See README.exchange
+--
+-- NB: adds a pseudo state “_send_key” that represents the moment in which the
+-- active party has received a nonce response, but has not offered a key yet.
+-- This pseudo state is used to enforce that exchange_key is called before
+-- receive_key by the active party.
 
 Protocol = {
-   status = { idle = 0, wait_nonce = 1, wait_key = 2, complete = 3 },
+   status = { idle = 0, wait_nonce = 1, _send_key = 100, wait_key = 2, complete = 3 },
    code = { protocol = 0, authentication = 1, parameter = 2, expired = 3},
    preshared_key_bytes = C.crypto_auth_hmacsha512256_KEYBYTES,
    public_key_bytes = C.crypto_scalarmult_curve25519_BYTES,
@@ -574,14 +579,15 @@ function Protocol:receive_nonce (nonce_message)
       return nil, self:send_nonce(nonce_message)
    elseif self.status == Protocol.status.wait_nonce then
       self:intern_nonce(nonce_message)
-      self.status = Protocol.status.wait_key
+      self.status = Protocol.status._send_key
       self:set_deadline()
       return nil
    else return Protocol.code.protocol end
 end
 
 function Protocol:exchange_key (key_message)
-   if self.status == Protocol.status.wait_key then
+   if self.status == Protocol.status._send_key then
+      self.status = Protocol.status.wait_key
       return nil, self:send_key(key_message)
    else return Protocol.code.protocol end
 end
@@ -786,9 +792,8 @@ function selftest ()
    assert(e == Protocol.code.protocol and not m)
    local e, m = A:receive_nonce(nonce_b)
    assert(e == Protocol.code.protocol and not m)
-   -- XXX below shouldn’t work
-   -- local e, m = A:receive_key(Protocol.key_message:new{})
-   -- assert(e == Protocol.code.protocol and not m)
+   local e, m = A:receive_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.protocol and not m)
    local e, rx, tx = A:derive_ephemeral_keys()
    assert(e == Protocol.code.protocol and not (rx or tx))
 
@@ -809,9 +814,8 @@ function selftest ()
    assert(e == Protocol.code.protocol and not m)
    local e, m = A:receive_nonce(nonce_b)
    assert(e == Protocol.code.protocol and not m)
-   -- XXX below shouldn’t work
-   -- local e, m = A:exchange_key(Protocol.key_message:new{})
-   -- assert(e == Protocol.code.protocol and not m)
+   local e, m = A:exchange_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.protocol and not m)
    local e, rx, tx = A:derive_ephemeral_keys()
    assert(e == Protocol.code.protocol and not (rx or tx))
    local e, m = A:receive_key(Protocol.key_message:new{})
