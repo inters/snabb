@@ -731,3 +731,141 @@ function Transport.header:message_type (message_type)
    end
    return h.message_type
 end
+
+-- Test Protocol FSM
+function selftest ()
+   local old_now = engine.now
+   local now
+   engine.now = function () return now end
+   local key1 = ffi.new("uint8_t[20]");
+   local key2 = ffi.new("uint8_t[20]"); key2[0] = 1
+   local A = Protocol:new(1234, key1, 2)
+   local B = Protocol:new(1234, key1, 2)
+   local C = Protocol:new(1234, key2, 2)
+
+   now = 0
+
+   -- Idle fsm can either receive_nonce, receive_key, or initiate_exchange
+
+   local e, m = A:receive_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.authentication and not m)
+   local e, m = A:exchange_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, rx, tx = A:derive_ephemeral_keys()
+   assert(e == Protocol.code.protocol and not (rx or tx))
+
+   local e, m = A:receive_nonce(Protocol.nonce_message:new{})
+   assert(not e and m)
+
+   local e, nonce_a = A:initiate_exchange(Protocol.nonce_message:new{})
+   assert(not e and nonce_a)
+
+   -- B receives nonce request
+
+   local e, nonce_b = B:receive_nonce(nonce_a)
+   assert(not e)
+   assert(nonce_b)
+
+   -- Active fsm waiting for nonce can only receive nonce
+
+   local e, m = A:initiate_exchange(Protocol.nonce_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:receive_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:exchange_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, rx, tx = A:derive_ephemeral_keys()
+   assert(e == Protocol.code.protocol and not (rx or tx))
+   
+   local e, m = A:receive_nonce(nonce_b)
+   assert(not e and not m)
+
+   -- Active fsm with exchanged nonces must offer key
+
+   local e, m = A:initiate_exchange(Protocol.nonce_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:receive_nonce(nonce_b)
+   assert(e == Protocol.code.protocol and not m)
+   -- XXX below shouldn’t work
+   -- local e, m = A:receive_key(Protocol.key_message:new{})
+   -- assert(e == Protocol.code.protocol and not m)
+   local e, rx, tx = A:derive_ephemeral_keys()
+   assert(e == Protocol.code.protocol and not (rx or tx))
+
+   local e, dh_a = A:exchange_key(Protocol.key_message:new{})
+   assert(not e and dh_a)
+
+   -- Time passes...
+   now = 4
+
+   -- B receives key request
+
+   local e, dh_b = B:receive_key(dh_a)
+   assert(not e and dh_b)
+
+   -- Active fsm that offered its key must wait for matching offer
+
+   local e, m = A:initiate_exchange(Protocol.nonce_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:receive_nonce(nonce_b)
+   assert(e == Protocol.code.protocol and not m)
+   -- XXX below shouldn’t work
+   -- local e, m = A:exchange_key(Protocol.key_message:new{})
+   -- assert(e == Protocol.code.protocol and not m)
+   local e, rx, tx = A:derive_ephemeral_keys()
+   assert(e == Protocol.code.protocol and not (rx or tx))
+   local e, m = A:receive_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.authentication and not m)
+   
+   local e, m = A:receive_key(dh_b)
+   assert(not e and not m)
+
+   -- A and B derive matching ephemeral keys
+
+   local e, m = A:initiate_exchange(Protocol.nonce_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:receive_nonce(nonce_b)
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:exchange_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:receive_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+
+   local e, A_rx, A_tx = A:derive_ephemeral_keys()
+   assert(not e)
+   local e, B_rx, B_tx = B:derive_ephemeral_keys()
+   assert(not e)
+   assert(A_rx.key == B_tx.key)
+   assert(A_rx.salt == B_tx.salt)
+   assert(A_tx.key == B_rx.key)
+   assert(A_tx.salt == B_rx.salt)
+
+   -- Protocol completed successfully and its deadline is reset
+
+   now = 10
+   assert(not A:reset_if_expired() and not B:reset_if_expired())
+   
+   -- Test negotiation expiry
+
+   assert(not A:reset_if_expired())
+   A:initiate_exchange(Protocol.nonce_message:new{})
+   assert(not A:reset_if_expired())
+   now = 13
+   assert(A:reset_if_expired() == Protocol.code.expired)
+   assert(not A:reset_if_expired())
+
+   now = 20
+   local _, nonce_a = A:initiate_exchange(Protocol.nonce_message:new{})
+   local _, nonce_b = B:receive_nonce(nonce_a)
+   now = 25
+   A:receive_nonce(nonce_b)
+   local _, dh_a = A:exchange_key(Protocol.key_message:new{})
+   now = 26
+   assert(not A:reset_if_expired())
+   now = 30
+   assert(A:reset_if_expired() == Protocol.code.expired)
+   assert(not A:reset_if_expired())
+   
+
+   engine.now = old_now
+end
