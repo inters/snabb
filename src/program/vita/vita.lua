@@ -223,8 +223,8 @@ end
 function vita_workers (conf)
    return {
       key_manager = configure_exchange(conf),
-      outbound_router = configure_private_router_with_nic(conf),
-      inbound_router = configure_public_router_with_nic(conf),
+      private_router = configure_private_router_with_nic(conf),
+      public_router = configure_public_router_with_nic(conf),
       encapsulate = configure_esp(conf),
       decapsulate =  configure_dsp(conf)
    }

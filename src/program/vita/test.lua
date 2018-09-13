@@ -145,15 +145,15 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
    local function softbench_workers (conf)
       return {
          key_manager = vita.configure_exchange(conf),
-         inbound_gauge_router = configure_private_router_softbench(conf),
-         outbound_loopback_router = configure_public_router_loopback(conf),
+         private_gauge_router = configure_private_router_softbench(conf),
+         public_loopback_router = configure_public_router_loopback(conf),
          encapsulate = vita.configure_esp(conf),
          decapsulate =  vita.configure_dsp(conf)
       }
    end
 
    local function wait_gauge ()
-      if not worker.status().inbound_gauge_router.alive then
+      if not worker.status().private_gauge_router.alive then
          main.exit()
       end
    end
