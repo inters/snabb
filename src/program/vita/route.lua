@@ -109,24 +109,33 @@ PublicRouter = {
 }
 
 function PublicRouter:new (conf)
-   local index_t = ffi.typeof("uint32_t")
    local o = {
-      ports = {},
-      routes = {},
       routing_table4 = ctable.new{
-         key_type = index_t,
-         value_type = index_t
+         key_type = ffi.typeof("uint32_t"),
+         value_type = ffi.typeof("uint32_t")
       },
       esp = esp:new({})
    }
-   -- XXX: move into :reconfig() to remove pressure on rekey?
+   return setmetatable(o, {__index = PublicRouter}):reconfig(conf)
+end
+
+function PublicRouter:reconfig (conf)
+   self.ports = {}
+   self.routes = {}
+   -- Update FIB entries for SAs
    for spi, sa in pairs(conf.sa) do
-      local index = #o.ports+1
-      assert(ffi.cast(index_t, index) == index, "index overflow")
-      o.routing_table4:add(spi, index)
-      o.ports[index] = sa.route.."_"..spi
+      local index = #self.ports+1
+      assert(ffi.cast("uint32_t", index) == index, "index overflow")
+      self.routing_table4:add(spi, index, 'update')
+      self.ports[index] = sa.route.."_"..spi
    end
-   return setmetatable(o, {__index = PublicRouter})
+   -- Remove obsolete FIB entries
+   for entry in self.routing_table4:iterate() do
+      if not conf.sa[tonumber(entry.key)] then
+         self.routing_table4:remove_ptr(entry)
+      end
+   end
+   return self
 end
 
 function PublicRouter:link ()
