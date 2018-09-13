@@ -460,13 +460,17 @@ end
 
 -- Vita: simple key exchange (vita-ske, version 1g). See README.exchange
 --
--- NB: adds a pseudo state “_send_key” that represents the moment in which the
--- active party has received a nonce response, but has not offered a key yet.
--- This pseudo state is used to enforce that exchange_key is called before
--- receive_key by the active party.
+-- NB: this implementation introduces two pseudo states _send_key and _complete
+-- not present in fsm-protocol.svg. The _send_key state is inserted in between
+-- the transition from wait_nonce to wait_key. Its purpose is to codify and
+-- enforce that exchange_key is called exactly once by the active party. The
+-- _complete state is inserted in between the transition from wait_key back to
+-- idle, and ensures that exactly one ephemeral key pair is derived for each
+-- successful exchange.
 
 Protocol = {
-   status = { idle = 0, wait_nonce = 1, _send_key = 100, wait_key = 2, complete = 3 },
+   status = { idle = 0, wait_nonce = 1, wait_key = 2,
+              _send_key = -1, _complete = -2 },
    code = { protocol = 0, authentication = 1, parameter = 2, expired = 3},
    preshared_key_bytes = C.crypto_auth_hmacsha512256_KEYBYTES,
    public_key_bytes = C.crypto_scalarmult_curve25519_BYTES,
@@ -598,14 +602,14 @@ function Protocol:receive_key (key_message)
       if self:intern_key(key_message) then
          local response = self.status == Protocol.status.idle
                       and self:send_key(key_message)
-         self.status = Protocol.status.complete
+         self.status = Protocol.status._complete
          return nil, response
       else return Protocol.code.authentication end
    else return Protocol.code.protocol end
 end
 
 function Protocol:derive_ephemeral_keys ()
-   if self.status == Protocol.status.complete then
+   if self.status == Protocol.status._complete then
       self:reset()
       if self:derive_shared_secret() then
          local rx = self:derive_key_material(self.p1, self.p2)
@@ -753,21 +757,21 @@ function selftest ()
 
    -- Idle fsm can either receive_nonce, receive_key, or initiate_exchange
 
-   local e, m = A:receive_key(Protocol.key_message:new{})
-   assert(e == Protocol.code.authentication and not m)
    local e, m = A:exchange_key(Protocol.key_message:new{})
    assert(e == Protocol.code.protocol and not m)
+   local e, m = A:receive_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.authentication and not m)
    local e, rx, tx = A:derive_ephemeral_keys()
    assert(e == Protocol.code.protocol and not (rx or tx))
 
    local e, m = A:receive_nonce(Protocol.nonce_message:new{})
    assert(not e and m)
 
+   -- idle -> wait_nonce
    local e, nonce_a = A:initiate_exchange(Protocol.nonce_message:new{})
    assert(not e and nonce_a)
 
    -- B receives nonce request
-
    local e, nonce_b = B:receive_nonce(nonce_a)
    assert(not e)
    assert(nonce_b)
@@ -776,13 +780,14 @@ function selftest ()
 
    local e, m = A:initiate_exchange(Protocol.nonce_message:new{})
    assert(e == Protocol.code.protocol and not m)
-   local e, m = A:receive_key(Protocol.key_message:new{})
-   assert(e == Protocol.code.protocol and not m)
    local e, m = A:exchange_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:receive_key(Protocol.key_message:new{})
    assert(e == Protocol.code.protocol and not m)
    local e, rx, tx = A:derive_ephemeral_keys()
    assert(e == Protocol.code.protocol and not (rx or tx))
-   
+
+   -- wait_nonce -> _send_key
    local e, m = A:receive_nonce(nonce_b)
    assert(not e and not m)
 
@@ -797,14 +802,12 @@ function selftest ()
    local e, rx, tx = A:derive_ephemeral_keys()
    assert(e == Protocol.code.protocol and not (rx or tx))
 
+   -- _send_key -> wait_key
    local e, dh_a = A:exchange_key(Protocol.key_message:new{})
    assert(not e and dh_a)
 
-   -- Time passes...
-   now = 4
 
    -- B receives key request
-
    local e, dh_b = B:receive_key(dh_a)
    assert(not e and dh_b)
 
@@ -812,31 +815,35 @@ function selftest ()
 
    local e, m = A:initiate_exchange(Protocol.nonce_message:new{})
    assert(e == Protocol.code.protocol and not m)
-   local e, m = A:receive_nonce(nonce_b)
-   assert(e == Protocol.code.protocol and not m)
    local e, m = A:exchange_key(Protocol.key_message:new{})
    assert(e == Protocol.code.protocol and not m)
-   local e, rx, tx = A:derive_ephemeral_keys()
-   assert(e == Protocol.code.protocol and not (rx or tx))
+   local e, m = A:receive_nonce(nonce_b)
+   assert(e == Protocol.code.protocol and not m)
    local e, m = A:receive_key(Protocol.key_message:new{})
    assert(e == Protocol.code.authentication and not m)
-   
+   local e, rx, tx = A:derive_ephemeral_keys()
+   assert(e == Protocol.code.protocol and not (rx or tx))
+
+   -- wait_key -> _complete
    local e, m = A:receive_key(dh_b)
    assert(not e and not m)
 
-   -- A and B derive matching ephemeral keys
+   -- Complete fsm must derive ephemeral keys
 
    local e, m = A:initiate_exchange(Protocol.nonce_message:new{})
    assert(e == Protocol.code.protocol and not m)
-   local e, m = A:receive_nonce(nonce_b)
-   assert(e == Protocol.code.protocol and not m)
    local e, m = A:exchange_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:receive_nonce(nonce_b)
    assert(e == Protocol.code.protocol and not m)
    local e, m = A:receive_key(Protocol.key_message:new{})
    assert(e == Protocol.code.protocol and not m)
 
+   -- _complete -> idle
    local e, A_rx, A_tx = A:derive_ephemeral_keys()
    assert(not e)
+
+   -- Ephemeral keys should match
    local e, B_rx, B_tx = B:derive_ephemeral_keys()
    assert(not e)
    assert(A_rx.key == B_tx.key)
@@ -844,32 +851,35 @@ function selftest ()
    assert(A_tx.key == B_rx.key)
    assert(A_tx.salt == B_rx.salt)
 
-   -- Protocol completed successfully and its deadline is reset
-
-   now = 10
-   assert(not A:reset_if_expired() and not B:reset_if_expired())
-   
    -- Test negotiation expiry
 
-   assert(not A:reset_if_expired())
+   -- Idle fsm should have its deadline reset
+   now = 10
+   assert(not A:reset_if_expired() and not B:reset_if_expired())
+
+   -- idle -> wait_nonce
    A:initiate_exchange(Protocol.nonce_message:new{})
    assert(not A:reset_if_expired())
-   now = 13
+
+   -- wait_nonce -> idle
+   now = 12.0123
    assert(A:reset_if_expired() == Protocol.code.expired)
+
+   -- idle -> wait_nonce
+   local _, nonce_a = A:initiate_exchange(Protocol.nonce_message:new{})
+
+   -- wait_nonce -> _send_key
+   now = 20
+   local _, nonce_b = B:receive_nonce(nonce_a)
+   A:receive_nonce(nonce_b)
+
+   -- _send_key -> wait_key
+   local _, dh_a = A:exchange_key(Protocol.key_message:new{})
    assert(not A:reset_if_expired())
 
-   now = 20
-   local _, nonce_a = A:initiate_exchange(Protocol.nonce_message:new{})
-   local _, nonce_b = B:receive_nonce(nonce_a)
-   now = 25
-   A:receive_nonce(nonce_b)
-   local _, dh_a = A:exchange_key(Protocol.key_message:new{})
-   now = 26
-   assert(not A:reset_if_expired())
+   -- wait_key -> idle
    now = 30
    assert(A:reset_if_expired() == Protocol.code.expired)
-   assert(not A:reset_if_expired())
-   
 
    engine.now = old_now
 end
