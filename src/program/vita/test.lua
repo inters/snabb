@@ -143,13 +143,15 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
    end
 
    local function softbench_workers (conf)
-      return {
+      local workers = {
          key_manager = vita.configure_exchange(conf),
          private_gauge_router = configure_private_router_softbench(conf),
-         public_loopback_router = configure_public_router_loopback(conf),
-         encapsulate = vita.configure_esp(conf),
-         decapsulate =  vita.configure_dsp(conf)
+         public_loopback_router = configure_public_router_loopback(conf)
       }
+      for name, worker in pairs(vita.capsule_workers(conf)) do
+         workers[name] = worker
+      end
+      return workers
    end
 
    local function wait_gauge ()

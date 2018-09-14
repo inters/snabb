@@ -221,13 +221,24 @@ function run_vita (opt)
 end
 
 function vita_workers (conf)
-   return {
+   local workers = {
       key_manager = configure_exchange(conf),
       private_router = configure_private_router_with_nic(conf),
       public_router = configure_public_router_with_nic(conf),
-      encapsulate = configure_esp(conf),
-      decapsulate =  configure_dsp(conf)
    }
+   for name, worker in pairs(capsule_workers(conf)) do
+      workers[name] = worker
+   end
+   return workers
+end
+
+function capsule_workers (conf)
+   local workers = {}
+   for id, _ in pairs(conf.route) do
+      workers["encapsulate_"..id] = configure_esp(conf, id)
+      workers["decapsulate_"..id] = configure_dsp(conf, id)
+   end
+   return workers
 end
 
 function configure_private_router (conf, append)
@@ -412,51 +423,55 @@ end
 -- sa_db := { outbound_sa={<spi>=(SA), ...}, inbound_sa={<spi>=(SA), ...} }
 -- (see exchange)
 
-function configure_esp (sa_db, append)
+function configure_esp (sa_db, route, append)
    sa_db = parse_conf(sa_db)
    local c = append or config.new()
 
    for spi, sa in pairs(sa_db.outbound_sa) do
-      -- Configure interlink receiver/transmitter for outbound SA
-      local ESP_in = "ESP_"..sa.route.."_in"
-      local ESP_out = "ESP_"..sa.route.."_out"
-      config.app(c, ESP_in.."_Rx", Receiver, ESP_in)
-      config.app(c, ESP_out.."_Tx", Transmitter, ESP_out)
-      -- Configure outbound SA
-      local ESP = "ESP_"..sa.route
-      config.app(c, ESP, tunnel.Encapsulate, {
-                    spi = spi,
-                    aead = sa.aead,
-                    key = sa.key,
-                    salt = sa.salt
-      })
-      config.link(c, ESP_in.."_Rx.output -> "..ESP..".input4")
-      config.link(c, ESP..".output -> "..ESP_out.."_Tx.input")
+      if sa.route == route then
+         -- Configure interlink receiver/transmitter for outbound SA
+         local ESP_in = "ESP_"..sa.route.."_in"
+         local ESP_out = "ESP_"..sa.route.."_out"
+         config.app(c, ESP_in.."_Rx", Receiver, ESP_in)
+         config.app(c, ESP_out.."_Tx", Transmitter, ESP_out)
+         -- Configure outbound SA
+         local ESP = "ESP_"..sa.route
+         config.app(c, ESP, tunnel.Encapsulate, {
+                       spi = spi,
+                       aead = sa.aead,
+                       key = sa.key,
+                       salt = sa.salt
+         })
+         config.link(c, ESP_in.."_Rx.output -> "..ESP..".input4")
+         config.link(c, ESP..".output -> "..ESP_out.."_Tx.input")
+      end
    end
 
    return c
 end
 
-function configure_dsp (sa_db, append)
+function configure_dsp (sa_db, route, append)
    sa_db = parse_conf(sa_db)
    local c = append or config.new()
 
    for spi, sa in pairs(sa_db.inbound_sa) do
-      -- Configure interlink receiver/transmitter for inbound SA
-      local DSP_in = "DSP_"..sa.route.."_in"
-      local DSP_out = "DSP_"..sa.route.."_out"
-      config.app(c, DSP_in.."_Rx", Receiver, DSP_in)
-      config.app(c, DSP_out.."_Tx", Transmitter, DSP_out)
-      -- Configure inbound SA
-      local DSP = "DSP_"..sa.route
-      config.app(c, DSP, tunnel.Decapsulate, {
-                    spi = spi,
-                    aead = sa.aead,
-                    key = sa.key,
-                    salt = sa.salt
-      })
-      config.link(c, DSP_in.."_Rx.output -> "..DSP..".input")
-      config.link(c, DSP..".output4 -> "..DSP_out.."_Tx.input")
+      if sa.route == route then
+         -- Configure interlink receiver/transmitter for inbound SA
+         local DSP_in = "DSP_"..sa.route.."_in"
+         local DSP_out = "DSP_"..sa.route.."_out"
+         config.app(c, DSP_in.."_Rx", Receiver, DSP_in)
+         config.app(c, DSP_out.."_Tx", Transmitter, DSP_out)
+         -- Configure inbound SA
+         local DSP = "DSP_"..sa.route
+         config.app(c, DSP, tunnel.Decapsulate, {
+                       spi = spi,
+                       aead = sa.aead,
+                       key = sa.key,
+                       salt = sa.salt
+         })
+         config.link(c, DSP_in.."_Rx.output -> "..DSP..".input")
+         config.link(c, DSP..".output4 -> "..DSP_out.."_Tx.input")
+      end
    end
 
    return c
