@@ -5,7 +5,6 @@ module(...,package.seeall)
 local vita = require("program.vita.vita")
 local worker = require("core.worker")
 local lib = require("core.lib")
-local CPUSet = require("lib.cpuset")
 local basic_apps = require("apps.basic.basic_apps")
 local Synth = require("apps.test.synth").Synth
 local Receiver = require("apps.interlink.receiver")
@@ -142,14 +141,15 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
       return c
    end
 
-   local function softbench_workers (conf)
-      return {
-         key_manager = vita.configure_exchange(conf),
-         private_gauge_router = configure_private_router_softbench(conf),
-         public_loopback_router = configure_public_router_loopback(conf),
-         encapsulate = vita.configure_esp(conf),
-         decapsulate =  vita.configure_dsp(conf)
-      }
+   local function softbench_workers (conf, cpuset)
+      local workers, attributes = vita.capsule_workers(conf, cpuset)
+      workers.key_manager = vita.configure_exchange(conf)
+      attributes.key_manager = {scheduling={cpu=cpuset[1]}}
+      workers.private_gauge_router = configure_private_router_softbench(conf)
+      attributes.private_gauge_router = {scheduling={cpu=cpuset[2]}}
+      workers.public_loopback_router = configure_public_router_loopback(conf)
+      attributes.public_loopback_router = {scheduling={cpu=cpuset[3]}}
+      return workers, attributes
    end
 
    local function wait_gauge ()
@@ -159,15 +159,15 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
    end
    timer.activate(timer.new('wait_gauge', wait_gauge, 1e9/10, 'repeating'))
 
-   local cpuset = CPUSet:new()
+   local cpuset = {}
    if cpuspec then
-      CPUSet.global_cpuset():add_from_string(cpuspec)
+      cpuset = vita.parse_cpuset(cpuspec)
    end
 
    vita.run_vita{
       setup_fn = softbench_workers,
       initial_configuration = gen_configuration(testconf),
-      cpuset = cpuspec and CPUSet:new():add_from_string(cpuspec)
+      cpuset = cpuset
    }
 end
 
