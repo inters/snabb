@@ -63,10 +63,12 @@ Create and start a new manager for a `ptree` process tree.  *parameters*
 is a table of key/value pairs.  The following keys are required:
 
  * `schema_name`: The name of a YANG schema describing this network function.
- * `setup_fn`: A function mapping a configuration to a worker set.  A
-   worker set is a table mapping worker IDs to app graphs (`core.config`
-   instances).  See [the setup function described in the `snabb ptree`
-   documentation](../../program/ptree/README.md) for a full example.
+ * `setup_fn`: A function mapping a configuration to a worker set and
+   attributes. A worker set is a table mapping worker IDs to app graphs
+   (`core.config` instances). Attributes are a table mapping worker IDs to
+   auxiliary configuration tables. See [the setup function described in the
+   `snabb ptree` documentation](../../program/ptree/README.md) for a full
+   example.
  * `initial_configuration`: The initial network configuration for the
    network function, for example as returned by
    `lib.yang.yang.load_configuration`.  Must be an instance of

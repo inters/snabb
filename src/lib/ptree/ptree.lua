@@ -146,7 +146,7 @@ function Manager:set_initial_configuration (configuration)
    self.current_in_place_dependencies = {}
 
    -- Start the workers and configure them.
-   local worker_app_graphs = self.setup_fn(configuration)
+   local worker_app_graphs, worker_attributes = self.setup_fn(configuration)
 
    -- Calculate the dependences
    self.current_in_place_dependencies =
@@ -156,7 +156,8 @@ function Manager:set_initial_configuration (configuration)
 
    -- Iterate over workers starting the workers and queuing up actions.
    for id, worker_app_graph in pairs(worker_app_graphs) do
-      self:start_worker_for_graph(id, worker_app_graph)
+      local attributes = (worker_attributes and worker_attributes[id]) or {}
+      self:start_worker_for_graph(id, worker_app_graph, attributes)
    end
 end
 
@@ -196,7 +197,9 @@ function Manager:remove_stale_workers()
    for _, id in ipairs(stale) do
       self:state_change_event('worker_stopped', id)
       if self.workers[id].scheduling.cpu then
-	 self.cpuset:release(self.workers[id].scheduling.cpu)
+         if not self.workers[id].attributes.scheduling then
+            self.cpuset:release(self.workers[id].scheduling.cpu)
+         end
       end
       self.workers[id] = nil
 
@@ -216,19 +219,24 @@ function Manager:acquire_cpu_for_worker(id, app_graph)
    return self.cpuset:acquire_for_pci_addresses(pci_addresses)
 end
 
-function Manager:compute_scheduling_for_worker(id, app_graph)
+function Manager:compute_scheduling_for_worker(id, app_graph, attributes)
    local ret = {}
    for k, v in pairs(self.worker_default_scheduling) do ret[k] = v end
-   ret.cpu = self:acquire_cpu_for_worker(id, app_graph)
+   if attributes.scheduling then
+      -- Default scheduling can be overridded via attributes.scheduling
+      for k, v in pairs(attributes.scheduling) do ret[k] = v end
+   else
+      ret.cpu = self:acquire_cpu_for_worker(id, app_graph)
+   end
    return ret
 end
 
-function Manager:start_worker_for_graph(id, graph)
-   local scheduling = self:compute_scheduling_for_worker(id, graph)
+function Manager:start_worker_for_graph(id, graph, attributes)
+   local scheduling = self:compute_scheduling_for_worker(id, graph, attributes)
    self:info('Starting worker %s.', id)
    self.workers[id] = { scheduling=scheduling,
                         pid=self:start_worker(id, scheduling),
-                        queue={}, graph=graph }
+                        queue={}, graph=graph, attributes=attributes }
    self:state_change_event('worker_starting', id)
    self:debug('Worker %s has PID %s.', id, self.workers[id].pid)
    local actions = self.support.compute_config_actions(
@@ -341,10 +349,10 @@ function Manager:update_configuration (update_fn, verb, path, ...)
          self.schema_name, self.current_configuration, verb, path,
          self.current_in_place_dependencies, ...)
    local new_config = update_fn(self.current_configuration, ...)
-   local new_graphs = self.setup_fn(new_config, ...)
+   local new_graphs, meta = self.setup_fn(new_config, ...)
    for id, graph in pairs(new_graphs) do
       if self.workers[id] == nil then
-	 self:start_worker_for_graph(id, graph)
+	 self:start_worker_for_graph(id, graph, meta[id])
       end
    end
 
