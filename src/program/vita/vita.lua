@@ -29,6 +29,7 @@ local confighelp = require("program.vita.README_config_inc")
 
 local ptree = require("lib.ptree.ptree")
 local generic_schema_support = require("lib.ptree.support").generic_schema_config_support
+local CPUSet = require("lib.cpuset")
 
 local confspec = {
    private_interface = {},
@@ -146,7 +147,13 @@ function run_vita (opt)
 
    -- Vita uses an alternate CPU core binding scheme allow workload-similar
    -- processes to reliably share physical cores with each other (see
-   -- Hyperthreads).
+   -- Hyperthreads). We still pass the CPU set as an init argument to the ptree
+   -- manager...
+   local cpuset = CPUSet:new()
+   for _, cpu in ipairs(opt.cpuset) do
+      cpuset:add(cpu)
+   end
+   -- ...but assign CPUs to workers explicitly in the setup_fn.
    local setup_fn = purify(function (conf)
          return (opt.setup_fn or vita_workers)(conf, opt.cpuset)
    end)
@@ -158,6 +165,7 @@ function run_vita (opt)
       schema_support = schema_support,
       initial_configuration = opt.initial_configuration or {},
       setup_fn = setup_fn,
+      cpuset = cpuset,
       worker_default_scheduling = {busywait=opt.busywait or false,
                                    real_time=opt.realtime or false},
       worker_jit_flush = false
