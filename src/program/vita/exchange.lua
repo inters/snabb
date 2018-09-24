@@ -339,7 +339,8 @@ function KeyManager:handle_key_request (route, message)
    else assert(not ecode) end
 
    counter.add(self.shm.keypairs_negotiated)
-   audit:log("Completed key exchange for '"..route.id.."'")
+   audit:log(("Completed key exchange for '%s' (rx-spi %d, tx-spi %d)"):
+         format(route.id, rx.spi, tx.spi))
 
    if response then
       link.transmit(self.output.output, self:request(route, response))
