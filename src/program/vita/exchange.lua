@@ -167,6 +167,10 @@ KeyManager = {
 
 local status = { expired = 0, rekey = 1, ready = 2 }
 
+local function jitter (s) -- compute random jitter of up to s seconds
+   return s * math.random(1000) / 1000
+end
+
 function KeyManager:new (conf)
    local o = {
       routes = {},
@@ -225,7 +229,8 @@ function KeyManager:reconfig (conf)
             status = status.expired,
             rx_sa = nil, prev_rx_sa = nil, tx_sa = nil,
             sa_timeout = nil, prev_sa_timeout = nil, rekey_timeout = nil,
-            protocol = Protocol:new(route.spi, new_key, conf.negotiation_ttl)
+            protocol = Protocol:new(route.spi, new_key, conf.negotiation_ttl),
+            negotiation_delay = lib.timeout(0)
          }
          table.insert(new_routes, new_route)
          -- clean up after the old route if necessary
@@ -260,6 +265,9 @@ function KeyManager:push ()
       if route.protocol:reset_if_expired() == Protocol.code.expired then
          counter.add(self.shm.negotiations_expired)
          audit:log("Negotiation expired for '"..route.id.."' (negotiation_ttl)")
+         route.negotiation_delay = lib.timeout(
+            self.negotiation_ttl + jitter(.25)
+         )
       end
       if route.status > status.expired and route.sa_timeout() then
          counter.add(self.shm.keypairs_expired)
@@ -271,7 +279,7 @@ function KeyManager:push ()
       if route.status > status.rekey and route.rekey_timeout() then
          route.status = status.rekey
       end
-      if route.status < status.ready then
+      if route.status < status.ready and route.negotiation_delay() then
          self:negotiate(route)
       end
    end
@@ -376,7 +384,7 @@ function KeyManager:configure_route (route, rx, tx)
       salt = lib.hexdump(tx.salt)
    }
    route.sa_timeout = lib.timeout(self.sa_ttl)
-   route.rekey_timeout = lib.timeout(self.sa_ttl/2)
+   route.rekey_timeout = lib.timeout(self.sa_ttl/2 + jitter(.25))
    self:commit_sa_db()
 end
 
