@@ -542,6 +542,12 @@ function Protocol.nonce_message:new (config)
    return o
 end
 
+function Protocol.nonce_message:new_from_mem (mem, size)
+   if size == self:sizeof() then
+      return self:superClass().new_from_mem(self, mem, size)
+   end
+end
+
 function Protocol.nonce_message:nonce (nonce)
    local h = self:header()
    if nonce ~= nil then
@@ -556,6 +562,12 @@ function Protocol.key_message:new (config)
    o:public_key(config.public_key)
    o:auth_code(config.auth_code)
    return o
+end
+
+function Protocol.key_message:new_from_mem (mem, size)
+   if size == self:sizeof() then
+      return self:superClass().new_from_mem(self, mem, size)
+   end
 end
 
 function Protocol.key_message:spi (spi)
