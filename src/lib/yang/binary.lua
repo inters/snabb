@@ -323,7 +323,8 @@ end
 function data_compiler_from_grammar(emit_data, schema_name, schema_revision)
    return function(data, filename, source_mtime)
       source_mtime = source_mtime or {sec=0, nsec=0}
-      local stream = file.tmpfile("rusr,wusr,rgrp,roth", lib.dirname(filename))
+--      local stream = file.tmpfile("rusr,wusr,rgrp,roth", lib.dirname(filename))
+      local stream = assert(file.open(filename, 'w'))
       local strtab = string_table_builder()
       local header = header_t(
          MAGIC, VERSION, source_mtime.sec, source_mtime.nsec,
@@ -340,7 +341,7 @@ function data_compiler_from_grammar(emit_data, schema_name, schema_revision)
       assert(stream:seek('set', 0))
       -- Fix up header.
       stream:write_struct(header_t, header)
-      stream:rename(filename)
+--      stream:rename(filename)
       stream:close()
    end
 end
