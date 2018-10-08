@@ -73,7 +73,10 @@ function Worker:commit_pending_actions()
          table.insert(to_apply, action)
       end
    end
-   if #to_apply > 0 then engine.apply_config_actions(to_apply) end
+   if #to_apply > 0 then
+      engine.apply_config_actions(to_apply)
+      counter.add(engine.configs)
+   end
    self.pending_actions = {}
    if should_flush then require('jit').flush() end
 end
