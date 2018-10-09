@@ -116,10 +116,16 @@ function PublicRouter:new (conf)
       },
       esp = esp:new({})
    }
-   return setmetatable(o, {__index = PublicRouter}):reconfig(conf)
+   self.build_fib(o, conf)
+   return setmetatable(o, {__index = PublicRouter})
 end
 
 function PublicRouter:reconfig (conf)
+   self:build_fib(conf)
+   self:link() -- links might have changed before reconfig
+end
+
+function PublicRouter:build_fib (conf)
    self.ports = {}
    self.routes = {}
    -- Update FIB entries for SAs
@@ -135,7 +141,6 @@ function PublicRouter:reconfig (conf)
          self.routing_table4:remove_ptr(entry)
       end
    end
-   return self
 end
 
 function PublicRouter:link ()
