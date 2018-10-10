@@ -148,8 +148,8 @@ KeyManager = {
       node_ip4 = {required=true},
       routes = {required=true},
       sa_db_path = {required=true},
-      negotiation_ttl = {default=10},
-      sa_ttl = {default=(24 * 60 * 60)}
+      negotiation_ttl = {default=5}, -- default:  5 seconds
+      sa_ttl = {default=(10 * 60)}   -- default: 10 minutes
    },
    shm = {
       rxerrors = {counter},
