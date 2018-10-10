@@ -134,7 +134,6 @@ local header = require("lib.protocol.header")
 local lib = require("core.lib")
 local ipv4 = require("lib.protocol.ipv4")
 local yang = require("lib.yang.yang")
-local cltable = require("lib.cltable")
 local schemata = require("program.vita.schemata")
 local audit = lib.logger_new({rate=32, module='KeyManager'})
 require("program.vita.sodium_h")
@@ -167,13 +166,19 @@ KeyManager = {
 
 local status = { expired = 0, rekey = 1, ready = 2 }
 
+local function jitter (s) -- compute random jitter of up to s seconds
+   return s * math.random(1000) / 1000
+end
+
 function KeyManager:new (conf)
    local o = {
       routes = {},
       ip = ipv4:new({}),
       transport = Transport.header:new({}),
       nonce_message = Protocol.nonce_message:new({}),
-      key_message = Protocol.key_message:new({})
+      key_message = Protocol.key_message:new({}),
+      sa_db_updated = false,
+      sa_db_commit_throttle = lib.throttle(1)
    }
    local self = setmetatable(o, { __index = KeyManager })
    self:reconfig(conf)
@@ -223,9 +228,11 @@ function KeyManager:reconfig (conf)
             preshared_key = new_key,
             spi = route.spi,
             status = status.expired,
-            rx_sa = nil, prev_rx_sa = nil, tx_sa = nil,
+            rx_sa = nil, prev_rx_sa = nil, tx_sa = nil, next_tx_sa = nil,
             sa_timeout = nil, prev_sa_timeout = nil, rekey_timeout = nil,
-            protocol = Protocol:new(route.spi, new_key, conf.negotiation_ttl)
+            next_tx_sa_activation_delay = nil,
+            protocol = Protocol:new(route.spi, new_key, conf.negotiation_ttl),
+            negotiation_delay = lib.timeout(0)
          }
          table.insert(new_routes, new_route)
          -- clean up after the old route if necessary
@@ -255,11 +262,14 @@ function KeyManager:push ()
       packet.free(request)
    end
 
-   -- process protocol timeouts and initiate (re-)negotiation for SAs
    for _, route in ipairs(self.routes) do
+      -- process protocol timeouts and initiate (re-)negotiation for SAs
       if route.protocol:reset_if_expired() == Protocol.code.expired then
          counter.add(self.shm.negotiations_expired)
          audit:log("Negotiation expired for '"..route.id.."' (negotiation_ttl)")
+         route.negotiation_delay = lib.timeout(
+            self.negotiation_ttl + jitter(.25)
+         )
       end
       if route.status > status.expired and route.sa_timeout() then
          counter.add(self.shm.keypairs_expired)
@@ -271,9 +281,21 @@ function KeyManager:push ()
       if route.status > status.rekey and route.rekey_timeout() then
          route.status = status.rekey
       end
-      if route.status < status.ready then
+      if route.status < status.ready and route.negotiation_delay() then
          self:negotiate(route)
       end
+
+      -- activate new tx SAs
+      if route.next_tx_sa and route.next_tx_sa_activation_delay() then
+         audit:log("Activating next outbound SA for '"..route.id.."'")
+         self:activate_next_tx_sa(route)
+      end
+   end
+
+   -- commit SA database if necessary
+   if self.sa_db_updated and self.sa_db_commit_throttle() then
+      self:commit_sa_db()
+      self.sa_db_updated = false
    end
 end
 
@@ -359,6 +381,8 @@ function KeyManager:configure_route (route, rx, tx)
       end
    end
    route.status = status.ready
+   -- Cycle inbound SAs immediately (keep receiving packets on the previous
+   -- inbound SA for up to the duration of its sa_ttl timeout.)
    route.prev_rx_sa = route.rx_sa
    route.prev_sa_timeout = route.sa_timeout
    route.rx_sa = {
@@ -368,33 +392,52 @@ function KeyManager:configure_route (route, rx, tx)
       key = lib.hexdump(rx.key),
       salt = lib.hexdump(rx.salt)
    }
-   route.tx_sa = {
+   -- Activate the new SA immediately if there is no previous outbound SA or
+   -- there is a (stale) next outbound SA queued for activation.
+   -- Otherwise, queue the superseding SA for activation after a delay (in
+   -- order to give the other node time to install the matching inbound SA
+   -- before we send any packets on it.)
+   route.next_tx_sa = {
       route = route.id,
       spi = tx.spi,
       aead = "aes-gcm-16-icv",
       key = lib.hexdump(tx.key),
       salt = lib.hexdump(tx.salt)
    }
+   if not route.tx_sa or route.next_tx_sa_activation_delay then
+      self:activate_next_tx_sa(route)
+   else
+      route.next_tx_sa_activation_delay = lib.timeout(self.negotiation_ttl*1.5)
+   end
    route.sa_timeout = lib.timeout(self.sa_ttl)
-   route.rekey_timeout = lib.timeout(self.sa_ttl/2)
-   self:commit_sa_db()
+   route.rekey_timeout = lib.timeout(self.sa_ttl/2 + jitter(.25))
+   self.sa_db_updated = true
+end
+
+function KeyManager:activate_next_tx_sa (route)
+   route.tx_sa = route.next_tx_sa
+   route.next_tx_sa = nil
+   route.next_tx_sa_activation_delay = nil
+   self.sa_db_updated = true
 end
 
 function KeyManager:expire_route (route)
    route.status = status.expired
    route.tx_sa = nil
+   route.next_tx_sa = nil
+   route.next_tx_sa_activation_delay = nil
    route.rx_sa = nil
    route.prev_rx_sa = nil
    route.prev_sa_timeout = nil
    route.sa_timeout = nil
    route.rekey_timeout = nil
-   self:commit_sa_db()
+   self.sa_db_updated = true
 end
 
 function KeyManager:expire_prev_sa (route)
    route.prev_rx_sa = nil
    route.prev_sa_timeout = nil
-   self:commit_sa_db()
+   self.sa_db_updated = true
 end
 
 function KeyManager:request (route, message)
@@ -542,6 +585,12 @@ function Protocol.nonce_message:new (config)
    return o
 end
 
+function Protocol.nonce_message:new_from_mem (mem, size)
+   if size == self:sizeof() then
+      return self:superClass().new_from_mem(self, mem, size)
+   end
+end
+
 function Protocol.nonce_message:nonce (nonce)
    local h = self:header()
    if nonce ~= nil then
@@ -556,6 +605,12 @@ function Protocol.key_message:new (config)
    o:public_key(config.public_key)
    o:auth_code(config.auth_code)
    return o
+end
+
+function Protocol.key_message:new_from_mem (mem, size)
+   if size == self:sizeof() then
+      return self:superClass().new_from_mem(self, mem, size)
+   end
 end
 
 function Protocol.key_message:spi (spi)
