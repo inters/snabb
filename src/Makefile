@@ -7,29 +7,28 @@ E= @echo
 export TEST_SKIPPED=43
 CC ?= gcc
 
-SRCPATTERN ?= '[^\#]*'
+# This variable lists all paths included in the build and can be narrowed down
+# if you want it to be limited to certain paths. For instance
+#   INCLUDE=./*.* ./core
+# would build a very limited "core" Snabb.
+INCLUDE ?= *
 
 SRCDIR = $(shell find . -type d -not -regex './obj.*' -printf '%P ')
 OBJDIR = $(patsubst %,obj/%,$(SRCDIR))
 
-LUASRC = $(shell find . -regex '\./$(SRCPATTERN)\.lua' -printf '%P ')
-PFLUASRC = $(shell cd ../lib/pflua/src && \
-	         find . -regex '\./$(SRCPATTERN)\.lua' -printf '%P ')
-CSRC   = $(shell find . -regex '\./$(SRCPATTERN)\.c' -not -regex '\./arch/.*' -printf '%P ')
-CHDR   = $(shell find . -regex '\./$(SRCPATTERN)\.h' -printf '%P ')
-ASM    = $(shell find . -regex '\./$(SRCPATTERN)\.dasl' -printf '%P ')
-PFLUAASM = $(shell cd ../lib/pflua/src && \
-	         find . -regex '\./$(SRCPATTERN)\.dasl' -printf '%P ')
-ARCHSRC= $(shell find . -regex '\./arch/$(SRCPATTERN)\.c' -printf '%P ')
-RMSRC  = $(shell find . -name '*.md' -not -regex './obj.*' -printf '%P ')
+LUASRC = $(shell find $(INCLUDE) -regex '[^\#]*\.lua' -printf '%p ')
+CSRC   = $(shell find $(INCLUDE) -regex '[^\#]*\.c' -not -regex 'arch/.*' -printf '%p ')
+CHDR   = $(shell find $(INCLUDE) -regex '[^\#]*\.h' -printf '%p ')
+ASM    = $(shell find $(INCLUDE) -regex '[^\#]*\.dasl' -printf '%p ')
+ARCHSRC= $(shell find $(INCLUDE) -regex 'arch/[^\#]*\.c' -printf '%p ')
+RMSRC  = $(shell find $(INCLUDE) -name '*.md' -not -regex './obj.*' -printf '%p ')
 # regexp is to include program/foo but not program/foo/bar
-PROGRAM = $(shell find program -regex '^[^/]+/[^/]+' -type d -printf '%P ')
+PROGRAM = $(shell find program -regex '^[^/]+/[^/]+' -type d -printf '%p ')
 # sort to eliminate potential duplicate of programs.inc
-INCSRC = $(sort $(shell find . -regex '\./$(SRCPATTERN)\.inc' -printf '%P ') programs.inc)
-YANGSRC= $(shell find . -regex '\./$(SRCPATTERN)\.yang' -printf '%P ')
+INCSRC = $(sort $(shell find $(INCLUDE) -regex '[^\#]*\.inc' -printf '%p ') programs.inc)
+YANGSRC= $(shell find $(INCLUDE) -regex '[^\#]*\.yang' -printf '%p ')
 
 LUAOBJ := $(patsubst %.lua,obj/%_lua.o,$(LUASRC))
-PFLUAOBJ := $(patsubst %.lua,obj/%_lua.o,$(PFLUASRC))
 LIBSODIUMOBJ := $(shell find ../lib/libsodium/src/ -path '*/.libs/*' -name '*.o' -printf '%p ')
 COBJ   := $(patsubst %.c,obj/%_c.o,    $(CSRC))
 HOBJ   := $(patsubst %.h,obj/%_h.o,    $(CHDR))
@@ -48,14 +47,14 @@ LUAJIT_A := ../lib/luajit/src/raptorjit.a
 # TESTMODS expands to:
 #   core.memory core.lib ...
 # for each module that has a top-level selftest () function.
-TESTMODS = $(shell find . -regex '\./$(SRCPATTERN)\.\(lua\|dasl\)' -printf '%P ' | \
+TESTMODS = $(shell find $(INCLUDE) -regex '[^\#]*\.\(lua\|dasl\)' -printf '%p ' | \
              xargs grep -s -l '^function selftest *[[:punct:]]' | \
              sed -e 's_\.lua__' -e 's_\.dasl__' -e 's_/_._g')
 
 # TESTSCRIPTS expands to:
 #   lib/watchdog/selftest.sh ...
 # for each executable selftext.* script in src.
-TESTSCRIPTS = $(shell find . -name "selftest.*" -executable | xargs)
+TESTSCRIPTS = $(shell find $(INCLUDE) -name "selftest.*" -executable | xargs)
 
 PATH := ../lib/luajit/src:$(PATH)
 
@@ -191,7 +190,7 @@ $(YANGOBJ): obj/%_yang.o: %.yang Makefile | $(OBJDIR)
 
 # Create list of programs that exist
 programs.inc: program
-	@(for d in `find . -regex '\./$(SRCPATTERN)' | grep -E '^\./program/[^/]*$$'`; do basename $$d; done) > $@
+	@(for d in `find $(INCLUDE) -regex '[^\#]*' | grep -E '^program/[^/]*$$'`; do basename $$d; done) > $@
 
 FORCE:
 

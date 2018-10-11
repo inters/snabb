@@ -6,9 +6,14 @@ module(...,package.seeall)
 
 local yang = require("lib.yang.yang")
 
+yang.add_schema(require("program.vita.vita_esp_gateway_yang",
+                        "program/vita/vita-esp-gateway.yang"))
+yang.add_schema(require("program.vita.vita_ephemeral_keys_yang",
+                        "program/vita/vita-ephemeral-keys.yang"))
+
 return {
-   ['ephemeral-keys'] =
-      yang.load_schema_by_name('vita-ephemeral-keys', nil, "program.vita"),
    ['esp-gateway'] =
-      yang.load_schema_by_name('vita-esp-gateway', nil, "program.vita")
+      yang.load_schema_by_name('vita-esp-gateway'),
+   ['ephemeral-keys'] =
+      yang.load_schema_by_name('vita-ephemeral-keys')
 }

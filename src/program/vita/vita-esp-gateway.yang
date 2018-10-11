@@ -1,44 +1,62 @@
 module vita-esp-gateway {
+  // Metadata
   namespace vita:esp-gateway;
   prefix esp-gateway;
 
+  // Imports
   import ietf-yang-types { prefix yang; }
   import ietf-inet-types { prefix inet; }
-  import vita-ephemeral-keys { prefix ephemeral-keys; }
 
+  // Application model
+  grouping interface {
+    leaf pci { type pci-address; mandatory true; }
+    leaf ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+    leaf mac { type yang:mac-address; }
+    leaf nexthop-ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+    leaf nexthop-mac { type yang:mac-address; }
+  }
+
+  container private-interface { uses interface; }
+  container public-interface { uses interface; }
+
+  leaf mtu { type uint16 { range "0..8937"; } }
+
+  list route {
+    key id; unique "net-cidr4 preshared-key spi";
+    leaf id { type id; mandatory true; }
+    leaf net-cidr4 { type inet:ipv4-prefix; mandatory true; }
+    leaf gw-ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+    leaf spi { type spi; mandatory true; }
+    leaf preshared-key { type key32; mandatory true; }
+  }
+
+  leaf negotiation-ttl { type time-to-live; }
+  leaf sa-ttl { type time-to-live; }
+
+  // Negotiated by Key Manager
+  grouping sa {
+    leaf route { type id; mandatory true; } // Parent route identifier
+    leaf spi { type spi; mandatory true; }
+    leaf aead { type string; mandatory true; }
+    leaf key { type key16; mandatory true; }
+    leaf salt { type key4; mandatory true; }
+  }
+
+  // Active outbound SAs (at most one per route) and inbound SAs (possibly
+  // multiple per route.) 
+  list outbound-sa { uses sa; unique "route spi"; config false; }
+  list inbound-sa { uses sa; unique "spi"; config false; }
+
+  // Types 
+  typedef id { type string { pattern '[\w_]+'; } }
   typedef pci-address {
     type string {
       pattern '([0-9a-fA-F]{4}:)?[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]';
     }
   }
+  typedef spi { type uint32 { range "256..max"; } }
   typedef key32 { type string { pattern '([0-9a-fA-F]{2}\s*){32}'; } }
+  typedef key16 { type string { pattern '([0-9a-fA-F]{2}\s*){16}'; } }
+  typedef key4  { type string { pattern '([0-9a-fA-F]{2}\s*){4}'; } }
   typedef time-to-live { type uint32 { range "1..max"; } }
-
-  grouping interface {
-    leaf pciaddr { type pci-address; mandatory true; }
-    leaf macaddr { type yang:mac-address; mandatory true; }
-    leaf vlan { type uint16 { range "0..4095"; } }
-    leaf mtu { type uint16; }
-  }
-
-  container private_interface { uses interface; }
-  container public_interface { uses interface; }
-
-  leaf private_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
-  leaf public_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
-
-  leaf private_nexthop_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
-  leaf public_nexthop_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
-
-  list route {
-    key id; unique "net_cidr4 preshared_key spi";
-    leaf id { type string { pattern '[\w_]+'; } mandatory true; }
-    leaf net_cidr4 { type inet:ipv4-prefix; mandatory true; }
-    leaf gw_ip4 { type inet:ipv4-address-no-zone; mandatory true; }
-    leaf preshared_key { type key32; mandatory true; }
-    leaf spi { type ephemeral-keys:spi; mandatory true; }
-  }
-
-  leaf negotiation_ttl { type time-to-live; }
-  leaf sa_ttl { type time-to-live; }
 }

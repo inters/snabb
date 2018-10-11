@@ -14,6 +14,8 @@ __pycache__
 /src/apps/vpn/vpws-selftest-uplink.cap.output
 /src/syscall.lua
 /src/syscall
+/src/pf.lua
+/src/pf
 /src/ndpi.lua
 /src/ndpi
 /deps/*.vsn

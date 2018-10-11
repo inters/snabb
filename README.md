@@ -66,15 +66,25 @@ while Vita is running, without affecting unrelated routes.
 ## Getting started
 
 Vita runs on any modern Linux/x86-64 distribution, but requires a compatible
-network interface card (currently *Intel* chipsets i210, i350, and 82599).
+network interface card (currently *Intel* chipsets i210, i350, and 82599) as
+well as CPU support for
+[AES-NI](https://en.wikipedia.org/wiki/AES_instruction_set) and
+[AVX-2](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions#Advanced_Vector_Extensions_2).
+Important note: Snabb needs Linux to be booted with `iommu=off` for its device
+drivers to function.
 
     $ git clone https://github.com/inters/vita
     $ cd vita
     $ RECIPE=Makefile.vita make -j
     $ sudo src/vita --help
 
-The `vita` binary is stand-alone, includes all auxiliary applications, and can
-be copied between machines.
+Setting `RECIPE=Makefile.vita` causes a release build to be built (as opposed
+to a test build.)
+
+The `vita` binary is stand-alone, includes useful auxiliary applications (like
+[snabb top](https://github.com/inters/vita/tree/master/src/program/top) and
+[snabb pci_bind](https://github.com/inters/vita/tree/master/src/program/pci_bind)),
+and can be copied between machines.
 
 For example, to install Vita and the Snabb monitoring tool on the local
 machine:
@@ -82,9 +92,22 @@ machine:
     $ sudo cp src/vita /usr/local/bin/vita
     $ sudo ln -s vita /usr/local/bin/snabb-top
 
+## Benchmarking
+
+End-to-end benchmarking procedures are documented in
+[vita-loadtest.md](https://github.com/inters/vita/tree/master/src/program/vita/vita-loadtest.md).
+
 ## Powered by
 
 ![Snabb](snabb.png)
 
 [Snabb](https://github.com/snabbco/snabb) is a simple and fast packet
 networking toolkit with a wonderful community.
+
+
+## Sponsored by
+
+![NLnet](nlnet.png)
+
+[NLnet](https://nlnet.nl) funded Vita development in 2017/2018 with their
+generous donation. 🙇‍♂️

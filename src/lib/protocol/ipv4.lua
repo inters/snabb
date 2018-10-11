@@ -8,6 +8,8 @@ local header = require("lib.protocol.header")
 local ipsum = require("lib.checksum").ipsum
 local htons, ntohs, htonl, ntohl =
    lib.htons, lib.ntohs, lib.htonl, lib.ntohl
+local band, lshift, rshift, bnot =
+   bit.band, bit.lshift, bit.rshift, bit.bnot
 
 -- TODO: generalize
 local AF_INET = 2
@@ -31,11 +33,10 @@ local ipv4 = subClass(header)
 ipv4._name = "ipv4"
 ipv4._ulp = {
    class_map = {
+       [1] = "lib.protocol.icmp.header",
        [6] = "lib.protocol.tcp",
       [17] = "lib.protocol.udp",
       [47] = "lib.protocol.gre",
-      [58] = "lib.protocol.icmp.header",
-      [1] = "lib.protocol.icmp.header",
    },
    method    = 'protocol' }
 ipv4:init(
@@ -63,7 +64,7 @@ function ipv4:new (config)
    o:ihl(o:sizeof() / 4)
    o:dscp(config.dscp or 0)
    o:ecn(config.ecn or 0)
-   o:total_length(o:sizeof()) -- default to header only
+   o:total_length(config.total_length or o:sizeof()) -- default to header only
    o:id(config.id or 0)
    o:flags(config.flags or 0)
    o:frag_off(config.frag_off or 0)
@@ -140,12 +141,35 @@ function ipv4:frag_off (frag_off)
    return lib.bitfield(16, self:header(), 'frag_off', 3, 13, frag_off)
 end
 
+function ipv4:is_fragment ()
+   return self:frag_off() ~= 0 or band(self:flags(), 0x01) == 1
+end
+
 function ipv4:ttl (ttl)
    if ttl ~= nil then
       self:header().ttl = ttl
    else
       return self:header().ttl
    end
+end
+
+-- Adopted from lwAFTR with love
+function ipv4:ttl_decrement ()
+   local old_ttl = self:ttl()
+   local new_ttl = band(old_ttl - 1, 0xff)
+   self:ttl(new_ttl)
+   local chksum = bnot(ntohs(self:header().checksum))
+   -- Now fix up the checksum. The ttl field is the first byte in the
+   -- 16-bit big-endian word, so the difference to the overall sum is
+   -- multiplied by 0xff.
+   chksum = chksum + lshift(new_ttl - old_ttl, 8)
+   -- Now do the one's complement 16-bit addition of the 16-bit words of
+   -- the checksum, which necessarily is a 32-bit value.  Two carry
+   -- iterations will suffice.
+   chksum = band(chksum, 0xffff) + rshift(chksum, 16)
+   chksum = band(chksum, 0xffff) + rshift(chksum, 16)
+   self:header().checksum = htons(bnot(chksum))
+   return new_ttl
 end
 
 function ipv4:protocol (protocol)
@@ -175,8 +199,12 @@ function ipv4:src (ip)
    end
 end
 
+local function ip_eq (x, y)
+   return ffi.cast("uint32_t *", x)[0] == ffi.cast("uint32_t *", y)[0]
+end
+
 function ipv4:src_eq (ip)
-   return C.memcmp(ip, self:header().src_ip, ipv4_addr_t_size) == 0
+   return ip_eq(ip, self:header().src_ip, ipv4_addr_t_size)
 end
 
 function ipv4:dst (ip)
@@ -188,7 +216,7 @@ function ipv4:dst (ip)
 end
 
 function ipv4:dst_eq (ip)
-   return C.memcmp(ip, self:header().dst_ip, ipv4_addr_t_size) == 0
+   return ip_eq(ip, self:header().dst_ip, ipv4_addr_t_size)
 end
 
 -- override the default equality method
@@ -198,6 +226,14 @@ function ipv4:eq (other)
          (self:id() == other:id()) and
          (self:protocol() == other:protocol()) and
          self:src_eq(other:src()) and self:dst_eq(other:dst())
+end
+
+function ipv4:swap ()
+   local tmp = ipv4_addr_t()
+   local h = self:header()
+   ffi.copy(tmp, h.src_ip, ipv4_addr_t_size)
+   ffi.copy(h.dst_ip, h.src_ip, ipv4_addr_t_size)
+   ffi.copy(h.src_ip, tmp, ipv4_addr_t_size)
 end
 
 -- Return a pseudo header for checksum calculation in a upper-layer

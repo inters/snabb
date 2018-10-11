@@ -49,8 +49,8 @@ int crypto_scalarmult_curve25519(unsigned char *q,
 
 // crypto_generichash_blake2b.h
 enum {
-  crypto_generichash_blake2b_BYTES = 32U,
-  crypto_generichash_blake2b_KEYBYTES = 32U
+  crypto_generichash_blake2b_BYTES_MIN = 16U,
+  crypto_generichash_blake2b_BYTES_MAX = 64U
 };
 struct crypto_generichash_blake2b_state {
   uint64_t h[8];

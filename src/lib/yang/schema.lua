@@ -941,16 +941,15 @@ function load_schema_file(filename)
 end
 load_schema_file = util.memoize(load_schema_file)
 
-function load_schema_source_by_name(name, revision, path)
+function load_schema_source_by_name(name, revision)
    -- FIXME: @ is not valid in a Lua module name.
    -- if revision then name = name .. '@' .. revision end
    name = name:gsub('-', '_')
-   path = path or 'lib.yang'
-   return require(path..'.'..name..'_yang')
+   return require('lib.yang.'..name..'_yang')
 end
 
-function load_schema_by_name(name, revision, path)
-   return load_schema(load_schema_source_by_name(name, revision, path), name)
+function load_schema_by_name(name, revision)
+   return load_schema(load_schema_source_by_name(name, revision))
 end
 load_schema_by_name = util.memoize(load_schema_by_name)
 

@@ -1,28 +1,33 @@
 Usage:
-  vita [OPTIONS] <confpath>
+  vita [OPTIONS]
 
   -h, --help
                              Print usage information and exit.
   -H, --config-help
                              Print configuration help and exit.
-  -t  --config-test
-                             Validate configuration and exit.
+  -n, --name <id>
+                             Claim <id> for this Vita node.
   -c, --cpu <cpus>
-                             Bind the four Vita processes to <cpus>. Must be a
+                             Bind Vita processes to <cpus>. Must be a
                              comma-separated list of CPU identifiers.
-  -m, --membind <memnode>
-                             If the host is a NUMA system, bind Vita processes
-                             to the specified <memnode>.
+  -b, --busywait
+                             Run in busy-wait loop, trading CPU cycles for
+                             latency.
+  -r, --realtime
+                             Use real-time scheduling.
 
-Run Vita configured by <confpath>. Vita will fork into four processes which
-individually handle private port routing, public port routing, encryption, and
-decryption.
+Run Vita, configurable via `snabb config'. Refer to “--config-help” for a
+description of the documentation schema.
 
-The resulting processes can be bound to specific CPUs using the “--cpu” option
-in the given order.
+Note that Vita needs super-user privileges to run as it needs unrestricted
+access to hardware devices via DMA and system resources like hugepages. Vita
+also requires a CPU that support AES-NI and AVX-2. It is also required to boot
+Linux with the kernel parameter iommu=off for Snabb device drivers to function.
 
-If the host is a NUMA system, “--membind” can be used to bind to a specific
-memory node.
+Vita will fork into five processes which individually handle key management,
+routing on the private port, routing on the public port, encapsulation, and
+decapsulation. The resulting processes can be bound to specific CPU cores using
+the “--cpu” option.
 
 Example:
-  vita --cpus 4,5,6,7 /etc/vita.conf
+  vita --name my-vita --cpus 0,1,2,3,4

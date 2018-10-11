@@ -1,0 +1,21 @@
+#!snabb snsh
+
+-- Use of this source code is governed by the GNU AGPL license; see COPYING.
+
+local vita = require("program.vita.vita")
+local vita_test = require("program.vita.test")
+local yang = require("lib.yang.yang")
+
+-- Synopsis:
+--
+--    genconf.snabb < gentest.conf
+--
+-- Read test configuration from stdin and write Vita configuration to stdout.
+
+local testconf = yang.load_config_for_schema(
+   vita_test.schemata['gentest'], io.stdin:read("a*"), io.stdin
+)
+
+yang.print_config_for_schema(vita.schemata['esp-gateway'],
+                             vita_test.gen_configuration(testconf),
+                             io.stdout)

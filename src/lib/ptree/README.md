@@ -71,6 +71,8 @@ is a table of key/value pairs.  The following keys are required:
    network function, for example as returned by
    `lib.yang.yang.load_configuration`.  Must be an instance of
    `schema_name`.
+ * `schema_support`: **Optional.** Explicitly sets the support module to use
+   with schema by *schema_name*.
 
 Optional entries that may be present in the *parameters* table include:
 
@@ -110,7 +112,7 @@ Optional entries that may be present in the *parameters* table include:
 The return value is a ptree manager object, whose public methods are as
 follows:
 
-— Manager method **:run** *duration*
+— Manager method **:main** *duration*
 
 Run a process tree, servicing configuration and state queries and
 updates from remote `snabb config` clients, managing a tree of workers,

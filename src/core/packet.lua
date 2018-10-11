@@ -223,14 +223,18 @@ end
 function account_free (p)
    counter.add(engine.frees)
    counter.add(engine.freebytes, p.length)
-   -- Calculate bits of physical capacity required for packet on 10GbE
-   -- Account for minimum data size and overhead of CRC and inter-packet gap
-   counter.add(engine.freebits, (math.max(p.length, 46) + 4 + 5) * 8)
+   counter.add(engine.freebits, physical_bits(p))
 end
 
 function free (p)
    account_free(p)
    free_internal(p)
+end
+
+function physical_bits (p)
+   -- Calculate bits of physical capacity required for packet on 10GbE
+   -- Account for minimum data size and overhead of CRC and inter-packet gap
+   return (math.max(p.length, 46) + 4 + 5) * 8
 end
 
 -- Set packet data length.

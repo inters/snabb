@@ -21,6 +21,7 @@ local worker_config_spec = {
    no_report = {default=false},
    report = {default={showapps=true,showlinks=true}},
    Hz = {default=1000},
+   jit_flush = {default=true}
 }
 
 function new_worker (conf)
@@ -29,6 +30,7 @@ function new_worker (conf)
    ret.period = 1/conf.Hz
    ret.duration = conf.duration or 1/0
    ret.no_report = conf.no_report
+   ret.jit_flush = conf.jit_flush
    ret.channel = channel.create('config-worker-channel', 1e6)
    ret.alarms_channel = alarm_codec.get_channel()
    ret.pending_actions = {}
@@ -66,12 +68,15 @@ function Worker:commit_pending_actions()
          self:shutdown()
       else
          if name == 'start_app' or name == 'reconfig_app' then
-            should_flush = true
+            should_flush = self.jit_flush and true
          end
          table.insert(to_apply, action)
       end
    end
-   if #to_apply > 0 then engine.apply_config_actions(to_apply) end
+   if #to_apply > 0 then
+      engine.apply_config_actions(to_apply)
+      counter.add(engine.configs)
+   end
    self.pending_actions = {}
    if should_flush then require('jit').flush() end
 end

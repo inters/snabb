@@ -9,4 +9,7 @@ before_script:
 
 script:
  - make -j
- - (cd src && sudo ./snabb snsh program/vita/test.snabb IMIX 1e6 3)
+ - (cd src && sudo program/vita/selftest.snabb)
+ - (cd src && sudo ./snabb snsh -t program.vita.exchange)
+ - (cd src && sudo program/vita/conftest.snabb)
+ - (cd src && sudo program/vita/test.snabb IMIX 1e6 3)
