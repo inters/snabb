@@ -10,7 +10,7 @@ LUAJIT_CFLAGS := -include $(CURDIR)/gcc-preinclude.h -DLUAJIT_VMPROFILE
 all: $(LUAJIT) $(SYSCALL) $(PFLUA) luajit ljsyscall ljndpi libsodium
 	cd src && $(MAKE) -f $(RECIPE)
 luajit: $(LUAJIT)
-	@(cd lib/luajit && (cd src && $(MAKE) reusevm) && $(MAKE))
+	@(cd lib/luajit && (cd src && $(MAKE) reusevm) && $(MAKE) CFLAGS="$(LUAJIT_CFLAGS)")
 ljsyscall: $(SYSCALL)
 	@mkdir -p src/syscall/linux
 	@cp -p lib/ljsyscall/syscall.lua   src/

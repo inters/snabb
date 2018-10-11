@@ -12,7 +12,6 @@ local histogram = require('core.histogram')
 local counter   = require("core.counter")
 local jit       = require("jit")
 local S         = require("syscall")
-local vmprofile = require("jit.vmprofile")
 local ffi       = require("ffi")
 local C         = ffi.C
 local S         = require("syscall")
@@ -34,7 +33,11 @@ local named_program_root = shm.root .. "/" .. "by-name"
 program_name = false
 
 -- Auditlog state
-local auditlog_enabled = false
+auditlog_enabled = false
+function enable_auditlog ()
+   jit.auditlog(shm.path("audit.log"))
+   auditlog_enabled = true
+end
 
 -- The set of all active apps and links in the system, indexed by name.
 app_table, link_table = {}, {}
@@ -367,7 +370,7 @@ function apply_config_actions (actions)
       configuration.apps[name] = nil
    end
    function ops.start_app (name, class, arg)
-      local app = class:new(arg, name)
+      local app = class:new(arg)
       if type(app) ~= 'table' then
          error(("bad return value from app '%s' start() method: %s"):format(
                   name, tostring(app)))
@@ -498,13 +501,11 @@ function main (options)
 
    -- Enable auditlog
    if not auditlog_enabled then
-      jit.auditlog(shm.path("audit.log"))
-      auditlog_enabled = true
+      enable_auditlog()
    end
 
    -- Setup vmprofile
    setvmprofile("engine")
-   vmprofile.start()
 
    local breathe = breathe
    if options.measure_latency or options.measure_latency == nil then
@@ -520,6 +521,8 @@ function main (options)
    until done and done()
    counter.commit()
    if not options.no_report then report(options.report) end
+
+   -- Switch to catch-all profile
    setvmprofile("program")
 end
 
