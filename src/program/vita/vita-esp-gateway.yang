@@ -47,6 +47,10 @@ module vita-esp-gateway {
   list outbound-sa { key "spi"; unique "route"; uses sa; }
   list inbound-sa { key "spi"; uses sa; }
 
+  // If true, disables KeyManager (route.spi, route.preshared-key,
+  // negotiation-ttl, and sa-ttl are ignored.)
+  leaf data-plane { type boolean; }
+
   // Types 
   typedef id { type string { pattern '[\w_]+'; } }
   typedef pci-address {
