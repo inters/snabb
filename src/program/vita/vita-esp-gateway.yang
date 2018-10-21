@@ -22,7 +22,7 @@ module vita-esp-gateway {
   leaf mtu { type uint16 { range "0..8937"; } }
 
   list route {
-    key id; unique "net-cidr4 preshared-key spi";
+    key id; unique "net-cidr4"; unique "preshared-key"; unique "spi";
     leaf id { type id; mandatory true; }
     leaf net-cidr4 { type inet:ipv4-prefix; mandatory true; }
     leaf gw-ip4 { type inet:ipv4-address-no-zone; mandatory true; }
@@ -44,7 +44,7 @@ module vita-esp-gateway {
 
   // Active outbound SAs (at most one per route) and inbound SAs (possibly
   // multiple per route.) 
-  list outbound-sa { uses sa; unique "route spi"; config false; }
+  list outbound-sa { uses sa; unique "route"; unique "spi"; config false; }
   list inbound-sa { uses sa; unique "spi"; config false; }
 
   // Types 
