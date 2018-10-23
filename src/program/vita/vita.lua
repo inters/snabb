@@ -488,7 +488,8 @@ function configure_dsp (sa_db, route, append)
                        spi = spi,
                        aead = sa.aead,
                        key = sa.key,
-                       salt = sa.salt
+                       salt = sa.salt,
+                       auditing = true
          })
          config.link(c, DSP_in.."_Rx.output -> "..DSP..".input")
          config.link(c, DSP..".output4 -> "..DSP_out.."_Tx.input")

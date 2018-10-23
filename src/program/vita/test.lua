@@ -113,7 +113,8 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
       },
       packet_size = pktsize,
       nroutes = nroutes,
-      negotiation_ttl = nroutes
+      negotiation_ttl = nroutes,
+      sa_ttl = 16
    }
 
    local function configure_private_router_softbench (conf)
@@ -195,7 +196,7 @@ defaults = {
    route_prefix = {default="172.16"},
    nroutes = {default=1},
    packet_size = {default="IMIX"},
-   sa_ttl = {default=16},
+   sa_ttl = {},
    negotiation_ttl = {default=1}
 }
 private_interface_defaults = {

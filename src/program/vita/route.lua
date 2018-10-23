@@ -109,33 +109,38 @@ PublicRouter = {
 }
 
 function PublicRouter:new (conf)
-   local index_t = ffi.typeof("uint32_t")
    local o = {
-      index_t = index_t,
       routing_table4 = ctable.new{
-         key_type = index_t,
-         value_type = index_t
+         key_type = ffi.typeof("uint32_t"),
+         value_type = ffi.typeof("uint32_t")
       },
       esp = esp:new({})
    }
-   return setmetatable(o, {__index = PublicRouter}):reconfig(conf)
+   self.build_fib(o, conf)
+   return setmetatable(o, {__index = PublicRouter})
 end
 
 function PublicRouter:reconfig (conf)
+   self:build_fib(conf)
+   self:link() -- links might have changed before reconfig
+end
+
+function PublicRouter:build_fib (conf)
    self.ports = {}
    self.routes = {}
+   -- Update FIB entries for SAs
    for spi, sa in pairs(conf.sa) do
       local index = #self.ports+1
-      assert(ffi.cast(self.index_t, index) == index, "index overflow")
+      assert(ffi.cast("uint32_t", index) == index, "index overflow")
       self.routing_table4:add(spi, index, 'update')
       self.ports[index] = sa.route.."_"..spi
    end
+   -- Remove obsolete FIB entries
    for entry in self.routing_table4:iterate() do
       if not conf.sa[tonumber(entry.key)] then
          self.routing_table4:remove_ptr(entry)
       end
    end
-   return self
 end
 
 function PublicRouter:link ()
