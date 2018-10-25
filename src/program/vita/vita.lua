@@ -20,17 +20,13 @@ local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local numa = require("lib.numa")
 local yang = require("lib.yang.yang")
-local file = require("lib.stream.file")
-local cltable = require("lib.cltable")
+local ptree = require("lib.ptree.ptree")
+local CPUSet = require("lib.cpuset")
 local pci = require("lib.hardware.pci")
 local S = require("syscall")
 local ffi = require("ffi")
 local usage = require("program.vita.README_inc")
 local confighelp = require("program.vita.README_config_inc")
-
-local ptree = require("lib.ptree.ptree")
-local generic_schema_support = require("lib.ptree.support").generic_schema_config_support
-local CPUSet = require("lib.cpuset")
 
 local confspec = {
    private_interface = {},
@@ -134,10 +130,10 @@ function run_vita (opt)
          return actions
       end,
       update_mutable_objects_embedded_in_app_initargs = function () end,
-      compute_state_reader = generic_schema_support.compute_state_reader,
-      configuration_for_worker = generic_schema_support.configuration_for_worker,
-      process_states = generic_schema_support.process_states,
       compute_apps_to_restart_after_configuration_update = function () end,
+      compute_state_reader = schemata.support.compute_state_reader,
+      configuration_for_worker = schemata.support.configuration_for_worker,
+      process_states = schemata.support.process_states,
       translators = {}
    }
    local function purify (setup_fn)
