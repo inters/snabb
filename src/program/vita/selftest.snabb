@@ -48,10 +48,7 @@ local cfg = {
          preshared_key = string.rep("00", 32),
          spi = 1001
       }
-   }
-}
-
-local sa_db = {
+   },
    outbound_sa = {
       [1001] = {
          route = "loopback",
@@ -76,8 +73,8 @@ local c = config.new()
 -- Configure Vita app network (all-in-one process.)
 local _, private = vita.configure_private_router(cfg, c)
 local _, public = vita.configure_public_router(cfg, c)
-vita.configure_esp(sa_db, c)
-vita.configure_dsp(sa_db, c)
+vita.configure_esp(cfg, c)
+vita.configure_dsp(cfg, c)
 
 -- Add ARP resolvers.
 config.app(c, "private_arp", ARP, {
@@ -187,7 +184,7 @@ else
          rxerrors = 2,
          fragment_errors = 2
       },
-      DSP_loopback = {
+      DSP_loopback_1001 = {
          rxerrors = 2,
          protocol_errors = 1,
          decrypt_errors = 1

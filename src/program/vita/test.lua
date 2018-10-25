@@ -113,7 +113,9 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
          nexthop_ip4 = private_interface_defaults.ip4.default
       },
       packet_size = pktsize,
-      nroutes = nroutes
+      nroutes = nroutes,
+      negotiation_ttl = nroutes,
+      sa_ttl = 16
    }
 
    local function configure_private_router_softbench (conf)
@@ -144,15 +146,15 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
    local function softbench_workers (conf)
       return {
          key_manager = vita.configure_exchange(conf),
-         inbound_gauge_router = configure_private_router_softbench(conf),
-         outbound_loopback_router = configure_public_router_loopback(conf),
+         private_gauge_router = configure_private_router_softbench(conf),
+         public_loopback_router = configure_public_router_loopback(conf),
          encapsulate = vita.configure_esp(conf),
          decapsulate =  vita.configure_dsp(conf)
       }
    end
 
    local function wait_gauge ()
-      if not worker.status().inbound_gauge_router.alive then
+      if not worker.status().private_gauge_router.alive then
          main.exit()
       end
    end
@@ -193,7 +195,9 @@ defaults = {
    public_interface = {},
    route_prefix = {default="172.16"},
    nroutes = {default=1},
-   packet_size = {default="IMIX"}
+   packet_size = {default="IMIX"},
+   sa_ttl = {},
+   negotiation_ttl = {default=1}
 }
 private_interface_defaults = {
    pci = {default="00:00.0"},
@@ -262,8 +266,8 @@ function gen_configuration (conf)
       private_interface = conf.private_interface,
       public_interface = conf.public_interface,
       route = {},
-      negotiation_ttl = conf.nroutes,
-      sa_ttl = 16
+      negotiation_ttl = conf.negotiation_ttl,
+      sa_ttl = conf.sa_ttl
    }
    for route = 1, conf.nroutes do
       cfg.route["test"..route] = {

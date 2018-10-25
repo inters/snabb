@@ -25,9 +25,9 @@ also requires a CPU that support AES-NI and AVX-2. It is also required to boot
 Linux with the kernel parameter iommu=off for Snabb device drivers to function.
 
 Vita will fork into five processes which individually handle key management,
-outbound routing, inbound routing, encapsulation, and decapsulation. The
-resulting processes can be bound to specific CPUs using the “--cpu” option in
-the given order.
+routing on the private port, routing on the public port, encapsulation, and
+decapsulation. The resulting processes can be bound to specific CPU cores using
+the “--cpu” option.
 
 Example:
   vita --name my-vita --cpus 0,1,2,3,4

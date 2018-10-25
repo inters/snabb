@@ -15,7 +15,6 @@ module(...,package.seeall)
 --               <config> --> KeyManager *--> esp_worker
 --                                       |
 --                                       \--> dsp_worker
-
 --
 -- All things considered, this is the hairy part of Vita, as it covers touchy
 -- things such as key generation and expiration, and ultimately presents Vita’s
@@ -41,7 +40,7 @@ module(...,package.seeall)
 --     lifetime of a SA pair has expired (sa_ttl), it is destroyed, and
 --     eventually re-negotiated if applicable.
 --
---     Note that the KeyManager app will attempts to re-negotiate SAs long
+--     Note that the KeyManager app will attempt to re-negotiate SAs long
 --     before they expire (specifically, once half of sa_ttl has passed), in
 --     order to avoid loss of tunnel connectivity during re-negotiation.
 --
@@ -135,7 +134,6 @@ local header = require("lib.protocol.header")
 local lib = require("core.lib")
 local ipv4 = require("lib.protocol.ipv4")
 local yang = require("lib.yang.yang")
-local cltable = require("lib.cltable")
 local schemata = require("program.vita.schemata")
 local audit = lib.logger_new({rate=32, module='KeyManager'})
 require("program.vita.sodium_h")
@@ -149,8 +147,8 @@ KeyManager = {
       node_ip4 = {required=true},
       routes = {required=true},
       sa_db_path = {required=true},
-      negotiation_ttl = {default=10},
-      sa_ttl = {default=(24 * 60 * 60)}
+      negotiation_ttl = {default=5}, -- default:  5 seconds
+      sa_ttl = {default=(10 * 60)}   -- default: 10 minutes
    },
    shm = {
       rxerrors = {counter},
@@ -168,13 +166,19 @@ KeyManager = {
 
 local status = { expired = 0, rekey = 1, ready = 2 }
 
+local function jitter (s) -- compute random jitter of up to s seconds
+   return s * math.random(1000) / 1000
+end
+
 function KeyManager:new (conf)
    local o = {
       routes = {},
       ip = ipv4:new({}),
       transport = Transport.header:new({}),
       nonce_message = Protocol.nonce_message:new({}),
-      key_message = Protocol.key_message:new({})
+      key_message = Protocol.key_message:new({}),
+      sa_db_updated = false,
+      sa_db_commit_throttle = lib.throttle(1)
    }
    local self = setmetatable(o, { __index = KeyManager })
    self:reconfig(conf)
@@ -224,9 +228,11 @@ function KeyManager:reconfig (conf)
             preshared_key = new_key,
             spi = route.spi,
             status = status.expired,
-            rx_sa = nil, tx_sa = nil,
-            sa_timeout = nil, rekey_timeout = nil,
-            protocol = Protocol:new(route.spi, new_key, conf.negotiation_ttl)
+            rx_sa = nil, prev_rx_sa = nil, tx_sa = nil, next_tx_sa = nil,
+            sa_timeout = nil, prev_sa_timeout = nil, rekey_timeout = nil,
+            next_tx_sa_activation_delay = nil,
+            protocol = Protocol:new(route.spi, new_key, conf.negotiation_ttl),
+            negotiation_delay = lib.timeout(0)
          }
          table.insert(new_routes, new_route)
          -- clean up after the old route if necessary
@@ -256,21 +262,40 @@ function KeyManager:push ()
       packet.free(request)
    end
 
-   -- process protocol timeouts and initiate (re-)negotiation for SAs
    for _, route in ipairs(self.routes) do
+      -- process protocol timeouts and initiate (re-)negotiation for SAs
       if route.protocol:reset_if_expired() == Protocol.code.expired then
          counter.add(self.shm.negotiations_expired)
          audit:log("Negotiation expired for '"..route.id.."' (negotiation_ttl)")
+         route.negotiation_delay = lib.timeout(
+            self.negotiation_ttl + jitter(.25)
+         )
       end
-      if route.status < status.ready then
-         self:negotiate(route)
-      elseif route.rekey_timeout() then
-         route.status = status.rekey
-      elseif route.sa_timeout() then
+      if route.status > status.expired and route.sa_timeout() then
          counter.add(self.shm.keypairs_expired)
          audit:log("Keys expired for '"..route.id.."' (sa_ttl)")
          self:expire_route(route)
+      elseif route.prev_sa_timeout and route.prev_sa_timeout() then
+         self:expire_prev_sa(route)
       end
+      if route.status > status.rekey and route.rekey_timeout() then
+         route.status = status.rekey
+      end
+      if route.status < status.ready and route.negotiation_delay() then
+         self:negotiate(route)
+      end
+
+      -- activate new tx SAs
+      if route.next_tx_sa and route.next_tx_sa_activation_delay() then
+         audit:log("Activating next outbound SA for '"..route.id.."'")
+         self:activate_next_tx_sa(route)
+      end
+   end
+
+   -- commit SA database if necessary
+   if self.sa_db_updated and self.sa_db_commit_throttle() then
+      self:commit_sa_db()
+      self.sa_db_updated = false
    end
 end
 
@@ -336,7 +361,8 @@ function KeyManager:handle_key_request (route, message)
    else assert(not ecode) end
 
    counter.add(self.shm.keypairs_negotiated)
-   audit:log("Completed key exchange for '"..route.id.."'")
+   audit:log(("Completed key exchange for '%s' (rx-spi %d, tx-spi %d)"):
+         format(route.id, rx.spi, tx.spi))
 
    if response then
       link.transmit(self.output.output, self:request(route, response))
@@ -348,31 +374,70 @@ function KeyManager:handle_key_request (route, message)
 end
 
 function KeyManager:configure_route (route, rx, tx)
+   for _, route in ipairs(self.routes) do
+      if (route.rx_sa and route.rx_sa.spi == rx.spi)
+      or (route.prev_rx_sa and route.prev_rx_sa.spi == rx.spi) then
+         error("PANIC: SPI collision detected.")
+      end
+   end
    route.status = status.ready
+   -- Cycle inbound SAs immediately (keep receiving packets on the previous
+   -- inbound SA for up to the duration of its sa_ttl timeout.)
+   route.prev_rx_sa = route.rx_sa
+   route.prev_sa_timeout = route.sa_timeout
    route.rx_sa = {
       route = route.id,
+      spi = rx.spi,
       aead = "aes-gcm-16-icv",
       key = lib.hexdump(rx.key),
       salt = lib.hexdump(rx.salt)
    }
-   route.tx_sa = {
+   -- Activate the new SA immediately if there is no previous outbound SA or
+   -- there is a (stale) next outbound SA queued for activation.
+   -- Otherwise, queue the superseding SA for activation after a delay (in
+   -- order to give the other node time to install the matching inbound SA
+   -- before we send any packets on it.)
+   route.next_tx_sa = {
       route = route.id,
+      spi = tx.spi,
       aead = "aes-gcm-16-icv",
       key = lib.hexdump(tx.key),
       salt = lib.hexdump(tx.salt)
    }
+   if not route.tx_sa or route.next_tx_sa_activation_delay then
+      self:activate_next_tx_sa(route)
+   else
+      route.next_tx_sa_activation_delay = lib.timeout(self.negotiation_ttl*1.5)
+   end
    route.sa_timeout = lib.timeout(self.sa_ttl)
-   route.rekey_timeout = lib.timeout(self.sa_ttl/2)
-   self:commit_sa_db()
+   route.rekey_timeout = lib.timeout(self.sa_ttl/2 + jitter(.25))
+   self.sa_db_updated = true
+end
+
+function KeyManager:activate_next_tx_sa (route)
+   route.tx_sa = route.next_tx_sa
+   route.next_tx_sa = nil
+   route.next_tx_sa_activation_delay = nil
+   self.sa_db_updated = true
 end
 
 function KeyManager:expire_route (route)
    route.status = status.expired
    route.tx_sa = nil
+   route.next_tx_sa = nil
+   route.next_tx_sa_activation_delay = nil
    route.rx_sa = nil
+   route.prev_rx_sa = nil
+   route.prev_sa_timeout = nil
    route.sa_timeout = nil
    route.rekey_timeout = nil
-   self:commit_sa_db()
+   self.sa_db_updated = true
+end
+
+function KeyManager:expire_prev_sa (route)
+   route.prev_rx_sa = nil
+   route.prev_sa_timeout = nil
+   self.sa_db_updated = true
 end
 
 function KeyManager:request (route, message)
@@ -443,8 +508,11 @@ function KeyManager:commit_sa_db ()
    local esp_keys, dsp_keys = {}, {}
    for _, route in ipairs(self.routes) do
       if route.status == status.ready then
-         esp_keys[route.spi] = route.tx_sa
-         dsp_keys[route.spi] = route.rx_sa
+         esp_keys[route.tx_sa.spi] = route.tx_sa
+         dsp_keys[route.rx_sa.spi] = route.rx_sa
+         if route.prev_rx_sa then
+            dsp_keys[route.prev_rx_sa.spi] = route.prev_rx_sa
+         end
       end
    end
    -- Commit active SAs to SA database
@@ -455,11 +523,21 @@ function KeyManager:commit_sa_db ()
    )
 end
 
--- Vita: simple key exchange (vita-ske, version 1g). See README.exchange
+-- Vita: simple key exchange (vita-ske, version 1i). See README.exchange
+--
+-- NB: this implementation introduces two pseudo states _send_key and _complete
+-- not present in fsm-protocol.svg. The _send_key state is inserted in between
+-- the transition from wait_nonce to wait_key. Its purpose is to codify and
+-- enforce that exchange_key is called exactly once by the active party. The
+-- _complete state is inserted in between the transition from wait_key back to
+-- idle, and ensures that exactly one ephemeral key pair is derived for each
+-- successful exchange.
 
 Protocol = {
-   status = { idle = 0, wait_nonce = 1, wait_key = 2, complete = 3 },
+   status = { idle = 0, wait_nonce = 1, wait_key = 2,
+              _send_key = -1, _complete = -2 },
    code = { protocol = 0, authentication = 1, parameter = 2, expired = 3},
+   spi_counter = 0,
    preshared_key_bytes = C.crypto_auth_hmacsha512256_KEYBYTES,
    public_key_bytes = C.crypto_scalarmult_curve25519_BYTES,
    secret_key_bytes = C.crypto_scalarmult_curve25519_SCALARBYTES,
@@ -489,6 +567,7 @@ Protocol.nonce_message:init({
 Protocol.key_message:init({
       [1] = ffi.typeof([[
             struct {
+               uint8_t spi[]]..ffi.sizeof(Protocol.spi_t)..[[];
                uint8_t public_key[]]..Protocol.public_key_bytes..[[];
                uint8_t auth_code[]]..Protocol.auth_code_bytes..[[];
             } __attribute__((packed))
@@ -503,6 +582,12 @@ function Protocol.nonce_message:new (config)
    return o
 end
 
+function Protocol.nonce_message:new_from_mem (mem, size)
+   if size == self:sizeof() then
+      return self:superClass().new_from_mem(self, mem, size)
+   end
+end
+
 function Protocol.nonce_message:nonce (nonce)
    local h = self:header()
    if nonce ~= nil then
@@ -513,9 +598,24 @@ end
 
 function Protocol.key_message:new (config)
    local o = Protocol.key_message:superClass().new(self)
+   o:spi(config.spi)
    o:public_key(config.public_key)
    o:auth_code(config.auth_code)
    return o
+end
+
+function Protocol.key_message:new_from_mem (mem, size)
+   if size == self:sizeof() then
+      return self:superClass().new_from_mem(self, mem, size)
+   end
+end
+
+function Protocol.key_message:spi (spi)
+   local h = self:header()
+   if spi ~= nil then
+      ffi.copy(h.spi, spi, ffi.sizeof(h.spi))
+   end
+   return h.spi
 end
 
 function Protocol.key_message:public_key (public_key)
@@ -534,15 +634,17 @@ function Protocol.key_message:auth_code (auth_code)
    return h.auth_code
 end
 
-function Protocol:new (spi, key, timeout)
+function Protocol:new (r, key, timeout)
    local o = {
       status = Protocol.status.idle,
       timeout = timeout,
       deadline = nil,
       k = ffi.new(Protocol.buffer_t, Protocol.preshared_key_bytes),
-      spi = ffi.new(Protocol.spi_t),
+      r = ffi.new(Protocol.spi_t),
       n1 = ffi.new(Protocol.buffer_t, Protocol.nonce_bytes),
       n2 = ffi.new(Protocol.buffer_t, Protocol.nonce_bytes),
+      spi1 = ffi.new(Protocol.spi_t),
+      spi2 = ffi.new(Protocol.spi_t),
       s1 = ffi.new(Protocol.buffer_t, Protocol.secret_key_bytes),
       p1 = ffi.new(Protocol.buffer_t, Protocol.public_key_bytes),
       p2 = ffi.new(Protocol.buffer_t, Protocol.public_key_bytes),
@@ -553,7 +655,7 @@ function Protocol:new (spi, key, timeout)
       hash_state = ffi.new("struct crypto_generichash_blake2b_state")
    }
    ffi.copy(o.k, key, ffi.sizeof(o.k))
-   o.spi.u32 = lib.htonl(spi)
+   o.r.u32 = lib.htonl(r)
    return setmetatable(o, {__index=Protocol})
 end
 
@@ -571,14 +673,15 @@ function Protocol:receive_nonce (nonce_message)
       return nil, self:send_nonce(nonce_message)
    elseif self.status == Protocol.status.wait_nonce then
       self:intern_nonce(nonce_message)
-      self.status = Protocol.status.wait_key
+      self.status = Protocol.status._send_key
       self:set_deadline()
       return nil
    else return Protocol.code.protocol end
 end
 
 function Protocol:exchange_key (key_message)
-   if self.status == Protocol.status.wait_key then
+   if self.status == Protocol.status._send_key then
+      self.status = Protocol.status.wait_key
       return nil, self:send_key(key_message)
    else return Protocol.code.protocol end
 end
@@ -589,18 +692,18 @@ function Protocol:receive_key (key_message)
       if self:intern_key(key_message) then
          local response = self.status == Protocol.status.idle
                       and self:send_key(key_message)
-         self.status = Protocol.status.complete
+         self.status = Protocol.status._complete
          return nil, response
       else return Protocol.code.authentication end
    else return Protocol.code.protocol end
 end
 
 function Protocol:derive_ephemeral_keys ()
-   if self.status == Protocol.status.complete then
+   if self.status == Protocol.status._complete then
       self:reset()
       if self:derive_shared_secret() then
-         local rx = self:derive_key_material(self.p1, self.p2)
-         local tx = self:derive_key_material(self.p2, self.p1)
+         local rx = self:derive_key_material(self.spi1, self.p1, self.p2)
+         local tx = self:derive_key_material(self.spi2, self.p2, self.p1)
          return nil, rx, tx
       else return Protocol.code.paramter end
    else return Protocol.code.protocol end
@@ -625,30 +728,35 @@ function Protocol:intern_nonce (nonce_message)
 end
 
 function Protocol:send_key (key_message)
-   local spi, k, n1, n2, s1, p1 =
-      self.spi, self.k, self.n1, self.n2, self.s1, self.p1
+   local r, k, n1, n2, spi1, s1, p1 =
+      self.r, self.k, self.n1, self.n2, self.spi1, self.s1, self.p1
    local state, h1 = self.hmac_state, self.h
+   spi1.u32 = lib.htonl(Protocol:next_spi())
    C.randombytes_buf(s1, ffi.sizeof(s1))
    C.crypto_scalarmult_curve25519_base(p1, s1)
    C.crypto_auth_hmacsha512256_init(state, k, ffi.sizeof(k))
-   C.crypto_auth_hmacsha512256_update(state, spi.bytes, ffi.sizeof(spi))
+   C.crypto_auth_hmacsha512256_update(state, r.bytes, ffi.sizeof(r))
    C.crypto_auth_hmacsha512256_update(state, n1, ffi.sizeof(n1))
    C.crypto_auth_hmacsha512256_update(state, n2, ffi.sizeof(n2))
+   C.crypto_auth_hmacsha512256_update(state, spi1.bytes, ffi.sizeof(spi1))
    C.crypto_auth_hmacsha512256_update(state, p1, ffi.sizeof(p1))
    C.crypto_auth_hmacsha512256_final(state, h1)
-   return key_message:new({public_key=p1, auth_code=h1})
+   return key_message:new({spi = spi1.bytes, public_key=p1, auth_code=h1})
 end
 
 function Protocol:intern_key (m)
-   local spi, k, n1, n2, p2 = self.spi, self.k, self.n1, self.n2, self.p2
+   local r, k, n1, n2, spi2, p2 =
+      self.r, self.k, self.n1, self.n2, self.spi2, self.p2
    local state, h2 = self.hmac_state, self.h
    C.crypto_auth_hmacsha512256_init(state, k, ffi.sizeof(k))
-   C.crypto_auth_hmacsha512256_update(state, spi.bytes, ffi.sizeof(spi))
+   C.crypto_auth_hmacsha512256_update(state, r.bytes, ffi.sizeof(r))
    C.crypto_auth_hmacsha512256_update(state, n2, ffi.sizeof(n2))
    C.crypto_auth_hmacsha512256_update(state, n1, ffi.sizeof(n1))
+   C.crypto_auth_hmacsha512256_update(state, m:spi(), ffi.sizeof(spi2))
    C.crypto_auth_hmacsha512256_update(state, m:public_key(), ffi.sizeof(p2))
    C.crypto_auth_hmacsha512256_final(state, h2)
    if C.sodium_memcmp(h2, m:auth_code(), ffi.sizeof(h2)) == 0 then
+      ffi.copy(spi2.bytes, m:spi(), ffi.sizeof(spi2))
       ffi.copy(p2, m:public_key(), ffi.sizeof(p2))
       return true
    end
@@ -658,14 +766,15 @@ function Protocol:derive_shared_secret ()
    return C.crypto_scalarmult_curve25519(self.q, self.s1, self.p2) == 0
 end
 
-function Protocol:derive_key_material (salt_a, salt_b)
+function Protocol:derive_key_material (spi, salt_a, salt_b)
    local q, e, state = self.q, self.e, self.hash_state
    C.crypto_generichash_blake2b_init(state, nil, 0, ffi.sizeof(e))
    C.crypto_generichash_blake2b_update(state, q, ffi.sizeof(q))
    C.crypto_generichash_blake2b_update(state, salt_a, ffi.sizeof(salt_a))
    C.crypto_generichash_blake2b_update(state, salt_b, ffi.sizeof(salt_b))
    C.crypto_generichash_blake2b_final(state, e.bytes, ffi.sizeof(e.bytes))
-   return { key = ffi.string(e.slot.key, ffi.sizeof(e.slot.key)),
+   return { spi = lib.ntohl(spi.u32),
+            key = ffi.string(e.slot.key, ffi.sizeof(e.slot.key)),
             salt = ffi.string(e.slot.salt, ffi.sizeof(e.slot.salt)) }
 end
 
@@ -678,11 +787,19 @@ function Protocol:set_deadline ()
    self.deadline = lib.timeout(self.timeout)
 end
 
+function Protocol:next_spi ()
+   local current_spi = Protocol.spi_counter + 256
+   Protocol.spi_counter = (Protocol.spi_counter + 1) % (2^32 - 1 - 256)
+   return current_spi
+end
+
 -- Assertions about the world                                              (-:
 
 assert(Protocol.preshared_key_bytes == 32)
 assert(Protocol.public_key_bytes == 32)
 assert(Protocol.auth_code_bytes == 32)
+assert(ffi.sizeof(Protocol.key_t) >= C.crypto_generichash_blake2b_BYTES_MIN)
+assert(ffi.sizeof(Protocol.key_t) <= C.crypto_generichash_blake2b_BYTES_MAX)
 
 -- Transport wrapper for vita-ske that encompasses an SPI to map requests to
 -- routes, and a message type to facilitate parsing.
@@ -691,7 +808,7 @@ assert(Protocol.auth_code_bytes == 32)
 -- requests through protocol filters.
 
 Transport = {
-   message_type = { nonce = 1, key = 2 },
+   message_type = { nonce = 1, key = 3 },
    header = subClass(header)
 }
 Transport.header:init({
@@ -727,4 +844,146 @@ function Transport.header:message_type (message_type)
       h.message_type = message_type
    end
    return h.message_type
+end
+
+-- Test Protocol FSM
+function selftest ()
+   local old_now = engine.now
+   local now
+   engine.now = function () return now end
+   local key1 = ffi.new("uint8_t[20]");
+   local key2 = ffi.new("uint8_t[20]"); key2[0] = 1
+   local A = Protocol:new(1234, key1, 2)
+   local B = Protocol:new(1234, key1, 2)
+   local C = Protocol:new(1234, key2, 2)
+
+   now = 0
+
+   -- Idle fsm can either receive_nonce, receive_key, or initiate_exchange
+
+   local e, m = A:exchange_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:receive_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.authentication and not m)
+   local e, rx, tx = A:derive_ephemeral_keys()
+   assert(e == Protocol.code.protocol and not (rx or tx))
+
+   local e, m = A:receive_nonce(Protocol.nonce_message:new{})
+   assert(not e and m)
+
+   -- idle -> wait_nonce
+   local e, nonce_a = A:initiate_exchange(Protocol.nonce_message:new{})
+   assert(not e and nonce_a)
+
+   -- B receives nonce request
+   local e, nonce_b = B:receive_nonce(nonce_a)
+   assert(not e)
+   assert(nonce_b)
+
+   -- Active fsm waiting for nonce can only receive nonce
+
+   local e, m = A:initiate_exchange(Protocol.nonce_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:exchange_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:receive_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, rx, tx = A:derive_ephemeral_keys()
+   assert(e == Protocol.code.protocol and not (rx or tx))
+
+   -- wait_nonce -> _send_key
+   local e, m = A:receive_nonce(nonce_b)
+   assert(not e and not m)
+
+   -- Active fsm with exchanged nonces must offer key
+
+   local e, m = A:initiate_exchange(Protocol.nonce_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:receive_nonce(nonce_b)
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:receive_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, rx, tx = A:derive_ephemeral_keys()
+   assert(e == Protocol.code.protocol and not (rx or tx))
+
+   -- _send_key -> wait_key
+   local e, dh_a = A:exchange_key(Protocol.key_message:new{})
+   assert(not e and dh_a)
+
+
+   -- B receives key request
+   local e, dh_b = B:receive_key(dh_a)
+   assert(not e and dh_b)
+
+   -- Active fsm that offered its key must wait for matching offer
+
+   local e, m = A:initiate_exchange(Protocol.nonce_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:exchange_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:receive_nonce(nonce_b)
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:receive_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.authentication and not m)
+   local e, rx, tx = A:derive_ephemeral_keys()
+   assert(e == Protocol.code.protocol and not (rx or tx))
+
+   -- wait_key -> _complete
+   local e, m = A:receive_key(dh_b)
+   assert(not e and not m)
+
+   -- Complete fsm must derive ephemeral keys
+
+   local e, m = A:initiate_exchange(Protocol.nonce_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:exchange_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:receive_nonce(nonce_b)
+   assert(e == Protocol.code.protocol and not m)
+   local e, m = A:receive_key(Protocol.key_message:new{})
+   assert(e == Protocol.code.protocol and not m)
+
+   -- _complete -> idle
+   local e, A_rx, A_tx = A:derive_ephemeral_keys()
+   assert(not e)
+
+   -- Ephemeral keys should match
+   local e, B_rx, B_tx = B:derive_ephemeral_keys()
+   assert(not e)
+   assert(A_rx.key == B_tx.key)
+   assert(A_rx.salt == B_tx.salt)
+   assert(A_tx.key == B_rx.key)
+   assert(A_tx.salt == B_rx.salt)
+
+   -- Test negotiation expiry
+
+   -- Idle fsm should have its deadline reset
+   now = 10
+   assert(not A:reset_if_expired() and not B:reset_if_expired())
+
+   -- idle -> wait_nonce
+   A:initiate_exchange(Protocol.nonce_message:new{})
+   assert(not A:reset_if_expired())
+
+   -- wait_nonce -> idle
+   now = 12.0123
+   assert(A:reset_if_expired() == Protocol.code.expired)
+
+   -- idle -> wait_nonce
+   local _, nonce_a = A:initiate_exchange(Protocol.nonce_message:new{})
+
+   -- wait_nonce -> _send_key
+   now = 20
+   local _, nonce_b = B:receive_nonce(nonce_a)
+   A:receive_nonce(nonce_b)
+
+   -- _send_key -> wait_key
+   local _, dh_a = A:exchange_key(Protocol.key_message:new{})
+   assert(not A:reset_if_expired())
+
+   -- wait_key -> idle
+   now = 30
+   assert(A:reset_if_expired() == Protocol.code.expired)
+
+   engine.now = old_now
 end
