@@ -273,7 +273,7 @@ module vita-esp-gateway {
 
     container public-router {
       description "Routing errors for inbound packets (to be decapsulated.)";
-      leaf oute-errors {
+      leaf route-errors {
         type yang:zero-based-counter64;
         description
           "Count of packets that were dropped because their destination did not
