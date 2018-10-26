@@ -44,8 +44,12 @@ module vita-esp-gateway {
 
   // Active outbound SAs (at most one per route) and inbound SAs (possibly
   // multiple per route.) 
-  list outbound-sa { uses sa; unique "route"; unique "spi"; config false; }
-  list inbound-sa { uses sa; unique "spi"; config false; }
+  list outbound-sa { key "spi"; unique "route"; uses sa; }
+  list inbound-sa { key "spi"; uses sa; }
+
+  // If true, disables KeyManager (route.spi, route.preshared-key,
+  // negotiation-ttl, and sa-ttl are ignored.)
+  leaf data-plane { type boolean; }
 
   // APPLICATION STATE
   container gateway-state {

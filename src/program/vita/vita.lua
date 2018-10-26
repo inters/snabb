@@ -35,6 +35,7 @@ local confspec = {
    route = {default={}},
    negotiation_ttl = {},
    sa_ttl = {},
+   data_plane = {},
    inbound_sa = {default={}},
    outbound_sa = {default={}}
 }
@@ -309,10 +310,12 @@ function configure_public_router (conf, append)
    config.link(c, "PublicDispatch.protocol4_unreachable -> PublicICMP4.protocol_unreachable")
    config.link(c, "PublicICMP4.output -> PublicNextHop.icmp4")
 
-   config.app(c, "Protocol_in_Tx", Transmitter, "Protocol_in")
-   config.app(c, "Protocol_out_Rx", Receiver, "Protocol_out")
-   config.link(c, "PublicDispatch.protocol -> Protocol_in_Tx.input")
-   config.link(c, "Protocol_out_Rx.output -> PublicNextHop.protocol")
+   if not conf.data_plane then
+      config.app(c, "Protocol_in_Tx", Transmitter, "Protocol_in")
+      config.app(c, "Protocol_out_Rx", Receiver, "Protocol_out")
+      config.link(c, "PublicDispatch.protocol -> Protocol_in_Tx.input")
+      config.link(c, "Protocol_out_Rx.output -> PublicNextHop.protocol")
+   end
 
    for id, route in pairs(conf.route) do
       local public_out = "PublicNextHop."..id
@@ -380,6 +383,8 @@ end
 function configure_exchange (conf, append)
    conf = parse_conf(conf)
    local c = append or config.new()
+
+   if conf.data_plane then return end
 
    if not conf.public_interface then return c end
 
