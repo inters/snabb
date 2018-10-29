@@ -6,7 +6,7 @@ INCLUDE = *.* core arch jit syscall pf \
           lib/scheduling.* lib/timers \
           apps/interlink apps/intel_mp \
           program/vita program/config program/ps program/pci_bind \
-          program/top program/trace
+          program/top
 
 INCLUDE_TEST = $(INCLUDE) \
                lib/pmu* apps/basic apps/test apps/packet_filter apps/ipv4 \
