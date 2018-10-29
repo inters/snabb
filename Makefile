@@ -10,11 +10,7 @@ LUAJIT_CFLAGS := -include $(CURDIR)/gcc-preinclude.h -DLUAJIT_VMPROFILE
 all: $(LUAJIT) $(SYSCALL) $(PFLUA) luajit ljsyscall pflua ljndpi libsodium
 	cd src && $(MAKE) -f $(RECIPE)
 luajit: $(LUAJIT)
-	@(cd lib/luajit && \
-	 $(MAKE) PREFIX=`pwd`/usr/local \
-	         CFLAGS="$(LUAJIT_CFLAGS)" && \
-	 $(MAKE) DESTDIR=`pwd` install)
-	(cd lib/luajit/usr/local/bin; ln -fs luajit-2.1.0-beta2 luajit)
+	@(cd lib/luajit && (cd src && $(MAKE) reusevm) && $(MAKE) CFLAGS="$(LUAJIT_CFLAGS)")
 ljsyscall: $(SYSCALL)
 	@mkdir -p src/syscall/linux
 	@cp -p lib/ljsyscall/syscall.lua   src/
