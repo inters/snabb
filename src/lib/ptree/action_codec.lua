@@ -129,13 +129,15 @@ local function encoder()
    end
    function encoder:config(class, arg)
       local file_name = random_file_name()
+      local tmp_name = file_name..".tmp"
       if class.yang_schema then
          yang.compile_config_for_schema_by_name(class.yang_schema, arg,
-                                                file_name)
+                                                tmp_name)
       else
          if arg == nil then arg = {} end
-         binary.compile_ad_hoc_lua_data_to_file(file_name, arg)
+         binary.compile_ad_hoc_lua_data_to_file(tmp_name, arg)
       end
+      assert(S.rename(tmp_name, file_name)) -- ensure atomic update
       self:string(file_name)
    end
    function encoder:finish()
