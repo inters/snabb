@@ -5,6 +5,7 @@
 local vita = require("program.vita.vita")
 local vita_test = require("program.vita.test")
 local yang = require("lib.yang.yang")
+local mem = require("lib.stream.mem")
 
 -- Synopsis:
 --
@@ -13,7 +14,7 @@ local yang = require("lib.yang.yang")
 -- Read test configuration from stdin and write Vita configuration to stdout.
 
 local testconf = yang.load_config_for_schema(
-   vita_test.schemata['gentest'], io.stdin:read("a*"), io.stdin
+   vita_test.schemata['gentest'], mem.open_input_string(io.stdin:read("a*"))
 )
 
 yang.print_config_for_schema(vita.schemata['esp-gateway'],

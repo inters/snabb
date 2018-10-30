@@ -20,16 +20,13 @@ local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local numa = require("lib.numa")
 local yang = require("lib.yang.yang")
-local cltable = require("lib.cltable")
+local ptree = require("lib.ptree.ptree")
+local CPUSet = require("lib.cpuset")
 local pci = require("lib.hardware.pci")
 local S = require("syscall")
 local ffi = require("ffi")
 local usage = require("program.vita.README_inc")
 local confighelp = require("program.vita.README_config_inc")
-
-local ptree = require("lib.ptree.ptree")
-local generic_schema_support = require("lib.ptree.support").generic_schema_config_support
-local CPUSet = require("lib.cpuset")
 
 local confspec = {
    private_interface = {},
@@ -38,6 +35,7 @@ local confspec = {
    route = {default={}},
    negotiation_ttl = {},
    sa_ttl = {},
+   data_plane = {},
    inbound_sa = {default={}},
    outbound_sa = {default={}}
 }
@@ -133,10 +131,10 @@ function run_vita (opt)
          return actions
       end,
       update_mutable_objects_embedded_in_app_initargs = function () end,
-      compute_state_reader = generic_schema_support.compute_state_reader,
-      configuration_for_worker = generic_schema_support.configuration_for_worker,
-      process_states = generic_schema_support.process_states,
       compute_apps_to_restart_after_configuration_update = function () end,
+      compute_state_reader = schemata.support.compute_state_reader,
+      configuration_for_worker = schemata.support.configuration_for_worker,
+      process_states = schemata.support.process_states,
       translators = {}
    }
    local function purify (setup_fn)
@@ -174,19 +172,6 @@ function run_vita (opt)
       end
    end
 
-   -- Helper for loading the SA database as a configuration file in Snabb YANG
-   -- text format.
-   local function try_load_sa_db ()
-      local function load_sa_db ()
-         return yang.load_config_for_schema(
-            schemata['ephemeral-keys'],
-            lib.readfile(sa_db_path, "a*"),
-            sa_db_path
-         )
-      end
-      return pcall(load_sa_db)
-   end
-
    -- This is how we imperatively incorporate the SA database into the
    -- configuration proper. NB: see schema_support and the use of purify above.
    local function merge_sa_db (sa_db)
@@ -208,7 +193,8 @@ function run_vita (opt)
    while true do
       supervisor:main(1)
       if sa_db_needs_reload() then
-         local success, sa_db = try_load_sa_db()
+         local success, sa_db = pcall(yang.load_configuration, sa_db_path,
+                                      {schema_name='vita-ephemeral-keys'})
          if success then
             supervisor:info("Reloading SA database: %s", sa_db_path)
             supervisor:update_configuration(merge_sa_db(sa_db), 'set', '/')
@@ -324,10 +310,12 @@ function configure_public_router (conf, append)
    config.link(c, "PublicDispatch.protocol4_unreachable -> PublicICMP4.protocol_unreachable")
    config.link(c, "PublicICMP4.output -> PublicNextHop.icmp4")
 
-   config.app(c, "Protocol_in_Tx", Transmitter, "Protocol_in")
-   config.app(c, "Protocol_out_Rx", Receiver, "Protocol_out")
-   config.link(c, "PublicDispatch.protocol -> Protocol_in_Tx.input")
-   config.link(c, "Protocol_out_Rx.output -> PublicNextHop.protocol")
+   if not conf.data_plane then
+      config.app(c, "Protocol_in_Tx", Transmitter, "Protocol_in")
+      config.app(c, "Protocol_out_Rx", Receiver, "Protocol_out")
+      config.link(c, "PublicDispatch.protocol -> Protocol_in_Tx.input")
+      config.link(c, "Protocol_out_Rx.output -> PublicNextHop.protocol")
+   end
 
    for id, route in pairs(conf.route) do
       local public_out = "PublicNextHop."..id
@@ -395,6 +383,8 @@ end
 function configure_exchange (conf, append)
    conf = parse_conf(conf)
    local c = append or config.new()
+
+   if conf.data_plane then return end
 
    if not conf.public_interface then return c end
 

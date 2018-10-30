@@ -1,12 +1,15 @@
 INCLUDE = *.* core arch jit syscall pf \
-          lib/lua lib/protocol lib/checksum.* lib/ipsec lib/yang lib/ptree \
+          lib/token_bucket.* lib/tsc.* \
+          lib/lua lib/protocol lib/checksum.* lib/ipsec \
+          lib/yang lib/stream.* lib/stream lib/buffer.* \
           lib/xsd_regexp.* lib/maxpc.* lib/ctable.* lib/binary_search.* \
+          lib/ptree lib/rrd.* lib/fibers \
           lib/multi_copy.* lib/hash lib/cltable.* lib/lpm lib/interlink.* \
           lib/hardware lib/macaddress.* lib/numa.* lib/cpuset.* \
           lib/scheduling.* lib/timers \
           apps/interlink apps/intel_mp \
           program/vita program/config program/ps program/pci_bind \
-          program/top
+          program/top program/shm
 
 INCLUDE_TEST = $(INCLUDE) \
                lib/pmu* apps/basic apps/test apps/packet_filter apps/ipv4 \
