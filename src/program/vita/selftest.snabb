@@ -73,8 +73,8 @@ local c = config.new()
 -- Configure Vita app network (all-in-one process.)
 local _, private = vita.configure_private_router(cfg, c)
 local _, public = vita.configure_public_router(cfg, c)
-vita.configure_esp(cfg, c)
-vita.configure_dsp(cfg, c)
+vita.configure_esp(cfg, "loopback", c)
+vita.configure_dsp(cfg, "loopback", c)
 
 -- Add ARP resolvers.
 config.app(c, "private_arp", ARP, {
