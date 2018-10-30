@@ -8,8 +8,6 @@ package.path = ''
 
 local STP = require("lib.lua.StackTracePlus")
 local ffi = require("ffi")
-local zone = require("jit.zone")
-local jdump = require("jit.dump")
 local vmprofile = require("jit.vmprofile")
 local lib = require("core.lib")
 local shm = require("core.shm")
@@ -43,7 +41,6 @@ _G.developer_debug = lib.getenv("SNABB_DEBUG") ~= nil
 debug_on_error = _G.developer_debug
 
 function main ()
-   zone("startup")
    require "lib.lua.strict"
    -- Warn on unsupported platforms
    if ffi.arch ~= 'x64' or ffi.os ~= 'Linux' then
@@ -57,7 +54,7 @@ function main ()
       if f == nil then
          error(("Failed to load $SNABB_PROGRAM_LUACODE: %q"):format(expr))
       else
-         engine.setvmprofile('program')
+         engine.setvmprofile("program")
          vmprofile.start()
          f()
       end
@@ -68,7 +65,7 @@ function main ()
          print("unsupported program: "..program:gsub("_", "-"))
          usage(1)
       else
-         engine.setvmprofile('program')
+         engine.setvmprofile("program")
          vmprofile.start()
          require(modulename(program)).run(args)
       end
@@ -165,11 +162,9 @@ function initialize ()
    _G.engine = require("core.app")
    _G.memory = require("core.memory")
    _G.link   = require("core.link")
-   _G.packet = require("core.packet")
+   _G.packet = require("core.packet"); _G.packet.initialize()
    _G.timer  = require("core.timer")
    _G.main   = getfenv()
-   shm.mkdir(shm.resolve(""))
-   jdump.on("tbimTrs", shm.root.."/"..shm.resolve("jdump"))
 end
 
 function handler (reason)
@@ -187,10 +182,15 @@ function shutdown (pid)
       if not ok then print(err) end
    end
    -- Run cleanup hooks
+   safely(function () require("core.packet").shutdown(pid) end)
    safely(function () require("apps.interlink.receiver").shutdown(pid) end)
    safely(function () require("apps.interlink.transmitter").shutdown(pid) end)
    -- Parent process performs additional cleanup steps.
    -- (Parent is the process whose 'group' folder is not a symlink.)
+
+   -- Restore non-blocking flags on file descriptions, as these are
+   -- shared with the parent.
+   S.stdin:block(); S.stdout:block(); S.stderr:block()
    local st, err = S.lstat(shm.root.."/"..pid.."/group")
    local is_parent = st and st.isdir
    if is_parent then

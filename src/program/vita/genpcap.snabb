@@ -5,6 +5,7 @@
 local vita_test = require("program.vita.test")
 local pcap = require("lib.pcap.pcap")
 local yang = require("lib.yang.yang")
+local mem = require("lib.stream.mem")
 
 -- Synopsis:
 --
@@ -14,7 +15,7 @@ local yang = require("lib.yang.yang")
 -- traffic to stdout.
 
 local testconf = yang.load_config_for_schema(
-   vita_test.schemata['gentest'], io.stdin:read("a*"), io.stdin
+   vita_test.schemata['gentest'], mem.open_input_string(io.stdin:read("a*"))
 )
 
 pcap.write_file_header(io.stdout)

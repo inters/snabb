@@ -32,6 +32,13 @@ local named_program_root = shm.root .. "/" .. "by-name"
 -- The currently claimed name (think false = nil but nil makes strict.lua unhappy).
 program_name = false
 
+-- Auditlog state
+auditlog_enabled = false
+function enable_auditlog ()
+   jit.auditlog(shm.path("audit.log"))
+   auditlog_enabled = true
+end
+
 -- The set of all active apps and links in the system, indexed by name.
 app_table, link_table = {}, {}
 
@@ -70,7 +77,7 @@ busywait = false
 
 -- Profiling with vmprofile --------------------------------
 
--- FFI interface towards vmprofile
+-- Low-level FFI
 ffi.cdef[[
 int vmprofile_get_profile_size();
 void vmprofile_set_profile(void *counters);
@@ -81,7 +88,7 @@ local vmprofile_t = ffi.new("uint8_t["..C.vmprofile_get_profile_size().."]")
 local vmprofiles = {}
 local function getvmprofile (name)
    if vmprofiles[name] == nil then
-      vmprofiles[name] = shm.create("engine/vmprofile/"..name, vmprofile_t)
+      vmprofiles[name] = shm.create("vmprofile/"..name, vmprofile_t)
    end
    return vmprofiles[name]
 end
@@ -118,7 +125,7 @@ function with_restart (app, method)
    else
       status, result = true, method(app)
    end
-   setvmprofile('engine')
+   setvmprofile("engine")
    return status, result
 end
 
@@ -159,6 +166,12 @@ function configure (new_config)
    local actions = compute_config_actions(configuration, new_config)
    apply_config_actions(actions)
    counter.add(configs)
+end
+
+
+-- Stop all apps by loading an empty configuration.
+function stop ()
+   configure(config.new())
 end
 
 -- Removes the claim on a name, freeing it for other programs.
@@ -492,8 +505,13 @@ function main (options)
       done = lib.timeout(options.duration)
    end
 
+   -- Enable auditlog
+   if not auditlog_enabled then
+      enable_auditlog()
+   end
+
    -- Setup vmprofile
-   setvmprofile('engine')
+   setvmprofile("engine")
 
    local breathe = breathe
    if options.measure_latency or options.measure_latency == nil then
@@ -509,7 +527,9 @@ function main (options)
    until done and done()
    counter.commit()
    if not options.no_report then report(options.report) end
-   setvmprofile('program')
+
+   -- Switch to catch-all profile
+   setvmprofile("program")
 end
 
 local nextbreath
@@ -747,6 +767,11 @@ function selftest ()
    assert(app_table.app3 == orig_app3) -- should be the same
    main({duration = 4, report = {showapps = true}})
    assert(app_table.app3 ~= orig_app3) -- should be restarted
+
+   -- Check engine stop
+   assert(not lib.equal(app_table, {}))
+   engine.stop()
+   assert(lib.equal(app_table, {}))
 
    -- Check one can't unclaim a name if no name is claimed.
    assert(not pcall(unclaim_name))

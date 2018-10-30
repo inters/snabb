@@ -11,8 +11,9 @@
 
 static void worker_sigchld_handler(int sig, siginfo_t *si, void *unused)
 {
-  // Exit with child’s status
-  exit(si->si_status);
+  // Exit with child’s status if si_status != 0
+  if (si->si_status != 0)
+    exit(si->si_status);
 }
 
 // Setup a SIGCHLD handler to propagate child exits

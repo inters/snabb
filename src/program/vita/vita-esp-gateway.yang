@@ -1,13 +1,13 @@
 module vita-esp-gateway {
-  // Metadata
+  // METADATA
   namespace vita:esp-gateway;
   prefix esp-gateway;
 
-  // Imports
+  // IMPORTS
   import ietf-yang-types { prefix yang; }
   import ietf-inet-types { prefix inet; }
 
-  // Application model
+  // APPLICATION MODEL
   grouping interface {
     leaf pci { type pci-address; mandatory true; }
     leaf ip4 { type inet:ipv4-address-no-zone; mandatory true; }
@@ -22,7 +22,7 @@ module vita-esp-gateway {
   leaf mtu { type uint16 { range "0..8937"; } }
 
   list route {
-    key id; unique "net-cidr4 preshared-key spi";
+    key id; unique "net-cidr4"; unique "preshared-key"; unique "spi";
     leaf id { type id; mandatory true; }
     leaf net-cidr4 { type inet:ipv4-prefix; mandatory true; }
     leaf gw-ip4 { type inet:ipv4-address-no-zone; mandatory true; }
@@ -33,7 +33,7 @@ module vita-esp-gateway {
   leaf negotiation-ttl { type time-to-live; }
   leaf sa-ttl { type time-to-live; }
 
-  // Negotiated by Key Manager
+  // Negotiated by Key Manager or configured manually
   grouping sa {
     leaf route { type id; mandatory true; } // Parent route identifier
     leaf spi { type spi; mandatory true; }
@@ -44,10 +44,478 @@ module vita-esp-gateway {
 
   // Active outbound SAs (at most one per route) and inbound SAs (possibly
   // multiple per route.) 
-  list outbound-sa { uses sa; unique "route spi"; config false; }
-  list inbound-sa { uses sa; unique "spi"; config false; }
+  list outbound-sa { key "spi"; unique "route"; uses sa; }
+  list inbound-sa { key "spi"; uses sa; }
 
-  // Types 
+  // If true, disables KeyManager (route.spi, route.preshared-key,
+  // negotiation-ttl, and sa-ttl are ignored.)
+  leaf data-plane { type boolean; }
+
+  // APPLICATION STATE
+  container gateway-state {
+    description "Gateway state counters for monitoring and troubleshooting.";
+    config false;
+
+    // Interface state
+    grouping interface-state {
+      leaf rxbytes {
+        type yang:zero-based-counter64;
+        description
+          "Total bytes received.";
+      }
+      leaf rxpackets {
+        type yang:zero-based-counter64;
+        description
+          "Total packets received.";
+      }
+      leaf rxmcast {
+        type yang:zero-based-counter64;
+        description
+          "Count of multicast packets received.";
+      }
+      leaf rxbcast {
+        type yang:zero-based-counter64;
+        description
+          "Count of broadcast packets received.";
+      }
+      leaf rxdrop {
+        type yang:zero-based-counter64;
+        description
+          "Count of incoming packets that were dropped.";
+      }
+      leaf rxerrors {
+        type yang:zero-based-counter64;
+        description
+          "Count of receive errors.";
+      }
+      leaf txbytes {
+        type yang:zero-based-counter64;
+        description
+          "Total bytes transmitted.";
+      }
+      leaf txpackets {
+        type yang:zero-based-counter64;
+        description
+          "Total packets transmitted.";
+      }
+      leaf txmcast {
+        type yang:zero-based-counter64;
+        description
+          "Count of multicast packets transmitted.";
+      }
+      leaf txbcast {
+        type yang:zero-based-counter64;
+        description
+          "Count of broadcast packets transmitted.";
+      }
+      leaf txdrop {
+        type yang:zero-based-counter64;
+        description
+          "Count of outgoing packets that were dropped.";
+      }
+      leaf txerrors {
+        type yang:zero-based-counter64;
+        description
+          "Count of transmit errors.";
+      }
+      leaf rxdmapackets {
+        type yang:zero-based-counter64;
+        description
+          "Count of incoming packets that were copied to main memory.";
+      }
+    }
+
+    container private-interface {
+      description "Private interface statistics.";
+      uses interface-state;
+    }
+
+    container public-interface {
+      description "Public interface statistics.";
+      uses interface-state;
+    }
+
+    // Next-hop state
+    grouping next-hop-state {
+      leaf arp-requests {
+        type yang:zero-based-counter64;
+        description
+          "Count of ARP requests sent.";
+      }
+      leaf arp-replies {
+        type yang:zero-based-counter64;
+        description
+          "Count of ARP replies sent.";
+      }
+      leaf arp-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of declined ARP requests.";
+      }
+      leaf adresses-added {
+        type yang:zero-based-counter64;
+        description
+          "Count of learned addresses.";
+      }
+      leaf adresses-updated {
+        type yang:zero-based-counter64;
+        description
+          "Count of times an address was updated.";
+      }
+    }
+
+    container private-next-hop {
+      description "Private next-hop events.";
+      uses next-hop-state;
+    }
+
+    container public-next-hop {
+      description "Public next-hop events.";
+      uses next-hop-state;
+    }
+
+    // Protocol dispatch state
+    container private-dispatch {
+      description "Protocol dispatch errors for packets received on the
+                   private interface.";
+      leaf rxerrors {
+        type yang:zero-based-counter64;
+        description
+          "Total number of unhandled packets.";
+      }
+      leaf ethertype-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of packets that were dropped because they had an unsupported
+           Ethertype.";
+      }
+      leaf checksum-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of packets that were dropped because they had an invalid IP
+           checksum.";
+      }
+    }
+
+    container public-dispatch {
+      description "Protocol dispatch errors for packets received on the
+                   public interface.";
+      leaf rxerrors {
+        type yang:zero-based-counter64;
+        description
+          "Total number of unhandled packets.";
+      }
+      leaf ethertype-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of packets that were dropped because they had an unsupported
+           Ethertype.";
+      }
+      leaf protocol-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of packets that were dropped because they were of an
+           unsupported protocol.";
+      }
+      leaf fragment-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of packets that were dropped because they were IP fragments.";
+      }
+    }
+
+    container inbound-dispatch {
+      description "Protocol dispatch errors inbound packets that were
+                   successfully decapsulated.";
+      leaf protocol-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of packets that were dropped because they were of an
+           unsupported protocol.";
+      }
+    }
+
+    // TTL state
+    grouping time-to-live-state {
+      leaf protocol-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of packets that were dropped because their TTL reached zero.";
+      }
+    }
+
+    container outbound-ttl {
+      description "TTL errors for outbound packets.";
+      uses time-to-live-state;
+    }
+
+    container inbound-ttl {
+      description "TTL errors for inbound packets.";
+      uses time-to-live-state;
+    }
+
+    // Router state
+    container private-router {
+      description "Routing errors for outbound packets (to be encapsulated.)";
+      leaf rxerrors {
+        type yang:zero-based-counter64;
+        description
+          "Total packets that were dropped because they were not routable.";
+      }
+      leaf route-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of packets that were dropped because their destination did not
+           match any configured route.";
+      }
+      leaf mtu-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of packets that were dropped because they exceeded the MTU.";
+      }
+    }
+
+    container public-router {
+      description "Routing errors for inbound packets (to be decapsulated.)";
+      leaf route-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of packets that were dropped because their destination did not
+           match any configured route.";
+      }
+    }
+
+    // ICMP state
+    grouping icmp4-state {
+      leaf rxerrors {
+        type yang:zero-based-counter64;
+        description
+          "Total ICMPv4 messages that were dropped because they were invalid.";
+      }
+      leaf protocol-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 messages that were dropped because their checksum
+           was invalid, or they were IP fragments.";
+      }
+      leaf type-not-implemented-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 messages received that had an unrecognized type.";
+      }
+      leaf code-not-implemented-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 messages received that had an unrecognized code.";
+      }
+      leaf destination-unreachable {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 messages received of type
+           'destination unreachable'."; 
+      }
+      leaf net-unreachable {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 'destination unreachable' messages received with
+           code 'net unreachable'.";
+      }
+      leaf host-unreachable {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 'destination unreachable' messages received with
+           code 'host unreachable'.";
+      }
+      leaf protocol-unreachable {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 'destination unreachable' messages received with
+           code 'protocol unreachable'.";
+      }
+      leaf port-unreachable {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 'destination unreachable' messages received with
+           code 'port unreachable'.";
+      }
+      leaf fragmentation-needed {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 'destination unreachable' messages received with
+           code 'fragmentation needed and DF set'.";
+      }
+      leaf source-route-failed {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 'destination unreachable' messages received with
+           code 'source route failed'.";
+      }
+      leaf time-exceeded {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 messages received of type
+           'time exceeded'."; 
+      }
+      leaf transit-ttl-exceeded {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 'time exceeded' messages received with code
+           'time to live exceeded in transit'.";
+      }
+      leaf fragment-reassembly-time-exceeded {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 'time exceeded' messages received with code
+           'fragment reassembly time exceeded'.";
+      }
+      leaf parameter-problem {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 messages received of type
+           'parameter problem'."; 
+      }
+      leaf redirect {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 messages received of type
+           'redirect'."; 
+      }
+      leaf redirect-net {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 'redirect' messages received with code
+           'Redirect datagrams for the Network'.";
+      }
+      leaf redirect-host {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 'redirect' messages received with code
+           'Redirect datagrams for the Host'.";
+      }
+      leaf redirect-tos-net {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 'redirect' messages received with code
+           'Redirect datagrams for the Type of Service and Network'.";
+      }
+      leaf redirect-tos-host {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 'redirect' messages received with code
+           'Redirect datagrams for the Type of Service and Host'.";
+      }
+      leaf echo-request {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv4 echo requests handled.";
+      }
+    }
+
+    container private-icmp4 {
+      description "ICMPv4 events on the private interface.";
+      uses icmp4-state;
+    }
+
+    container public-icmp4 {
+      description "ICMPv4 events on the public interface.";
+      uses icmp4-state;
+    }
+
+    container inbound-icmp4 {
+      description "ICMPv4 events triggered by encapsulated messages on the
+                   public interface.";
+      uses icmp4-state;
+    }
+
+    // SA state
+    list inbound-sa {
+      key "spi";
+      leaf spi { type spi; }
+      container sa-state {
+        leaf rxerrors {
+          type yang:zero-based-counter64;
+          description
+            "Count of all packets destined to this SA that were dropped.";
+        }
+        leaf protocol-errors {
+          type yang:zero-based-counter64;
+          description
+            "Count of packets that were dropped because the encapsulated
+             protocol was not supported.";
+        }
+        leaf decrypt-errors {
+          type yang:zero-based-counter64;
+          description
+            "Count of packets that were dropped because of errors while
+             decapsulating or authenticating the security payload.";
+        }
+      }
+    }
+
+    // KeyManager state
+    container key-manager {
+      description "Authenticated key exchange and SA management events.";
+      leaf rxerrors {
+        type yang:zero-based-counter64;
+        description
+          "Total number key exchange requests received that were invalid.";
+      }
+      leaf route-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of key exchange requests received that couldn’t be associated
+           to any configured route.";
+      }
+      leaf protocol-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of key exchange requests received that violated the protocol
+         (i.e., order of messages and message format).";
+      }
+      leaf authentication-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of key exchange requests received that failed to authenticate
+         (i.e., had an erroneous message authentication code, this may include
+         packets corrupted during transit.)";
+      }
+      leaf public-key-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of key exchange requests received offering public keys that
+           were rejected because they were considered unsafe.";
+      }
+      leaf negotiations-initiated {
+        type yang:zero-based-counter64;
+        description
+          "Count of key exchange negotiations initiated.";
+      }
+      leaf negotiations-expired {
+        type yang:zero-based-counter64;
+        description
+          "Count of key exchange negotiations expired due to exceeding
+         negotiation-ttl.";
+      }
+      leaf nonces-negotiated {
+        type yang:zero-based-counter64;
+        description
+          "Count of nonce pairs that were exchanged (elevated count can
+           indicate a denial-of-service attack.)";
+      }
+      leaf keypairs-negotiated {
+        type yang:zero-based-counter64;
+        description
+          "Count of ephemeral key pairs that were exchanged.";
+      }
+      leaf keypairs-expired {
+        type yang:zero-based-counter64;
+        description
+          "Count of ephemeral key pairs that have expired due to sa-ttl.";
+      }
+    }
+  }
+
+  // TYPES 
   typedef id { type string { pattern '[\w_]+'; } }
   typedef pci-address {
     type string {

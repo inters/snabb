@@ -516,14 +516,11 @@ function KeyManager:commit_sa_db ()
       end
    end
    -- Commit active SAs to SA database
-   local db = assert(io.open(self.sa_db_file, "w"),
-                     "Unable to open SA database: "..self.sa_db_file)
-   yang.print_config_for_schema(
+   yang.compile_config_for_schema(
       schemata['ephemeral-keys'],
       {outbound_sa=esp_keys, inbound_sa=dsp_keys},
-      db
+      self.sa_db_file
    )
-   db:close()
 end
 
 -- Vita: simple key exchange (vita-ske, version 1i). See README.exchange

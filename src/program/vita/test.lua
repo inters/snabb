@@ -273,7 +273,7 @@ function gen_configuration (conf)
       cfg.route["test"..route] = {
          net_cidr4 = conf.route_prefix.."."..route..".0/24",
          gw_ip4 = conf.public_interface.nexthop_ip4,
-         preshared_key = string.rep("00", 32),
+         preshared_key = ("%064x"):format(route),
          spi = 1000+route
       }
    end
