@@ -2,19 +2,20 @@
 
 module(...,package.seeall)
 
-local packet    = require("core.packet")
-local lib       = require("core.lib")
-local link      = require("core.link")
-local config    = require("core.config")
-local timer     = require("core.timer")
-local shm       = require("core.shm")
-local histogram = require('core.histogram')
-local counter   = require("core.counter")
-local jit       = require("jit")
-local S         = require("syscall")
-local ffi       = require("ffi")
-local C         = ffi.C
-local S         = require("syscall")
+local packet       = require("core.packet")
+local lib          = require("core.lib")
+local link         = require("core.link")
+local config       = require("core.config")
+local timer        = require("core.timer")
+local shm          = require("core.shm")
+local histogram    = require('core.histogram')
+local counter      = require("core.counter")
+local timeline_mod = require("core.timeline") -- avoid collision with timeline
+local jit          = require("jit")
+local S            = require("syscall")
+local ffi          = require("ffi")
+local C            = ffi.C
+
 require("core.packet_h")
 
 -- Packet per pull
@@ -33,14 +34,34 @@ local named_program_root = shm.root .. "/" .. "by-name"
 program_name = false
 
 -- Auditlog state
-auditlog_enabled = false
+local auditlog_enabled = false
 function enable_auditlog ()
    jit.auditlog(shm.path("audit.log"))
    auditlog_enabled = true
 end
 
+-- Timeline event log
+local timeline_log, events -- initialized on demand
+function timeline ()
+   if timeline_log == nil then
+      timeline_log = timeline_mod.new("engine/timeline")
+      events = timeline_mod.load_events(timeline_log, "core.engine")
+   end
+   return timeline_log
+end
+
+-- Breath latency histogram
+local latency -- initialized on demand
+function enable_latency_histogram ()
+   if latency == nil then
+      latency = histogram.create('engine/latency.histogram', 1e-6, 1e0)
+   end
+end
+
 -- The set of all active apps and links in the system, indexed by name.
 app_table, link_table = {}, {}
+-- Timeline events specific to app instances
+app_events  = setmetatable({}, { __mode = 'k' })
 
 configuration = config.new()
 
@@ -351,7 +372,8 @@ function apply_config_actions (actions)
       configuration.links[linkspec] = nil
    end
    function ops.new_link (linkspec)
-      link_table[linkspec] = link.new(linkspec)
+      local link = link.new(linkspec)
+      link_table[linkspec] = link
       configuration.links[linkspec] = true
    end
    function ops.link_output (appname, linkname, linkspec)
@@ -382,6 +404,8 @@ function apply_config_actions (actions)
                   name, tostring(app)))
       end
       local zone = app.zone or (type(class.name) == 'string' and class.name) or getfenv(class.new)._NAME or name
+      app_events[app] =
+         timeline_mod.load_events(timeline(), "core.app", {app=name})
       app.appname = name
       app.output = {}
       app.input = {}
@@ -510,23 +534,29 @@ function main (options)
       enable_auditlog()
    end
 
-   -- Setup vmprofile
-   setvmprofile("engine")
+   -- Ensure timeline is created and initialized
+   timeline()
 
+   -- Enable latency histogram unless explicitly disabled
    local breathe = breathe
    if options.measure_latency or options.measure_latency == nil then
-      local latency = histogram.create('engine/latency.histogram', 1e-6, 1e0)
+      enable_latency_histogram()
       breathe = latency:wrap_thunk(breathe, now)
    end
 
+   -- Setup vmprofile
+   setvmprofile("engine")
+
+   events.engine_started()
    monotonic_now = C.get_monotonic_time()
    repeat
       breathe()
-      if not no_timers then timer.run() end
+      if not no_timers then timer.run() events.polled_timers() end
       if not busywait then pace_breathing() end
    until done and done()
    counter.commit()
    if not options.no_report then report(options.report) end
+   events.engine_stopped()
 
    -- Switch to catch-all profile
    setvmprofile("program")
@@ -542,14 +572,18 @@ function pace_breathing ()
       nextbreath = nextbreath or monotonic_now
       local sleep = tonumber(nextbreath - monotonic_now)
       if sleep > 1e-6 then
+         events.sleep_Hz(Hz, math.round(sleep*1e6))
          C.usleep(sleep * 1e6)
          monotonic_now = C.get_monotonic_time()
+         events.wakeup_from_sleep()
       end
       nextbreath = math.max(nextbreath + 1/Hz, monotonic_now)
    else
       if lastfrees == counter.read(frees) then
          sleep = math.min(sleep + 1, maxsleep)
+         events.sleep_on_idle(sleep)
          C.usleep(sleep)
+         events.wakeup_from_sleep()
       else
          sleep = math.floor(sleep/2)
       end
@@ -560,31 +594,79 @@ function pace_breathing ()
 end
 
 function breathe ()
+   local freed_packets0 = counter.read(frees)
+   local freed_bytes0 = counter.read(freebytes)
+   events.breath_start(counter.read(breaths), freed_packets0, freed_bytes0,
+                       counter.read(freebits))
    running = true
    monotonic_now = C.get_monotonic_time()
+   events.got_monotonic_time(C.get_time_ns())
    -- Restart: restart dead apps
    restart_dead_apps()
    -- Inhale: pull work into the app network
    for i = 1, #breathe_pull_order do
       local app = breathe_pull_order[i]
       if app.pull and not app.dead then
-         with_restart(app, app.pull)
+         if timeline_mod.level(timeline_log) <= 3 then
+            app_events[app].pull(linkstats(app))
+            with_restart(app, app.pull)
+            app_events[app].pulled(linkstats(app))
+         else
+            with_restart(app, app.pull)
+         end
       end
    end
+   events.breath_pulled()
    -- Exhale: push work out through the app network
    for i = 1, #breathe_push_order do
       local app = breathe_push_order[i]
       if app.push and not app.dead then
-         with_restart(app, app.push)
+         if timeline_mod.level(timeline_log) <= 3 then
+            app_events[app].push(linkstats(app))
+            with_restart(app, app.push)
+            app_events[app].pushed(linkstats(app))
+         else
+            with_restart(app, app.push)
+         end
       end
    end
+   events.breath_pushed()
+   local freed
+   local freed_packets = counter.read(frees) - freed_packets0
+   local freed_bytes = (counter.read(freebytes) - freed_bytes0)
+   local freed_bytes_per_packet = freed_bytes / math.max(tonumber(freed_packets), 1)
+   events.breath_end(counter.read(breaths), freed_packets, freed_bytes_per_packet)
    counter.add(breaths)
    -- Commit counters and rebalance freelists at a reasonable frequency
    if counter.read(breaths) % 100 == 0 then
       counter.commit()
+      events.commited_counters()
       packet.rebalance_freelists()
    end
+   -- Randomize the log level. Enable each level in 5x more breaths
+   -- than the level below by randomly picking from log5() distribution.
+   -- Goal is ballpark 1000 messages per second (~15min for 1M entries.)
+   --
+   -- Could be better to reduce the log level over time to "stretch"
+   -- logs for long running processes? Improvements possible :-).
+   local level = math.max(1, math.ceil(math.log(math.random(5^9))/math.log(5)))
+   timeline_mod.level(timeline_log, level)
    running = false
+end
+
+function linkstats (app)
+   local inp, inb, outp, outb, dropp, dropb = 0, 0, 0, 0, 0, 0
+   for i = 1, #app.input do
+      inp  = inp  + tonumber(counter.read(app.input[i].stats.rxpackets))
+      inb  = inb  + tonumber(counter.read(app.input[i].stats.rxbytes))
+   end
+   for i = 1, #app.output do
+      outp = outp + tonumber(counter.read(app.output[i].stats.txpackets))
+      outb = outb + tonumber(counter.read(app.output[i].stats.txbytes))
+      dropp = dropp + tonumber(counter.read(app.output[i].stats.txdrop))
+      dropb = dropb + tonumber(counter.read(app.output[i].stats.txdropbytes))
+   end
+   return inp, inb, outp, outb, dropp, dropb
 end
 
 function report (options)
