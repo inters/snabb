@@ -52,8 +52,7 @@ local max_packets = 1e6
 ffi.cdef([[
 struct freelist {
     int32_t lock[1];
-    uint64_t nfree;
-    uint64_t max;
+    uint32_t nfree, max;
     struct packet *list[]]..max_packets..[[];
 };
 ]])
