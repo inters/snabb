@@ -34,6 +34,8 @@ local band = bit.band
 
 local htons, htonl, ntohl = lib.htons, lib.htonl, lib.ntohl
 
+local events = timeline.load_events(engine.timeline(), ...)
+
 require("lib.ipsec.track_seq_no_h")
 local window_t = ffi.typeof("uint8_t[?]")
 
@@ -95,12 +97,14 @@ function encrypt:encode_esp_trailer (ptr, next_header, pad_length)
    local esp_trailer = ffi.cast(esp_trailer_ptr_t, ptr)
    esp_trailer.next_header = next_header
    esp_trailer.pad_length = pad_length
+   events.trailer_encoded()
 end
 
 function encrypt:encrypt_payload (ptr, length)
    self:next_seq_no()
    local seq, low, high = self.seq, self.seq:low(), self.seq:high()
    self.cipher:encrypt(ptr, seq, low, high, ptr, length, ptr + length)
+   events.payload_encrypted(length)
 end
 
 function encrypt:encode_esp_header (ptr)
@@ -108,6 +112,7 @@ function encrypt:encode_esp_header (ptr)
    esp_header.spi = htonl(self.spi)
    esp_header.seq_no = htonl(self.seq:low())
    ffi.copy(ptr + ESP_SIZE, self.seq, self.cipher.IV_SIZE)
+   events.header_encoded()
 end
 
 -- Encapsulation in transport mode is performed as follows:
@@ -117,6 +122,7 @@ end
 --   4. Move resulting ciphertext to make room for ESP header
 --   5. Write ESP header
 function encrypt:encapsulate_transport6 (p)
+   events.encapsulate_transport6_start()
    if p.length < TRANSPORT6_PAYLOAD_OFFSET then return nil end
 
    local ip = ffi.cast(ipv6_ptr_t, p.data + ETHERNET_SIZE)
@@ -141,6 +147,7 @@ function encrypt:encapsulate_transport6 (p)
    ip.next_header = PROTOCOL
    ip.payload_length = htons(payload_length + overhead)
 
+   events.encapsulate_transport6_end()
    return p
 end
 
@@ -154,6 +161,7 @@ end
 -- (The resulting packet contains the raw ESP frame, without IP or Ethernet
 -- headers.)
 function encrypt:encapsulate_tunnel (p, next_header)
+   events.encapsulate_tunnel_start()
    local pad_length = self:padding(p.length)
    local trailer_overhead = pad_length + ESP_TAIL_SIZE + self.cipher.AUTH_SIZE
    local orig_length = p.length
@@ -170,6 +178,7 @@ function encrypt:encapsulate_tunnel (p, next_header)
 
    self:encode_esp_header(p.data)
 
+   events.encapsulate_tunnel_end()
    return p
 end
 
@@ -210,6 +219,7 @@ function decrypt:decrypt_payload (ptr, length, ip)
    local seq_high = tonumber(
       C.check_seq_no(seq_low, self.seq.no, self.window, self.window_size)
    )
+   events.sequence_number_checked(seq_low)
 
    local error = nil
    if seq_high < 0 or not self.cipher:decrypt(
@@ -221,8 +231,11 @@ function decrypt:decrypt_payload (ptr, length, ip)
       self.decap_fail = self.decap_fail + 1
       if self.decap_fail > self.resync_threshold then
          seq_high = self:resync(ptr, length, seq_low, seq_high)
+         events.resync_attempted(self.spi)
          if seq_high then error = nil end
       end
+   else
+      events.payload_decrypted(ctext_length)
    end
 
    if error then
@@ -234,6 +247,7 @@ function decrypt:decrypt_payload (ptr, length, ip)
    self.seq.no = C.track_seq_no(
       seq_high, seq_low, self.seq.no, self.window, self.window_size
    )
+   events.sequence_number_tracked(self.seq.no)
 
    local esp_trailer_start = ctext_start + ctext_length - ESP_TAIL_SIZE
    local esp_trailer = ffi.cast(esp_trailer_ptr_t, esp_trailer_start)
@@ -249,6 +263,7 @@ end
 --   4. Move cleartext up to IP payload
 --   5. Shrink p by ESP overhead
 function decrypt:decapsulate_transport6 (p)
+   events.decapsulate_transport6_start()
    if p.length - TRANSPORT6_PAYLOAD_OFFSET < self.MIN_SIZE then return nil end
 
    local ip = ffi.cast(ipv6_ptr_t, p.data + ETHERNET_SIZE)
@@ -267,6 +282,7 @@ function decrypt:decapsulate_transport6 (p)
    C.memmove(payload, ptext_start, ptext_length)
    p = packet.resize(p, TRANSPORT6_PAYLOAD_OFFSET + ptext_length)
 
+   events.decapsulate_transport6_end()
    return p
 end
 
@@ -279,6 +295,7 @@ end
 -- (The resulting packet contains the raw ESP payload (i.e. an IP frame),
 -- without an Ethernet header.)
 function decrypt:decapsulate_tunnel (p)
+   events.decapsulate_tunnel_start()
    if p.length < self.MIN_SIZE then return nil end
 
    local ptext_start, ptext_length, next_header =
@@ -289,6 +306,7 @@ function decrypt:decapsulate_tunnel (p)
    p = packet.shiftleft(p, self.CTEXT_OFFSET)
    p = packet.resize(p, ptext_length)
 
+   events.decapsulate_tunnel_end()
    return p, next_header
 end
 
