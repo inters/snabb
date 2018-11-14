@@ -10,6 +10,7 @@ local lpm = require("lib.lpm.lpm4_248").LPM4_248
 local ctable = require("lib.ctable")
 local ffi = require("ffi")
 
+local events = timeline.load_events(engine.timeline(), ...)
 
 -- route := { net_cidr4=(CIDR4), gw_ip4=(IPv4), preshared_key=(KEY) }
 
@@ -66,8 +67,10 @@ end
 
 function PrivateRouter:route (p)
    assert(self.ip4:new_from_mem(p.data, p.length))
+   events.private_route4_start()
    local route = self:find_route4(self.ip4:dst())
    if route then
+      events.private_route4_lookup_success()
       if p.length + ethernet:sizeof() <= self.mtu then
          link.transmit(route, p)
       else
@@ -80,10 +83,12 @@ function PrivateRouter:route (p)
          end
       end
    else
+      events.private_route4_lookup_failure()
       packet.free(p)
       counter.add(self.shm.rxerrors)
       counter.add(self.shm.route_errors)
    end
+   events.private_route4_end()
 end
 
 function PrivateRouter:push ()
@@ -158,14 +163,18 @@ function PublicRouter:push ()
    local input = self.input.input
 
    while not link.empty(input) do
+      events.public_route4_start()
       local p = link.receive(input)
       assert(self.esp:new_from_mem(p.data, p.length))
       local route = self:find_route4(self.esp:spi())
       if route then
+         events.public_route4_lookup_success()
          link.transmit(route, p)
       else
+         events.public_route4_lookup_failure()
          packet.free(p)
          counter.add(self.shm.route_errors)
       end
+      events.public_route4_end()
    end
 end

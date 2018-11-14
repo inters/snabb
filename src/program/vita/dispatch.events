@@ -1,0 +1,14 @@
+5,2|private_dispatch_start:
+PrivateDispatch started to process a packet.
+
+6,1|private_forward4_matched:
+PrivateDispatch matched an IPv4 packet to be forwarded.
+
+6,1|checksum_verification_succeeded:
+PrivateDispatch verified a correct IP checksum.
+
+6,1|checksum_verification_failed:
+PrivateDispatch rejected an invalid IP checksum.
+
+5,2|private_dispatch_end:
+PrivateDispatch has processed a packet.
