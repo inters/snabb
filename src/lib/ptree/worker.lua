@@ -31,6 +31,7 @@ function new_worker (conf)
    ret.period = 1/conf.Hz
    ret.duration = conf.duration or 1/0
    ret.no_report = conf.no_report
+   ret.measure_latency = conf.measure_latency
    ret.jit_flush = conf.jit_flush
    ret.channel = channel.create('config-worker-channel', 1e6)
    alarms.install_alarm_handler(ptree_alarms:alarm_handler())
@@ -38,11 +39,6 @@ function new_worker (conf)
 
    require("jit.opt").start('sizemcode=256', 'maxmcode=2048')
 
-   ret.breathe = engine.breathe
-   if conf.measure_latency then
-      local latency = histogram.create('engine/latency.histogram', 1e-6, 1e0)
-      ret.breathe = latency:wrap_thunk(ret.breathe, engine.now)
-   end
    return ret
 end
 
@@ -115,7 +111,9 @@ function Worker:main ()
       end
    end
 
-   engine.main{done=control}
+   engine.main{done=control,
+               report=self.report, no_report=self.no_report,
+               measure_latency=self.measure_latency}
 end
 
 function main (opts)
