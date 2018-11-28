@@ -494,23 +494,46 @@ module vita-esp-gateway {
         type yang:zero-based-counter64;
         description
           "Count of key exchange negotiations expired due to exceeding
-         negotiation-ttl.";
+           negotiation-ttl.";
       }
-      leaf nonces-negotiated {
+      leaf challenges-offered {
         type yang:zero-based-counter64;
         description
-          "Count of nonce pairs that were exchanged (elevated count can
-           indicate a denial-of-service attack.)";
+          "Count of challenges offered as the protocol responder (elevated
+           count can indicate a denial-of-service attempt.)";
+      }
+      leaf challenges-accepted {
+        type yang:zero-based-counter64;
+        description
+          "Count of challenges accepted as the protocol initator.";
+      }
+      leaf keypairs-offered {
+        type yang:zero-based-counter64;
+        description
+          "Count of ephemeral key pairs that were offered as the protocol
+           responder.";
       }
       leaf keypairs-negotiated {
         type yang:zero-based-counter64;
         description
-          "Count of ephemeral key pairs that were exchanged.";
+          "Count of ephemeral key pairs that were negotiated as the protocol
+           initiator.";
       }
-      leaf keypairs-expired {
+      leaf inbound-sa-expired {
         type yang:zero-based-counter64;
         description
-          "Count of ephemeral key pairs that have expired due to sa-ttl.";
+          "Count of inbound SAs that have expired due to sa-ttl.";
+      }
+      leaf outbound-sa-expired {
+        type yang:zero-based-counter64;
+        description
+          "Count of outbound SAs that have expired due to sa-ttl.";
+      }
+      leaf outbound-sa-rejected {
+        type yang:zero-based-counter64;
+        description
+          "Count of outbound SAs that were rejected because they had a
+           non-unique SPI (indicates a misbehaving peer.)";
       }
     }
   }
