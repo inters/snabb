@@ -114,7 +114,6 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
       },
       packet_size = pktsize,
       nroutes = nroutes,
-      negotiation_ttl = nroutes,
       sa_ttl = 16
    }
 
@@ -197,7 +196,7 @@ defaults = {
    nroutes = {default=1},
    packet_size = {default="IMIX"},
    sa_ttl = {},
-   negotiation_ttl = {default=1}
+   negotiation_ttl = {}
 }
 private_interface_defaults = {
    pci = {default="00:00.0"},

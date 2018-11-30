@@ -200,8 +200,7 @@ function KeyManager:new (conf)
       key_message = Protocol.key_message:new({}),
       challenge_message = Protocol.challenge_message:new({}),
       nonce_key_message = Protocol.nonce_key_message:new({}),
-      sa_db_updated = false,
-      sa_db_commit_throttle = lib.throttle(1)
+      sa_db_updated = false
    }
    local self = setmetatable(o, { __index = KeyManager })
    self:reconfig(conf)
@@ -290,6 +289,7 @@ function KeyManager:reconfig (conf)
    self.max_inbound_sa = conf.max_inbound_sa
    self.negotiation_ttl = conf.negotiation_ttl
    self.sa_ttl = conf.sa_ttl
+   self.sa_db_commit_throttle = lib.throttle(conf.negotiation_ttl)
 end
 
 function KeyManager:push ()
