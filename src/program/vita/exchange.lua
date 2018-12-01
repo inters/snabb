@@ -442,43 +442,6 @@ function KeyManager:handle_challenge_request (route, message)
    return true
 end
 
-function KeyManager:handle_key_request (route, message)
-   if not route or message ~= self.key_message then return end
-
-   -- Receive an authenticated key message if the protocol fsm permits
-   -- (accept_key -> initiator), reject the message and return otherwise or
-   -- if...
-   local ecode, inbound_sa, outbound_sa = route.initiator:receive_key(message)
-   if ecode == Protocol.code.protocol then
-      counter.add(self.shm.protocol_errors)
-      return false
-   elseif ecode == Protocol.code.authentication then
-      -- ...the message failed to authenticate.
-      counter.add(self.shm.authentication_errors)
-      return false
-   elseif ecode == Protocol.code.parameter then
-      -- ...the message offered a bad public key.
-      counter.add(self.shm.public_key_errors)
-      return false
-   else assert(not ecode) end
-
-   -- This is an optimization for loopback testing: if we are negotiating with
-   -- ourselves, configure an outbound SA only (inbound SA has been configured
-   -- by the responder.)
-   local is_loopback = self.ip:src_eq(route.gw_ip4n)
-
-   counter.add(self.shm.keypairs_negotiated)
-   audit:log(("Completed AKE for '%s' (inbound SA %s, outbound SA %d)"):
-         format(route.id,
-                (is_loopback and "-") or inbound_sa.spi,
-                outbound_sa.spi))
-
-   if not is_loopback then self:add_inbound_sa(route, inbound_sa) end
-   self:add_outbound_sa(route, outbound_sa)
-
-   return true
-end
-
 function KeyManager:handle_nonce_key_request (route, message)
    if not route or message ~= self.nonce_key_message then return end
 
@@ -520,6 +483,43 @@ function KeyManager:handle_nonce_key_request (route, message)
 
    self:add_inbound_sa(route, inbound_sa)
    if not is_loopback then self:add_outbound_sa(route, outbound_sa) end
+
+   return true
+end
+
+function KeyManager:handle_key_request (route, message)
+   if not route or message ~= self.key_message then return end
+
+   -- Receive an authenticated key message if the protocol fsm permits
+   -- (accept_key -> initiator), reject the message and return otherwise or
+   -- if...
+   local ecode, inbound_sa, outbound_sa = route.initiator:receive_key(message)
+   if ecode == Protocol.code.protocol then
+      counter.add(self.shm.protocol_errors)
+      return false
+   elseif ecode == Protocol.code.authentication then
+      -- ...the message failed to authenticate.
+      counter.add(self.shm.authentication_errors)
+      return false
+   elseif ecode == Protocol.code.parameter then
+      -- ...the message offered a bad public key.
+      counter.add(self.shm.public_key_errors)
+      return false
+   else assert(not ecode) end
+
+   -- This is an optimization for loopback testing: if we are negotiating with
+   -- ourselves, configure an outbound SA only (inbound SA has been configured
+   -- by the responder.)
+   local is_loopback = self.ip:src_eq(route.gw_ip4n)
+
+   counter.add(self.shm.keypairs_negotiated)
+   audit:log(("Completed AKE for '%s' (inbound SA %s, outbound SA %d)"):
+         format(route.id,
+                (is_loopback and "-") or inbound_sa.spi,
+                outbound_sa.spi))
+
+   if not is_loopback then self:add_inbound_sa(route, inbound_sa) end
+   self:add_outbound_sa(route, outbound_sa)
 
    return true
 end
