@@ -580,7 +580,6 @@ function KeyManager:add_outbound_sa (route, sa)
    if #route.outbound_sa_queue > self.num_outbound_sa then
       table.remove(route.outbound_sa_queue, 1)
    end
-   self.sa_db_updated = true
 end
 
 function KeyManager:request (route, message)
