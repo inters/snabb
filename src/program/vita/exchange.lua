@@ -462,11 +462,18 @@ function KeyManager:handle_key_request (route, message)
       return false
    else assert(not ecode) end
 
-   counter.add(self.shm.keypairs_negotiated)
-   audit:log(("Completed AKE for '%s' (inbound SA %d, outbound SA %d)"):
-         format(route.id, inbound_sa.spi, outbound_sa.spi))
+   -- This is an optimization for loopback testing: if we are negotiating with
+   -- ourselves, configure an outbound SA only (inbound SA has been configured
+   -- by the responder.)
+   local is_loopback = self.ip:src_eq(route.gw_ip4n)
 
-   self:add_inbound_sa(route, inbound_sa)
+   counter.add(self.shm.keypairs_negotiated)
+   audit:log(("Completed AKE for '%s' (inbound SA %s, outbound SA %d)"):
+         format(route.id,
+                (is_loopback and "-") or inbound_sa.spi,
+                outbound_sa.spi))
+
+   if not is_loopback then self:add_inbound_sa(route, inbound_sa) end
    self:add_outbound_sa(route, outbound_sa)
 
    return true
@@ -500,12 +507,19 @@ function KeyManager:handle_nonce_key_request (route, message)
 
    link.transmit(self.output.output, self:request(route, response))
 
+   -- This is an optimization for loopback testing: if we are negotiating with
+   -- ourselves, configure an inbound SA only (outbound SA will be configured
+   -- by the initiator.)
+   local is_loopback = self.ip:src_eq(route.gw_ip4n)
+
    counter.add(self.shm.keypairs_offered)
-   audit:log(("Offered key pair for '%s' (inbound SA %d, outbound SA %d)"):
-         format(route.id, inbound_sa.spi, outbound_sa.spi))
+   audit:log(("Offered key pair for '%s' (inbound SA %d, outbound SA %s)"):
+         format(route.id,
+                inbound_sa.spi,
+                (is_loopback and "-") or outbound_sa.spi))
 
    self:add_inbound_sa(route, inbound_sa)
-   self:add_outbound_sa(route, outbound_sa)
+   if not is_loopback then self:add_outbound_sa(route, outbound_sa) end
 
    return true
 end
