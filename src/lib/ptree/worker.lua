@@ -13,6 +13,8 @@ local alarms       = require("lib.yang.alarms")
 local channel      = require("lib.ptree.channel")
 local action_codec = require("lib.ptree.action_codec")
 local ptree_alarms = require("lib.ptree.alarms")
+local timeline     = require("core.timeline")
+local events       = timeline.load_events(engine.timeline(), "core.engine")
 
 local Worker = {}
 
@@ -102,9 +104,11 @@ function Worker:main ()
    local function control ()
       if next_time < engine.now() then
          next_time = engine.now() + self.period
+         events.engine_stopped()
          engine.setvmprofile("worker")
          self:handle_actions_from_manager()
          engine.setvmprofile("engine")
+         events.engine_started()
       end
       if stop < engine.now() then
          return true -- done
