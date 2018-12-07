@@ -108,6 +108,7 @@ function Worker:main ()
 end
 
 function main (opts)
+   engine.claim_name(os.getenv("SNABB_WORKER_NAME"))
    return new_worker(opts):main()
 end
 
