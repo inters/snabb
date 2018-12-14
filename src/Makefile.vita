@@ -2,9 +2,10 @@ INCLUDE = *.* core arch jit syscall pf \
           lib/token_bucket.* lib/tsc.* \
           lib/lua lib/protocol lib/checksum.* lib/ipsec \
           lib/yang lib/stream.* lib/stream lib/buffer.* \
-          lib/xsd_regexp.* lib/maxpc.* lib/ctable.* lib/binary_search.* \
+          lib/xsd_regexp.* lib/maxpc.* lib/ctable.* lib/cltable.* \
+          lib/binary_search.* lib/multi_copy.* lib/hash \
           lib/ptree lib/rrd.* lib/fibers \
-          lib/multi_copy.* lib/hash lib/cltable.* lib/lpm lib/interlink.* \
+          lib/poptrie* lib/interlink.* \
           lib/hardware lib/macaddress.* lib/numa.* lib/cpuset.* \
           lib/scheduling.* lib/timers \
           apps/interlink apps/intel_mp \
