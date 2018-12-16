@@ -789,7 +789,7 @@ end
 
 function Protocol:next_spi ()
    local current_spi = Protocol.spi_counter + 256
-   Protocol.spi_counter = (Protocol.spi_counter + 1) % (2^32 - 1 - 256)
+   Protocol.spi_counter = (Protocol.spi_counter + 1) % (2^16 - 1 - 256)
    return current_spi
 end
 
