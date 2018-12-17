@@ -106,8 +106,7 @@ module(...,package.seeall)
 --        outbound_sa_expired     count of outbound SAs that have expired
 --                                (sa_ttl)
 --
---        outbound_sa_rejected    count of outbound SAs that were rejected
---                                because their SPI was not unique
+--        outbound_sa_updated     count of outbound SAs that were updated
 --
 --  2. The Protocol subsystem implements vita-ske2 (the cryptographic key
 --     exchange protocol defined in README.exchange) as two finite-state
@@ -187,7 +186,7 @@ KeyManager = {
       keypairs_negotiated = {counter},
       inbound_sa_expired  = {counter},
       outbound_sa_expired = {counter},
-      outbound_sa_rejected = {counter}
+      outbound_sa_updated = {counter}
    }
 }
 
@@ -481,8 +480,8 @@ function KeyManager:handle_nonce_key_request (route, message)
                 inbound_sa.spi,
                 (is_loopback and "-") or outbound_sa.spi))
 
-   self:add_inbound_sa(route, inbound_sa)
-   if not is_loopback then self:add_outbound_sa(route, outbound_sa) end
+   self:insert_inbound_sa(route, inbound_sa)
+   if not is_loopback then self:upsert_outbound_sa(route, outbound_sa) end
 
    return true
 end
@@ -518,13 +517,13 @@ function KeyManager:handle_key_request (route, message)
                 (is_loopback and "-") or inbound_sa.spi,
                 outbound_sa.spi))
 
-   if not is_loopback then self:add_inbound_sa(route, inbound_sa) end
-   self:add_outbound_sa(route, outbound_sa)
+   if not is_loopback then self:insert_inbound_sa(route, inbound_sa) end
+   self:upsert_outbound_sa(route, outbound_sa)
 
    return true
 end
 
-function KeyManager:add_inbound_sa (route, sa)
+function KeyManager:insert_inbound_sa (route, sa)
    -- invariant: inbound SA spi is unique
    for _, route in ipairs(self.routes) do
       for _, inbound in ipairs(route.inbound_sa) do
@@ -546,17 +545,23 @@ function KeyManager:add_inbound_sa (route, sa)
    self.sa_db_updated = true
 end
 
-function KeyManager:add_outbound_sa (route, sa)
-   -- invariant: outbound SA spi is unique
-   for _, route in ipairs(self.routes) do
-      for _, outbound in ipairs(route.outbound_sa) do
+function KeyManager:upsert_outbound_sa (route, sa)
+   -- possibly replace existing or queued outbound SA
+   local function remove_existing_sa_for_update ()
+      for index, outbound in ipairs(route.outbound_sa_queue) do
          if outbound.spi == sa.spi then
-            counter.add(self.shm.outbound_sa_rejected)
-            audit:log(("Rejecting outbound SA %d for '%s' (duplicate SPI)")
-                  :format(sa.spi, route.id))
-            return
+            return table.remove(route.outbound_sa_queue, index)
          end
       end
+      for index, outbound in ipairs(route.outbound_sa) do
+         if outbound.spi == sa.spi then
+            return table.remove(route.outbound_sa, index)
+         end
+      end
+   end
+   if remove_existing_sa_for_update() then
+      counter.add(self.shm.outbound_sa_updated)
+      audit:log("Updating outbound SA "..sa.spi.." for '"..route.id.."'")
    end
    -- enqueue new outbound SA at the end of the queue
    table.insert(route.outbound_sa_queue, {
@@ -571,15 +576,10 @@ function KeyManager:add_outbound_sa (route, sa)
       rekey_timeout = lib.timeout(self.sa_ttl/2 + math.random(1000)/1000),
       -- Delay before activating redundant, newly established outbound SAs to
       -- give the receiving end time to set up. Choosen so that when a
-      -- negotiation times out due to packet loss, the initiator can supersede
-      -- the bogus outbound SA before it gets activated.
+      -- negotiation times out due to packet loss, the initiator can update
+      -- unrequited outbound SAs before they get activated.
       activation_delay = lib.timeout(self.negotiation_ttl*1.5)
    })
-   -- remove superfluous outbound SAs from the front of the queue
-   assert(self.num_outbound_sa == 1, "FIXME: displacement of queued outbound SAs only works for num_outbound_sa = 1.")
-   if #route.outbound_sa_queue > self.num_outbound_sa then
-      table.remove(route.outbound_sa_queue, 1)
-   end
 end
 
 function KeyManager:request (route, message)
@@ -949,7 +949,7 @@ function Protocol:reset_if_expired ()
    or self.status == Protocol.status.accept_key then
       if self.deadline and self.deadline() then
          -- accept_challenge, accept_key -> initiator
-         self:reset()
+         self:reset('reuse_spi') -- renegotiate this SA and possibly update it
          self.status = Protocol.status.initiator
          return Protocol.code.expired
       end
@@ -1057,9 +1057,9 @@ function Protocol:set_deadline (deadline)
    else                    self.deadline = deadline end
 end
 
-function Protocol:reset ()
+function Protocol:reset (reuse_spi)
    self:set_deadline(false)
-   self:next_spi()
+   if not reuse_spi then self:next_spi() end
    self:next_nonce()
    self:next_dh_key()
    self:clear_external_inputs()

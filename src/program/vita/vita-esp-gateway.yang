@@ -529,11 +529,10 @@ module vita-esp-gateway {
         description
           "Count of outbound SAs that have expired due to sa-ttl.";
       }
-      leaf outbound-sa-rejected {
+      leaf outbound-sa-updated {
         type yang:zero-based-counter64;
         description
-          "Count of outbound SAs that were rejected because they had a
-           non-unique SPI (indicates a misbehaving peer.)";
+          "Count of outbound SAs that were updated.";
       }
     }
   }
