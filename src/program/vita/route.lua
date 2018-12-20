@@ -32,7 +32,7 @@ function PrivateRouter:new (conf)
       routes = {},
       mtu = conf.mtu,
       ip4 = ipv4:new({}),
-      routing_table4 = poptrie.new{direct_pointing=true}
+      routing_table4 = poptrie.new{direct_pointing=true, s=24}
    }
    for id, route in pairs(conf.routes) do
       local index = #o.ports+1
