@@ -5,6 +5,7 @@ module(...,package.seeall)
 local counter = require("core.counter")
 local esp = require("lib.ipsec.esp")
 local ipv4 = require("lib.protocol.ipv4")
+local ipv6 = require("lib.protocol.ipv6")
 
 -- sa := { spi=(SPI), aead=(STRING), key=(KEY), salt=(SALT),
 --         [ window_size=(INT),
@@ -13,6 +14,7 @@ local ipv4 = require("lib.protocol.ipv4")
 
 -- https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
 local NextHeaderIPv4 = 4
+local NextHeaderIPv6 = 41
 
 Encapsulate = {
    name = "Encapsulate",
@@ -30,12 +32,22 @@ end
 
 function Encapsulate:push ()
    local output, sa = self.output.output, self.sa
-   local input4 = self.input.input4
-   while not link.empty(input4) do
-      link.transmit(
-         output,
-         sa:encapsulate_tunnel(link.receive(input4), NextHeaderIPv4)
-      )
+   local input4, input6 = self.input.input4, self.input.input6
+   if input4 then
+      while not link.empty(input4) do
+         link.transmit(
+            output,
+            sa:encapsulate_tunnel(link.receive(input4), NextHeaderIPv4)
+         )
+      end
+   end
+   if input6 then
+      while not link.empty(input6) do
+         link.transmit(
+            output,
+            sa:encapsulate_tunnel(link.receive(input6), NextHeaderIPv6)
+         )
+      end
    end
 end
 
@@ -65,12 +77,14 @@ end
 
 function Decapsulate:push ()
    local input, sa = self.input.input, self.sa
-   local output4 = self.output.output4
+   local output4, output6 = self.output.output4, self.output.output6
    while not link.empty(input) do
       local p_enc = link.receive(input)
       local p, next_header = sa:decapsulate_tunnel(p_enc)
-      if p and next_header == NextHeaderIPv4 then
+      if p and next_header == NextHeaderIPv4 and output4 then
          link.transmit(output4, p)
+      elseif p and next_header == NextHeaderIPv6 and output6 then
+         link.transmit(output6, p)
       elseif p then
          counter.add(self.shm.rxerrors)
          counter.add(self.shm.protocol_errors)
@@ -118,5 +132,39 @@ function Tunnel4:encapsulate (p)
    self.ip:new_from_mem(p.data, ipv4:sizeof())
    self.ip:total_length(p.length)
    self.ip:checksum()
+   return p
+end
+
+
+Tunnel6 = {
+   name = "Tunnel6",
+   config = {
+      src = {required=true},
+      dst = {required=true}
+   }
+}
+
+function Tunnel6:new (conf)
+   local o = {
+      ip_template = ipv6:new{
+         src = ipv6:pton(conf.src),
+         dst = ipv6:pton(conf.dst),
+         next_header = esp.PROTOCOL,
+         hop_limit = 64
+      }
+   }
+   return setmetatable(o, {__index = Tunnel6})
+end
+
+function Tunnel6:push ()
+   local input, output = self.input.input, self.output.output
+   while not link.empty(input) do
+      link.transmit(output, self:encapsulate(link.receive(input)))
+   end
+end
+
+function Tunnel6:encapsulate (p)
+   self.ip_template:payload_length(p.length)
+   p = packet.prepend(p, self.ip_template:header(), ipv6:sizeof())
    return p
 end
