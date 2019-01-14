@@ -62,7 +62,6 @@ nd_light.config = {
 nd_light.shm = {
    status                   = {counter, 2}, -- Link down
    rxerrors                 = {counter},
-   txerrors                 = {counter},
    txdrop                   = {counter},
    ns_checksum_errors       = {counter},
    ns_target_address_errors = {counter},
@@ -371,13 +370,8 @@ function nd_light:push ()
       else
          local p = cache.p
          p[0] = link.receive(l_in)
-         if p[0].length >= self._eth_header:sizeof() then
-            self._eth_header:copy(p[0].data)
-            link.transmit(l_out, p[0])
-         else
-            packet.free(p[0])
-            counter.add(self.shm.txerrors)
-         end
+         link.transmit(l_out, packet.prepend(
+                          p[0], self._eth_header:header(), ethernet:sizeof()))
       end
    end
 end
