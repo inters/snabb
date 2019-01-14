@@ -10,9 +10,11 @@ module vita-esp-gateway {
   // APPLICATION MODEL
   grouping interface {
     leaf pci { type pci-address; mandatory true; }
-    leaf ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+    leaf ip4 { type inet:ipv4-address-no-zone; }
+    leaf ip6 { type inet:ipv6-address-no-zone; }
     leaf mac { type yang:mac-address; }
-    leaf nexthop-ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+    leaf nexthop-ip4 { type inet:ipv4-address-no-zone; }
+    leaf nexthop-ip6 { type inet:ipv6-address-no-zone; }
     leaf nexthop-mac { type yang:mac-address; }
   }
 
@@ -25,7 +27,8 @@ module vita-esp-gateway {
     key id; unique "net-cidr4"; unique "preshared-key"; unique "spi";
     leaf id { type id; mandatory true; }
     leaf net-cidr4 { type inet:ipv4-prefix; mandatory true; }
-    leaf gw-ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+    leaf gw-ip4 { type inet:ipv4-address-no-zone; }
+    leaf gw-ip6 { type inet:ipv6-address-no-zone; }
     leaf spi { type spi; mandatory true; }
     leaf preshared-key { type key32; mandatory true; }
   }

@@ -16,8 +16,11 @@ local icmp = require("program.vita.icmp")
 local Receiver = require("apps.interlink.receiver")
 local Transmitter = require("apps.interlink.transmitter")
 local intel_mp = require("apps.intel_mp.intel_mp")
+local nd_light = require("apps.ipv6.nd_light").nd_light
+local Join = require("apps.basic.basic_apps").Join
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
+local ipv6 = require("lib.protocol.ipv6")
 local numa = require("lib.numa")
 local yang = require("lib.yang.yang")
 local ptree = require("lib.ptree.ptree")
@@ -42,17 +45,21 @@ local confspec = {
 
 local ifspec = {
    pci = {required=true},
-   ip4 = {required=true},
-   nexthop_ip4 = {required=true},
+   ip4 = {},
+   ip6 = {},
+   nexthop_ip4 = {},
+   nexthop_ip6 = {},
    mac = {},
    nexthop_mac = {}
 }
 
-local function derive_local_unicast_mac (prefix, ip4)
+local function derive_local_unicast_mac (prefix, ip)
    local mac = ffi.new("uint8_t[?]", 6)
    mac[0] = prefix[1]
    mac[1] = prefix[2]
-   ffi.copy(mac+2, ipv4:pton(ip4), 4)
+   local n, offset = ipv4:pton(ip), 0
+   if not n then n, offset = ipv6:pton(ip), 12 end
+   ffi.copy(mac+2, ffi.cast("uint8_t *", n) + offset, 4)
    -- First bit = 0 indicates unicast, second bit = 1 means locally
    -- administered.
    assert(bit.band(bit.bor(prefix[1], 0x02), 0xFE) == prefix[1],
@@ -63,7 +70,8 @@ end
 local function parse_ifconf (conf, mac_prefix)
    if not conf then return end
    conf = lib.parse(conf, ifspec)
-   conf.mac = conf.mac or derive_local_unicast_mac(mac_prefix, conf.ip4)
+   conf.mac = conf.mac or
+      derive_local_unicast_mac(mac_prefix, conf.ip4 or conf.ip6)
    return conf
 end
 
@@ -290,25 +298,45 @@ function configure_public_router (conf, append)
    if not conf.public_interface then return c end
 
    config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
-                 node_ip4 = conf.public_interface.ip4
+                 node_ip4 = conf.public_interface.ip4,
+                 node_ip6 = conf.public_interface.ip6
    })
    config.app(c, "PublicRouter", route.PublicRouter, {
                  sa = conf.inbound_sa
    })
-   config.app(c, "PublicICMP4", icmp.ICMP4, {
-                 node_ip4 = conf.public_interface.ip4
-   })
-   config.app(c, "PublicNextHop", nexthop.NextHop4, {
-                 node_mac = conf.public_interface.mac,
-                 node_ip4 = conf.public_interface.ip4,
-                 nexthop_ip4 = conf.public_interface.nexthop_ip4,
-                 nexthop_mac = conf.public_interface.nexthop_mac
-   })
-   config.link(c, "PublicDispatch.forward4 -> PublicRouter.input")
-   config.link(c, "PublicDispatch.icmp4 -> PublicICMP4.input")
-   config.link(c, "PublicDispatch.arp -> PublicNextHop.arp")
-   config.link(c, "PublicDispatch.protocol4_unreachable -> PublicICMP4.protocol_unreachable")
-   config.link(c, "PublicICMP4.output -> PublicNextHop.icmp4")
+   if conf.public_interface.ip4 then
+      config.app(c, "PublicICMP4", icmp.ICMP4, {
+                    node_ip4 = conf.public_interface.ip4
+      })
+      config.app(c, "PublicNextHop", nexthop.NextHop4, {
+                    node_mac = conf.public_interface.mac,
+                    node_ip4 = conf.public_interface.ip4,
+                    nexthop_ip4 = conf.public_interface.nexthop_ip4,
+                    nexthop_mac = conf.public_interface.nexthop_mac
+      })
+      config.link(c, "PublicDispatch.forward4 -> PublicRouter.input")
+      config.link(c, "PublicDispatch.icmp4 -> PublicICMP4.input")
+      config.link(c, "PublicDispatch.arp -> PublicNextHop.arp")
+      config.link(c, "PublicDispatch.protocol4_unreachable -> PublicICMP4.protocol_unreachable")
+      config.link(c, "PublicICMP4.output -> PublicNextHop.icmp4")
+   elseif conf.public_interface.ip6 then
+      config.app(c, "PublicICMP6", icmp.ICMP6, {
+                    node_ip6 = conf.public_interface.ip6
+      })
+      config.app(c, "PublicNextHop", Join)
+      config.app(c, "PublicND", nd_light, {
+                    local_mac = conf.public_interface.mac,
+                    local_ip = conf.public_interface.ip6,
+                    next_hop = conf.public_interface.nexthop_ip6,
+                    remote_mac = conf.public_interface.nexthop_mac
+      })
+      config.link(c, "PublicDispatch.forward6 -> PublicRouter.input")
+      config.link(c, "PublicDispatch.icmp6 -> PublicICMP6.input")
+      config.link(c, "PublicDispatch.nd -> PublicND.south")
+      config.link(c, "PublicDispatch.protocol6_unreachable -> PublicICMP6.protocol_unreachable")
+      config.link(c, "PublicICMP6.output -> PublicNextHop.icmp6")
+      config.link(c, "PublicNextHop.output -> PublicND.north")
+   else error("Need either public_interface.ip4 or public_interface.ip6") end
 
    if not conf.data_plane then
       config.app(c, "Protocol_in_Tx", Transmitter, "Protocol_in")
@@ -322,8 +350,13 @@ function configure_public_router (conf, append)
       local ESP_out = "ESP_"..id.."_out"
       local Tunnel = "Tunnel_"..id
       config.app(c, ESP_out.."_Rx", Receiver, ESP_out)
-      config.app(c, Tunnel, tunnel.Tunnel4,
-                 {src=conf.public_interface.ip4, dst=route.gw_ip4})
+      if route.gw_ip4 then
+         config.app(c, Tunnel, tunnel.Tunnel4,
+                    {src=conf.public_interface.ip4, dst=route.gw_ip4})
+      elseif route.gw_ip6 then
+         config.app(c, Tunnel, tunnel.Tunnel6,
+                    {src=conf.public_interface.ip6, dst=route.gw_ip6})
+      else error("Need either route.gw_ip4 or route.gw_ip6") end
       config.link(c, ESP_out.."_Rx.output -> "..Tunnel..".input")
       config.link(c, Tunnel..".output -> "..public_out)
    end
@@ -337,7 +370,8 @@ function configure_public_router (conf, append)
 
    local public_links = {
       input = "PublicDispatch.input",
-      output = "PublicNextHop.output"
+      output = (conf.public_interface.ip4 and "PublicNextHop.output")
+                   or "PublicND.south"
    }
 
    return c, public_links
@@ -390,6 +424,7 @@ function configure_exchange (conf, append)
 
    config.app(c, "KeyExchange", exchange.KeyManager, {
                  node_ip4 = conf.public_interface.ip4,
+                 node_ip6 = conf.public_interface.ip6,
                  routes = conf.route,
                  sa_db_path = sa_db_path,
                  negotiation_ttl = conf.negotiation_ttl,
