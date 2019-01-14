@@ -107,10 +107,13 @@ end
 -- Testing setups for Vita
 
 -- Run Vita in software benchmark mode.
-function run_softbench (pktsize, npackets, nroutes, cpuspec)
+function run_softbench (pktsize, npackets, nroutes, cpuspec, use_v6)
    local testconf = {
       private_interface = {
          nexthop_ip4 = private_interface_defaults.ip4.default
+      },
+      public_interface = {
+         ip6 = use_v6 and public_interface_defaults6.ip6.default
       },
       packet_size = pktsize,
       nroutes = nroutes,
@@ -213,6 +216,13 @@ public_interface_defaults = {
    nexthop_ip4 = {default="172.16.0.10"},
    nexthop_mac = {}
 }
+public_interface_defaults6 = {
+   pci = {default="00:00.0"},
+   mac = {},
+   ip6 = {default="172:16:0::10"},
+   nexthop_ip6 = {default="172:16:0::10"},
+   nexthop_mac = {}
+}
 
 traffic_templates = {
    -- Internet Mix, see https://en.wikipedia.org/wiki/Internet_Mix
@@ -223,8 +233,13 @@ local function parse_gentestconf (conf)
    conf = lib.parse(conf, defaults)
    conf.private_interface = lib.parse(conf.private_interface,
                                       private_interface_defaults)
-   conf.public_interface = lib.parse(conf.public_interface,
-                                     public_interface_defaults)
+   if conf.public_interface and conf.public_interface.ip6 then
+      conf.public_interface = lib.parse(conf.public_interface,
+                                        public_interface_defaults6)
+   else
+      conf.public_interface = lib.parse(conf.public_interface,
+                                        public_interface_defaults)
+   end
    assert(conf.nroutes >= 0 and conf.nroutes <= 255,
           "Invalid number of routes: "..conf.nroutes)
    return conf
@@ -273,6 +288,7 @@ function gen_configuration (conf)
       cfg.route["test"..route] = {
          net_cidr4 = conf.route_prefix.."."..route..".0/24",
          gw_ip4 = conf.public_interface.nexthop_ip4,
+         gw_ip6 = conf.public_interface.nexthop_ip6,
          preshared_key = ("%064x"):format(route),
          spi = 1000+route
       }

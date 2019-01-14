@@ -13,3 +13,4 @@ script:
  - (cd src && sudo ./snabb snsh -t program.vita.exchange)
  - (cd src && sudo program/vita/conftest.snabb)
  - (cd src && sudo program/vita/test.snabb IMIX 1e6 3)
+ - (cd src && sudo program/vita/test6.snabb IMIX 1e6 3)
