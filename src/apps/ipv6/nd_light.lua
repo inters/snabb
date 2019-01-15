@@ -62,7 +62,6 @@ nd_light.config = {
 nd_light.shm = {
    status                   = {counter, 2}, -- Link down
    rxerrors                 = {counter},
-   txdrop                   = {counter},
    ns_checksum_errors       = {counter},
    ns_target_address_errors = {counter},
    na_duplicate_errors      = {counter},
@@ -361,18 +360,16 @@ function nd_light:push ()
 
    l_in = self.input.north
    l_out = self.output.south
+   -- Do not forward packets from north until ND for the next-hop has
+   -- completed.
+   if not self._eth_header then
+      return
+   end
    while not link.empty(l_in) do
-      if not self._eth_header then
-         -- Drop packets until ND for the next-hop
-         -- has completed.
-         packet.free(link.receive(l_in))
-         counter.add(self.shm.txdrop)
-      else
-         local p = cache.p
-         p[0] = link.receive(l_in)
-         link.transmit(l_out, packet.prepend(
-                          p[0], self._eth_header:header(), ethernet:sizeof()))
-      end
+      local p = packet.prepend(
+         link.receive(l_in), self._eth_header:header(), ethernet:sizeof()
+      )
+      link.transmit(l_out, p)
    end
 end
 
