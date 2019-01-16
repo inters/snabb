@@ -1,0 +1,256 @@
+#!snabb snsh
+
+-- Use of this source code is governed by the GNU AGPL license; see COPYING.
+
+local pcap = require("lib.pcap.pcap")
+local ethernet = require("lib.protocol.ethernet")
+local ipv4 = require("lib.protocol.ipv4")
+local ipv6 = require("lib.protocol.ipv6")
+local icmp = require("lib.protocol.icmp.header")
+local esp = require("lib.ipsec.esp")
+local datagram = require("lib.protocol.datagram")
+local ffi = require("ffi")
+
+-- Synopsis:
+--
+--    sudo selftest6-pcaps.snabb
+--
+-- Source selftest-*-in.pcap with packets that exercise various corner cases in
+-- Vita. Anything that’s not the happy path. IPv6 version.
+
+PcapLog = {}
+
+function PcapLog:new (filename)
+   local o = {}
+   o.file = io.open(filename, "w")
+   pcap.write_file_header(o.file)
+   return setmetatable(o, {__index=PcapLog})
+end
+
+function PcapLog:write (p)
+   pcap.write_record(self.file, p.data, p.length)
+end
+
+local public = PcapLog:new("program/vita/selftest6-public-in.pcap")
+
+local private_src = ipv4:pton("192.168.0.1")
+local private_dst = ipv4:pton("192.168.10.1")
+local public_src = ipv6:pton("203:0:0::1")
+local public_dst = ipv6:pton("203:0:113::1")
+local remote_dst = ipv4:pton("192.168.10.2")
+
+function icmp4 (conf)
+   local payload = conf.payload or packet.from_string("0000Hello, World!")
+   local length = conf.payload_length or payload.length
+   local msg = datagram:new(payload)
+   local icm = icmp:new(conf.type, conf.code)
+   icm:checksum(msg:payload(), conf.payload_length or payload.length)
+   icm:header().checksum = conf.icmp_checksum or icm:header().checksum
+   msg:push(icm)
+   local ip4 = ipv4:new{
+      flags = conf.flags,
+      frag_off = conf.frag_off,
+      total_length = ipv4:sizeof() + icmp:sizeof() + length,
+      ttl = conf.ttl or 64,
+      protocol = conf.protocol or 1,
+      src = conf.src,
+      dst = conf.dst
+   }
+   ip4:header().checksum = conf.ipv4_checksum or ip4:header().checksum
+   msg:push(ip4)
+   msg:push(ethernet:new{type=0x0800})
+   return msg:packet()
+end
+
+function icmp6 (conf)
+   local payload = conf.payload or packet.from_string("0000Hello, World!")
+   local length = conf.payload_length or payload.length
+   local msg = datagram:new(payload)
+   local icm = icmp:new(conf.type, conf.code)
+   local ip6 = ipv6:new{
+      payload_length = icmp:sizeof() + length,
+      hop_limit = conf.ttl or 64,
+      next_header = conf.protocol or 58,
+      src = conf.src,
+      dst = conf.dst
+   }
+   icm:checksum(msg:payload(), conf.payload_length or payload.length, ip6)
+   icm:header().checksum = conf.icmp_checksum or icm:header().checksum
+   msg:push(icm)
+   msg:push(ip6)
+   msg:push(ethernet:new{type=0x86dd})
+   return msg:packet()
+end
+
+local sa = esp.encrypt:new{
+   aead = "aes-gcm-16-icv",
+   spi = 1001,
+   key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+   salt = "00 00 00 00"
+}
+
+local sa_bad_spi = esp.encrypt:new{
+   aead = "aes-gcm-16-icv",
+   spi = 0,
+   key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+   salt = "00 00 00 00"
+}
+
+local sa_replay = esp.encrypt:new{
+   aead = "aes-gcm-16-icv",
+   spi = 1001,
+   key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+   salt = "00 00 00 00"
+}
+
+function encap6 (payload, conf)
+   payload = (conf.sa or sa):encapsulate_tunnel(
+      packet.shiftleft(payload, ethernet:sizeof()),
+      conf.nh or 4
+   )
+   local d = datagram:new(payload)
+   d:push(ipv6:new{
+             payload_length = (conf.length or payload.length),
+             hop_limit = conf.ttl or 64,
+             next_header = esp.PROTOCOL,
+             src = conf.src,
+             dst = conf.dst
+   })
+   d:push(ethernet:new{type=0x86dd})
+   return d:packet()
+end
+
+-- Echo request
+public:write(icmp6{
+                type = 128,
+                src = public_src,
+                dst = public_dst
+})
+-- Broken echo request (too short)
+public:write(icmp6{
+                type = 128,
+                src = public_src,
+                dst = public_dst,
+                payload_length = 10000
+})
+-- Broken echo request (too long)
+public:write(icmp6{
+                type = 128,
+                src = public_src,
+                dst = public_dst,
+                payload_length = 4
+})
+-- Echo reply
+public:write(icmp6{
+                type = 129,
+                src = public_src,
+                dst = public_dst
+})
+-- Encapsulated echo request
+public:write(encap6(
+                icmp4{
+                   type = 8,
+                   src = remote_dst,
+                   dst = private_dst
+                },
+                {
+                   src = public_src,
+                   dst = public_dst
+                }
+))
+-- Unreachable protocol (private/public/inbound)
+public:write(icmp6{
+                protocol = 42,
+                src = public_src,
+                dst = public_dst,
+                payload = packet.from_string(("x"):rep(2000))
+})
+public:write(encap6(
+                icmp4{
+                   protocol = 42,
+                   src = remote_dst,
+                   dst = private_dst
+                },
+                {
+                   src = public_src,
+                   dst = public_dst
+                }
+))
+-- TTL expired (private/inbound)
+public:write(encap6(
+                icmp4{
+                   type = 8,
+                   src = remote_dst,
+                   dst = remote_dst,
+                   ttl = 0
+                },
+                {
+                   src = public_src,
+                   dst = public_dst
+                }
+))
+-- Bogus SPI
+public:write(encap6(
+                icmp4{
+                   type = 8,
+                   src = remote_dst,
+                   dst = private_dst
+                },
+                {
+                   sa = sa_bad_spi,
+                   src = public_src,
+                   dst = public_dst
+                }
+))
+-- Bogus SeqNo
+public:write(encap6(
+                icmp4{
+                   type = 8,
+                   src = remote_dst,
+                   dst = private_dst
+                },
+                {
+                   sa = sa_replay,
+                   src = public_src,
+                   dst = public_dst
+                }
+))
+-- Bogus NextHeader
+public:write(encap6(
+                icmp4{
+                   type = 8,
+                   src = remote_dst,
+                   dst = private_dst
+                },
+                {
+                   src = public_src,
+                   dst = public_dst,
+                   nh = 42
+                }
+))
+-- Bogus checksums
+public:write(icmp6{
+                type = 128,
+                src = public_src,
+                dst = public_dst,
+                icmp_checksum = 42
+})
+-- Various ICMPv6 messages
+local payload = packet.from_string("....012345678901234567890123456789012345")
+for _, msgtype in ipairs({
+      {type=1, codes={0,1,2,3,4,5,6,100}},
+      {type=2, codes={0,100}},
+      {type=3, codes={0,1,100}},
+      {type=4, codes={0,1,2,100}},
+      {type=100, codes={0}}
+}) do
+   for _, code in ipairs(msgtype.codes) do
+      public:write(icmp6{
+                      payload = packet.clone(payload),
+                      type = msgtype.type,
+                      code = code,
+                      src = public_src,
+                      dst = public_dst
+      })
+   end
+end
