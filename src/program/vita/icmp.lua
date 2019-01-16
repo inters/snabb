@@ -71,6 +71,7 @@ function ICMP4:new (conf)
             src = ipv4:pton(conf.node_ip4)
       }),
       ip4_in = ipv4:new({}),
+      icmp_in = icmp:new(),
       icmp = icmp:new(),
       nexthop_mtu = conf.nexthop_mtu or 1024,
       nexthop_mtu_configured = conf.nexthop_mtu ~= nil,
@@ -106,8 +107,8 @@ function ICMP4:log (p)
    )
    self.logger:log(("received message from %s [type %d code %d packet %s ...]")
          :format(ipv4:ntop(self.ip4_in:src()),
-                 self.icmp:type(),
-                 self.icmp:code(),
+                 self.icmp_in:type(),
+                 self.icmp_in:code(),
                  lib.hexdump(excerpt)))
 end
 
@@ -123,7 +124,7 @@ ICMP4.handlers[3] = function (self, p)
          [3] = self.shm.port_unreachable,
          [4] = self.shm.fragmentation_needed,
          [5] = self.shm.source_route_failed })
-      [self.icmp:code()]
+      [self.icmp_in:code()]
          or self.shm.code_not_implemented_errors
    )
 end
@@ -136,7 +137,7 @@ ICMP4.handlers[11] = function (self, p)
    counter.add(
       ({ [0] = self.shm.transit_ttl_exceeded,
          [1] = self.shm.fragment_reassembly_time_exceeded })
-      [self.icmp:code()]
+      [self.icmp_in:code()]
          or self.shm.code_not_implemented_errors
    )
 end
@@ -158,7 +159,7 @@ ICMP4.handlers[5] = function (self, p)
          [1] = self.shm.redirect_host,
          [2] = self.shm.redirect_tos_net,
          [3] = self.shm.redirect_tos_host })
-      [self.icmp:code()]
+      [self.icmp_in:code()]
          or self.shm.code_not_implemented_errors
    )
 end
@@ -196,9 +197,9 @@ function ICMP4:handle_msg (p)
    if not self.ip4_in:new_from_mem(p.data, p.length)
       or self.ip4_in:protocol() ~= ICMP4.PROTOCOL
       or self.ip4_in:is_fragment()
-      or not self.icmp:new_from_mem(p.data + ipv4:sizeof(),
-                                    p.length - ipv4:sizeof())
-      or not self.icmp:checksum_check(self:msg_payload(p))
+      or not self.icmp_in:new_from_mem(p.data + ipv4:sizeof(),
+                                       p.length - ipv4:sizeof())
+      or not self.icmp_in:checksum_check(self:msg_payload(p))
    then
       packet.free(p)
       counter.add(self.shm.rxerrors)
@@ -206,7 +207,7 @@ function ICMP4:handle_msg (p)
       return
    end
    -- Ensure we have a handler for ICMP type of packet.
-   local handler = self.handlers[self.icmp:type()]
+   local handler = self.handlers[self.icmp_in:type()]
    if not handler then
       packet.free(p)
       counter.add(self.shm.rxerrors)
