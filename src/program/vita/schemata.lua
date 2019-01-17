@@ -75,6 +75,7 @@ function compute_state_reader (schema_name)
          PublicRouter = "public-router",
          PrivateICMP4 = "private-icmp4",
          PublicICMP4 = "public-icmp4",
+         PublicICMP6 = "public-icmp6",
          InboundICMP4 = "inbound-icmp4",
          KeyManager = "key-manager"
       }

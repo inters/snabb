@@ -414,6 +414,131 @@ module vita-esp-gateway {
       }
     }
 
+    grouping icmp6-state {
+      leaf rxerrors {
+        type yang:zero-based-counter64;
+        description
+          "Total ICMPv6 messages that were dropped because they were invalid.";
+      }
+      leaf protocol-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 messages that were dropped because their checksum
+           was invalid, or they were IP fragments.";
+      }
+      leaf type-not-implemented-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 messages received that had an unrecognized type.";
+      }
+      leaf code-not-implemented-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 messages received that had an unrecognized code.";
+      }
+      leaf destination-unreachable {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 messages received of type
+           'destination unreachable'."; 
+      }
+      leaf net-unreachable {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'destination unreachable' messages received with
+           code 'no route to destination'.";
+      }
+      leaf destination-denied {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'destination unreachable' messages received with
+           code 'communication with destination administratively prohibited'.";
+      }
+      leaf scope-denied {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'destination unreachable' messages received with
+           code 'beyond scope of source address'.";
+      }
+      leaf host-unreachable {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'destination unreachable' messages received with
+           code 'address unreachable'.";
+      }
+      leaf port-unreachable {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'destination unreachable' messages received with
+           code 'port unreachable'.";
+      }
+      leaf source-denied {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'destination unreachable' messages received with
+           code 'source address failed ingress/egress policy'.";
+      }
+      leaf net-denied {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'destination unreachable' messages received with
+           code 'reject route to destination'.";
+      }
+      leaf packet-too-big {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 messages received of type
+           'packet too big'.";
+      }
+      leaf time-exceeded {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 messages received of type
+           'time exceeded'."; 
+      }
+      leaf transit-hop-limit-exceeded {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'time exceeded' messages received with code
+           'hop limit exceeded in transit'.";
+      }
+      leaf fragment-reassembly-time-exceeded {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'time exceeded' messages received with code
+           'fragment reassembly time exceeded'.";
+      }
+      leaf parameter-problem {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 messages received of type
+           'parameter problem'."; 
+      }
+      leaf header-field-problem {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'parameter exceeded' messages received with code
+           'erroneous header field encountered'.";
+      }
+      leaf next-header-problem {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'parameter exceeded' messages received with code
+           'unrecognized next header type encountered'.";
+      }
+      leaf option-problem {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'parameter exceeded' messages received with code
+           'unrecognized IPv6 option encountered'.";
+      }
+      leaf echo-request {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 echo requests handled.";
+      }
+    }
+
     container private-icmp4 {
       description "ICMPv4 events on the private interface.";
       uses icmp4-state;
@@ -422,6 +547,11 @@ module vita-esp-gateway {
     container public-icmp4 {
       description "ICMPv4 events on the public interface.";
       uses icmp4-state;
+    }
+
+    container public-icmp6 {
+      description "ICMPv6 events on the public interface.";
+      uses icmp6-state;
     }
 
     container inbound-icmp4 {
