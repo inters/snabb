@@ -26,22 +26,22 @@ test_conf(vita_test.gen_configuration({nroutes=1}))
 
 print("Change route key...")
 local conf = vita_test.gen_configuration({nroutes=1})
-conf.route.test1.preshared_key = string.rep("FF", 32)
+conf.route4.test1.preshared_key = string.rep("FF", 32)
 test_conf(conf)
 
 print("Change route gw_ip4...")
-conf.route.test1.gw_ip4 = "172.17.1.10"
+conf.route4.test1.gw_ip4 = "172.17.1.10"
 test_conf(conf)
 
 print("Change public_ip4 and route net_cidr4...")
-conf.public_interface.ip4 = "172.16.0.11"
-conf.public_interface.nexthop_ip4 = conf.public_interface.ip4
-conf.route.test1.net_cidr4 = "172.16.0.0/16"
+conf.public_interface4.ip4 = "172.16.0.11"
+conf.public_interface4.nexthop_ip4 = conf.public_interface4.ip4
+conf.route4.test1.net_cidr4 = "172.16.0.0/16"
 test_conf(conf)
 
 print("Change route id...")
-conf.route.test2 = conf.route.test1
-conf.route.test1 = nil
+conf.route4.test2 = conf.route4.test1
+conf.route4.test1 = nil
 test_conf(conf)
 
 print("Change negotiation_ttl...")
@@ -53,5 +53,5 @@ conf.sa_ttl = 42
 test_conf(conf)
 
 print("Remove route...")
-conf.route.test2 = nil
+conf.route4.test2 = nil
 test_conf(conf)

@@ -32,10 +32,12 @@ local usage = require("program.vita.README_inc")
 local confighelp = require("program.vita.README_config_inc")
 
 local confspec = {
-   private_interface = {},
-   public_interface = {},
+   private_interface4 = {},
+   public_interface4 = {},
+   public_interface6 = {},
    mtu = {default=8937},
-   route = {default={}},
+   route4 = {default={}},
+   route46 = {default={}},
    negotiation_ttl = {},
    sa_ttl = {},
    data_plane = {},
@@ -77,8 +79,9 @@ end
 
 local function parse_conf (conf)
    conf = lib.parse(conf, confspec)
-   conf.private_interface = parse_ifconf(conf.private_interface, {0x2a, 0xbb})
-   conf.public_interface = parse_ifconf(conf.public_interface, {0x3a, 0xbb})
+   conf.private_interface4 = parse_ifconf(conf.private_interface4, {0x2a,0xbb})
+   conf.public_interface4 = parse_ifconf(conf.public_interface4, {0x3a,0xbb})
+   conf.public_interface6 = parse_ifconf(conf.public_interface6, {0x3a,0xbb})
    return conf
 end
 
@@ -228,32 +231,38 @@ function configure_private_router (conf, append)
    conf = parse_conf(conf)
    local c = append or config.new()
 
-   if not conf.private_interface then return c end
+   local interface = conf.private_interface4
+   if not interface then return c end
+
+   local routes = (conf.public_interface4 and conf.route4) or
+                  (conf.public_interface6 and conf.route46)
+
+   local private_links = {}
 
    config.app(c, "PrivateDispatch", dispatch.PrivateDispatch, {
-                 node_ip4 = conf.private_interface.ip4
+                 node_ip4 = interface.ip4
    })
    config.app(c, "OutboundTTL", ttl.DecrementTTL)
    config.app(c, "PrivateRouter", route.PrivateRouter, {
-                 routes = conf.route,
+                 routes = routes,
                  mtu = conf.mtu
    })
    config.app(c, "PrivateICMP4", icmp.ICMP4, {
-                 node_ip4 = conf.private_interface.ip4,
+                 node_ip4 = interface.ip4,
                  nexthop_mtu = conf.mtu
    })
    config.app(c, "InboundDispatch", dispatch.InboundDispatch, {
-                 node_ip4 = conf.private_interface.ip4
+                 node_ip4 = interface.ip4
    })
    config.app(c, "InboundTTL", ttl.DecrementTTL)
    config.app(c, "InboundICMP4", icmp.ICMP4, {
-                 node_ip4 = conf.private_interface.ip4
+                 node_ip4 = interface.ip4
    })
    config.app(c, "PrivateNextHop", nexthop.NextHop4, {
-                 node_mac = conf.private_interface.mac,
-                 node_ip4 = conf.private_interface.ip4,
-                 nexthop_ip4 = conf.private_interface.nexthop_ip4,
-                 nexthop_mac = conf.private_interface.nexthop_mac
+                 node_mac = interface.mac,
+                 node_ip4 = interface.ip4,
+                 nexthop_ip4 = interface.nexthop_ip4,
+                 nexthop_mac = interface.nexthop_mac
    })
    config.link(c, "PrivateDispatch.forward4 -> OutboundTTL.input")
    config.link(c, "PrivateDispatch.icmp4 -> PrivateICMP4.input")
@@ -269,8 +278,10 @@ function configure_private_router (conf, append)
    config.link(c, "InboundTTL.output -> PrivateNextHop.forward")
    config.link(c, "InboundTTL.time_exceeded -> InboundICMP4.transit_ttl_exceeded")
    config.link(c, "InboundICMP4.output -> PrivateRouter.control")
+   private_links.input = "PrivateDispatch.input"
+   private_links.output = "PrivateNextHop.output"
 
-   for id, route in pairs(conf.route) do
+   for id, route in pairs(routes) do
       local private_in = "PrivateRouter."..id
       local ESP_in = "ESP_"..id.."_in"
       config.app(c, ESP_in.."_Tx", Transmitter, ESP_in)
@@ -284,10 +295,6 @@ function configure_private_router (conf, append)
       config.link(c, DSP_out.."_Rx.output -> "..private_out)
    end
 
-   local private_links = {
-      input = "PrivateDispatch.input",
-      output = "PrivateNextHop.output"
-   }
    return c, private_links
 end
 
@@ -295,40 +302,52 @@ function configure_public_router (conf, append)
    conf = parse_conf(conf)
    local c = append or config.new()
 
-   if not conf.public_interface then return c end
+   local interface = conf.public_interface4 or conf.public_interface6
+   if not interface then return c end
 
-   config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
-                 node_ip4 = conf.public_interface.ip4,
-                 node_ip6 = conf.public_interface.ip6
-   })
+   local routes = (conf.public_interface4 and conf.route4) or
+                  (conf.public_interface6 and conf.route46)
+
+   local public_links = {}
+
    config.app(c, "PublicRouter", route.PublicRouter, {
                  sa = conf.inbound_sa
    })
-   if conf.public_interface.ip4 then
+
+   if conf.public_interface4 then
+      config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
+                    node_ip4 = interface.ip4
+      })
       config.app(c, "PublicICMP4", icmp.ICMP4, {
-                    node_ip4 = conf.public_interface.ip4
+                    node_ip4 = interface.ip4
       })
       config.app(c, "PublicNextHop", nexthop.NextHop4, {
-                    node_mac = conf.public_interface.mac,
-                    node_ip4 = conf.public_interface.ip4,
-                    nexthop_ip4 = conf.public_interface.nexthop_ip4,
-                    nexthop_mac = conf.public_interface.nexthop_mac
+                    node_mac = interface.mac,
+                    node_ip4 = interface.ip4,
+                    nexthop_ip4 = interface.nexthop_ip4,
+                    nexthop_mac = interface.nexthop_mac
       })
       config.link(c, "PublicDispatch.forward4 -> PublicRouter.input")
       config.link(c, "PublicDispatch.icmp4 -> PublicICMP4.input")
       config.link(c, "PublicDispatch.arp -> PublicNextHop.arp")
       config.link(c, "PublicDispatch.protocol4_unreachable -> PublicICMP4.protocol_unreachable")
       config.link(c, "PublicICMP4.output -> PublicNextHop.icmp4")
-   elseif conf.public_interface.ip6 then
+      public_links.input = "PublicDispatch.input"
+      public_links.output = "PublicNextHop.output"
+
+   elseif conf.public_interface6 then
+      config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
+                    node_ip6 = interface.ip6
+      })
       config.app(c, "PublicICMP6", icmp.ICMP6, {
-                    node_ip6 = conf.public_interface.ip6
+                    node_ip6 = interface.ip6
       })
       config.app(c, "PublicNextHop", Join)
       config.app(c, "PublicND", nd_light, {
-                    local_mac = conf.public_interface.mac,
-                    local_ip = conf.public_interface.ip6,
-                    next_hop = conf.public_interface.nexthop_ip6,
-                    remote_mac = conf.public_interface.nexthop_mac
+                    local_mac = interface.mac,
+                    local_ip = interface.ip6,
+                    next_hop = interface.nexthop_ip6,
+                    remote_mac = interface.nexthop_mac
       })
       config.link(c, "PublicDispatch.forward6 -> PublicRouter.input")
       config.link(c, "PublicDispatch.icmp6 -> PublicICMP6.input")
@@ -336,7 +355,9 @@ function configure_public_router (conf, append)
       config.link(c, "PublicDispatch.protocol6_unreachable -> PublicICMP6.protocol_unreachable")
       config.link(c, "PublicICMP6.output -> PublicNextHop.icmp6")
       config.link(c, "PublicNextHop.output -> PublicND.north")
-   else error("Need either public_interface.ip4 or public_interface.ip6") end
+      public_links.input = "PublicDispatch.input"
+      public_links.output = "PublicND.south"
+   end
 
    if not conf.data_plane then
       config.app(c, "Protocol_in_Tx", Transmitter, "Protocol_in")
@@ -345,18 +366,18 @@ function configure_public_router (conf, append)
       config.link(c, "Protocol_out_Rx.output -> PublicNextHop.protocol")
    end
 
-   for id, route in pairs(conf.route) do
+   for id, route in pairs(routes) do
       local public_out = "PublicNextHop."..id
       local ESP_out = "ESP_"..id.."_out"
       local Tunnel = "Tunnel_"..id
       config.app(c, ESP_out.."_Rx", Receiver, ESP_out)
       if route.gw_ip4 then
          config.app(c, Tunnel, tunnel.Tunnel4,
-                    {src=conf.public_interface.ip4, dst=route.gw_ip4})
+                    {src=interface.ip4, dst=route.gw_ip4})
       elseif route.gw_ip6 then
          config.app(c, Tunnel, tunnel.Tunnel6,
-                    {src=conf.public_interface.ip6, dst=route.gw_ip6})
-      else error("Need either route.gw_ip4 or route.gw_ip6") end
+                    {src=interface.ip6, dst=route.gw_ip6})
+      end
       config.link(c, ESP_out.."_Rx.output -> "..Tunnel..".input")
       config.link(c, Tunnel..".output -> "..public_out)
    end
@@ -367,12 +388,6 @@ function configure_public_router (conf, append)
       config.app(c, DSP_in.."_Tx", Transmitter, DSP_in)
       config.link(c, public_in.." -> "..DSP_in.."_Tx.input")
    end
-
-   local public_links = {
-      input = "PublicDispatch.input",
-      output = (conf.public_interface.ip4 and "PublicNextHop.output")
-                   or "PublicND.south"
-   }
 
    return c, public_links
 end
@@ -420,12 +435,16 @@ function configure_exchange (conf, append)
 
    if conf.data_plane then return end
 
-   if not conf.public_interface then return c end
+   local interface = conf.public_interface4 or conf.public_interface6
+   if not interface then return c end
+
+   local routes = (conf.public_interface4 and conf.route4) or
+                  (conf.public_interface6 and conf.route46)
 
    config.app(c, "KeyExchange", exchange.KeyManager, {
-                 node_ip4 = conf.public_interface.ip4,
-                 node_ip6 = conf.public_interface.ip6,
-                 routes = conf.route,
+                 node_ip4 = interface.ip4,
+                 node_ip6 = interface.ip6,
+                 routes = routes,
                  sa_db_path = sa_db_path,
                  negotiation_ttl = conf.negotiation_ttl,
                  sa_ttl = conf.sa_ttl

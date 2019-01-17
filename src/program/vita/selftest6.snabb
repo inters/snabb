@@ -29,13 +29,13 @@ local ffi = require("ffi")
 local regenerate_pcaps = main.parameters[1]
 
 local cfg = {
-   private_interface = {
+   private_interface4 = {
       pci = "00:00.0",
       ip4 = "192.168.10.1",
       nexthop_ip4 = "192.168.0.1",
       mac = "52:54:00:00:00:00"
    },
-   public_interface = {
+   public_interface6 = {
       pci = "00:00.0",
       ip6 = "203:0:113::1",
       nexthop_ip6 = "203:0:0::1",
@@ -43,7 +43,7 @@ local cfg = {
       nexthop_mac = "52:54:00:00:00:FE"
    },
    mtu = 500,
-   route = {
+   route46 = {
       loopback = {
          net_cidr4 = "192.168.10.0/24",
          gw_ip6 = "203:0:113::1",

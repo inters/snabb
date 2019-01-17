@@ -8,30 +8,49 @@ module vita-esp-gateway {
   import ietf-inet-types { prefix inet; }
 
   // APPLICATION MODEL
-  grouping interface {
+  grouping interface4 {
     leaf pci { type pci-address; mandatory true; }
     leaf ip4 { type inet:ipv4-address-no-zone; }
-    leaf ip6 { type inet:ipv6-address-no-zone; }
     leaf mac { type yang:mac-address; }
     leaf nexthop-ip4 { type inet:ipv4-address-no-zone; }
+    leaf nexthop-mac { type yang:mac-address; }
+  }
+  grouping interface6 {
+    leaf pci { type pci-address; mandatory true; }
+    leaf ip6 { type inet:ipv6-address-no-zone; }
+    leaf mac { type yang:mac-address; }
     leaf nexthop-ip6 { type inet:ipv6-address-no-zone; }
     leaf nexthop-mac { type yang:mac-address; }
   }
 
-  container private-interface { uses interface; }
-  container public-interface { uses interface; }
+  grouping route {
+     leaf id { type id; mandatory true; }
+     leaf spi { type spi; mandatory true; }
+     leaf preshared-key { type key32; mandatory true; }
+  }
+
+  choice router {
+    case v4-over-v4 {
+      container private-interface4 { uses interface4; }
+      container public-interface4 { uses interface4; }
+      list route4 {
+        key id; unique "net-cidr4"; unique "preshared-key"; unique "spi"; uses route;
+        leaf net-cidr4 { type inet:ipv4-prefix; mandatory true; }
+        leaf gw-ip4 { type inet:ipv4-address-no-zone; }
+      }
+    }
+    case v4-over-v6 {
+      container private-interface4 { uses interface4; }
+      container public-interface6 { uses interface6; }
+      list route46 {
+        key id; unique "net-cidr4"; unique "preshared-key"; unique "spi"; uses route;
+        leaf net-cidr4 { type inet:ipv4-prefix; mandatory true; }
+        leaf gw-ip6 { type inet:ipv6-address-no-zone; }
+      }
+    }
+  }
 
   leaf mtu { type uint16 { range "0..8937"; } }
-
-  list route {
-    key id; unique "net-cidr4"; unique "preshared-key"; unique "spi";
-    leaf id { type id; mandatory true; }
-    leaf net-cidr4 { type inet:ipv4-prefix; mandatory true; }
-    leaf gw-ip4 { type inet:ipv4-address-no-zone; }
-    leaf gw-ip6 { type inet:ipv6-address-no-zone; }
-    leaf spi { type spi; mandatory true; }
-    leaf preshared-key { type key32; mandatory true; }
-  }
 
   leaf negotiation-ttl { type time-to-live; }
   leaf sa-ttl { type time-to-live; }
