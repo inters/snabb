@@ -118,10 +118,8 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
       sa_ttl = 16
    }
 
-   local function configure_private_router_softbench (conf)
-      local c, private = vita.configure_private_router(conf)
-
-      if not conf.private_interface then return c end
+   local function configure_vita_softbench (conf)
+      local c, private, public = vita.configure_vita_queue(conf, 1)
 
       config.app(c, "bridge", basic_apps.Join)
       config.link(c, "bridge.output -> "..private.input)
@@ -140,21 +138,17 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
       config.link(c, "gauge.output -> sieve.input")
       config.link(c, "sieve.output -> bridge.arp")
 
+      config.link(c, public.output.." -> "..public.input)
+
       return c
    end
 
-   local function softbench_workers (conf)
-      return {
-         key_manager = vita.configure_exchange(conf),
-         private_gauge_router = configure_private_router_softbench(conf),
-         public_loopback_router = configure_public_router_loopback(conf),
-         encapsulate = vita.configure_esp(conf),
-         decapsulate =  vita.configure_dsp(conf)
-      }
+   local function softbench_worker (conf)
+      return { softbench = configure_vita_softbench(conf) }
    end
 
    local function wait_gauge ()
-      if not worker.status().private_gauge_router.alive then
+      if not worker.status().softbench.alive then
          main.exit()
       end
    end
@@ -166,20 +160,10 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec)
    end
 
    vita.run_vita{
-      setup_fn = softbench_workers,
+      setup_fn = softbench_worker,
       initial_configuration = gen_configuration(testconf),
       cpuset = cpuspec and CPUSet:new():add_from_string(cpuspec)
    }
-end
-
-function configure_public_router_loopback (conf, append)
-   local c, public = vita.configure_public_router(conf, append)
-
-   if not conf.public_interface then return c end
-
-   config.link(c, public.output.." -> "..public.input)
-
-   return c
 end
 
 
@@ -192,7 +176,7 @@ end
 
 defaults = {
    private_interface = {},
-   public_interface = {},
+   public_interface = {default={["172.16.0.10"]={}}},
    route_prefix = {default="172.16"},
    nroutes = {default=1},
    packet_size = {default="IMIX"},
@@ -209,9 +193,9 @@ private_interface_defaults = {
 public_interface_defaults = {
    pci = {default="00:00.0"},
    mac = {},
-   ip4 = {default="172.16.0.10"},
    nexthop_ip4 = {default="172.16.0.10"},
-   nexthop_mac = {}
+   nexthop_mac = {},
+   queue = {default=1}
 }
 
 traffic_templates = {
@@ -221,10 +205,12 @@ traffic_templates = {
 
 local function parse_gentestconf (conf)
    conf = lib.parse(conf, defaults)
-   conf.private_interface = lib.parse(conf.private_interface,
-                                      private_interface_defaults)
-   conf.public_interface = lib.parse(conf.public_interface,
-                                     public_interface_defaults)
+   conf.private_interface =
+      lib.parse(conf.private_interface, private_interface_defaults)
+   for ip4, interface in pairs(conf.public_interface) do
+      conf.public_interface[ip4] =
+         lib.parse(interface, public_interface_defaults)
+   end
    assert(conf.nroutes >= 0 and conf.nroutes <= 255,
           "Invalid number of routes: "..conf.nroutes)
    return conf
@@ -235,7 +221,7 @@ function gen_packet (conf, route, size)
    assert(payload_size >= 0, "Negative payload_size :-(")
    local d = datagram:new(packet.resize(packet.allocate(), payload_size))
    d:push(ipv4:new{ src = ipv4:pton(conf.private_interface.nexthop_ip4),
-                    dst = ipv4:pton(conf.route_prefix.."."..route..".1"),
+                    dst = ipv4:pton(conf.route_prefix.."."..route.."."..math.random(254)),
                     total_length = ipv4:sizeof() + payload_size,
                     ttl = 64 })
    d:push(ethernet:new{ dst = ethernet:pton(conf.private_interface.mac),
@@ -252,8 +238,10 @@ function gen_packets (conf)
    local sizes = traffic_templates[conf.packet_size]
               or {tonumber(conf.packet_size)}
    for _, size in ipairs(sizes) do
-      for route = 1, conf.nroutes do
-         table.insert(sim_packets, gen_packet(conf, route, size))
+      for i = 1, math.floor(1000 / #sizes / conf.nroutes) do
+         for route = 1, conf.nroutes do
+            table.insert(sim_packets, gen_packet(conf, route, size))
+         end
       end
    end
    return sim_packets
@@ -270,12 +258,16 @@ function gen_configuration (conf)
       sa_ttl = conf.sa_ttl
    }
    for route = 1, conf.nroutes do
-      cfg.route["test"..route] = {
+      local r = {
          net_cidr4 = conf.route_prefix.."."..route..".0/24",
-         gw_ip4 = conf.public_interface.nexthop_ip4,
+         gateway = {},
          preshared_key = ("%064x"):format(route),
          spi = 1000+route
       }
+      for _, interface in pairs(conf.public_interface) do
+         r.gateway[interface.nexthop_ip4] = {queue=interface.queue}
+      end
+      cfg.route["test"..route] = r
    end
    return cfg
 end
