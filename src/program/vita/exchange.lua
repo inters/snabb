@@ -291,6 +291,11 @@ function KeyManager:reconfig (conf)
    self.sa_ttl = conf.sa_ttl
 end
 
+function KeyManager:stop ()
+   -- make sure to remove SA database when app is stopped
+   S.unlink(self.sa_db_file)
+end
+
 function KeyManager:push ()
    -- handle negotiation protocol requests
    local input = self.input.input
