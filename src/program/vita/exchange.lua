@@ -155,7 +155,6 @@ local lib = require("core.lib")
 local ipv4 = require("lib.protocol.ipv4")
 local yang = require("lib.yang.yang")
 local schemata = require("program.vita.schemata")
-local audit = lib.logger_new({rate=32, module='KeyManager'})
 require("program.vita.sodium_h")
 local C = ffi.C
 
@@ -209,6 +208,11 @@ function KeyManager:new (conf)
 end
 
 function KeyManager:reconfig (conf)
+   self.audit = lib.logger_new({
+         rate = 32,
+         module = ("KeyManager(%s)"):format(conf.node_ip4)
+   })
+
    local function find_route (id)
       for _, route in ipairs(self.routes) do
          if route.id == id then return route end
@@ -220,12 +224,12 @@ function KeyManager:reconfig (conf)
    end
    local function free_route (route)
       for _, sa in ipairs(route.inbound_sa) do
-         audit:log(("Expiring inbound SA %d for '%s' (reconfig)")
+         self.audit:log(("Expiring inbound SA %d for '%s' (reconfig)")
                :format(sa.spi, route.id))
          self.sa_db_updated = true
       end
       for _, sa in ipairs(route.outbound_sa) do
-         audit:log(("Expiring outbound SA %d for '%s' (reconfig)")
+         self.audit:log(("Expiring outbound SA %d for '%s' (reconfig)")
                :format(sa.spi, route.id))
          self.sa_db_updated = true
       end
@@ -243,7 +247,7 @@ function KeyManager:reconfig (conf)
          -- if negotation_ttl has changed, swap out old protocol fsm for a new
          -- one with the adjusted timeout, effectively resetting the fsm
          if conf.negotiation_ttl ~= self.negotiation_ttl then
-            audit:log("Protocol reset for '"..id.."' (reconfig)")
+            self.audit:log("Protocol reset for '"..id.."' (reconfig)")
             old_route.initiator = Protocol:new('initiator',
                                                old_route.spi,
                                                old_route.preshared_key,
@@ -309,7 +313,7 @@ function KeyManager:push ()
       -- process protocol timeouts
       if route.initiator:reset_if_expired() == Protocol.code.expired then
          counter.add(self.shm.negotiations_expired)
-         audit:log(("Negotiation expired for '%s' (negotiation_ttl)")
+         self.audit:log(("Negotiation expired for '%s' (negotiation_ttl)")
                :format(route.id))
       end
       for index, sa in ipairs(route.inbound_sa) do
@@ -317,7 +321,7 @@ function KeyManager:push ()
             table.remove(route.inbound_sa, index)
             self.sa_db_updated = true
             counter.add(self.shm.inbound_sa_expired)
-            audit:log(("Inbound SA %d expired for '%s' (sa_ttl)")
+            self.audit:log(("Inbound SA %d expired for '%s' (sa_ttl)")
                   :format(sa.spi, route.id))
          end
       end
@@ -326,7 +330,7 @@ function KeyManager:push ()
             table.remove(route.outbound_sa, index)
             self.sa_db_updated = true
             counter.add(self.shm.outbound_sa_expired)
-            audit:log(("Outbound SA %d expired for '%s' (sa_ttl)")
+            self.audit:log(("Outbound SA %d expired for '%s' (sa_ttl)")
                   :format(sa.spi, route.id))
          end
       end
@@ -335,7 +339,7 @@ function KeyManager:push ()
       for index, sa in ipairs(route.outbound_sa_queue) do
          if sa.activation_delay()
          or #route.outbound_sa < self.num_outbound_sa then
-            audit:log(("Activating outbound SA %d for '%s'")
+            self.audit:log(("Activating outbound SA %d for '%s'")
                   :format(sa.spi, route.id))
             -- insert in front of SA list
             table.insert(route.outbound_sa, 1, sa)
@@ -373,7 +377,7 @@ function KeyManager:negotiate (route)
       route.initiator:initiate_exchange(self.nonce_message)
    if not ecode then
       counter.add(self.shm.negotiations_initiated)
-      audit:log("Initiating negotiation for '"..route.id.."'")
+      self.audit:log("Initiating negotiation for '"..route.id.."'")
       link.transmit(self.output.output, self:request(route, nonce_message))
    else assert(ecode == Protocol.code.protocol) end
 end
@@ -386,7 +390,7 @@ function KeyManager:handle_negotiation (request)
            or self:handle_challenge_request(route, message)
            or self:handle_nonce_key_request(route, message)) then
       counter.add(self.shm.rxerrors)
-      audit:log(("Rejected invalid negotiation request for '%s'")
+      self.audit:log(("Rejected invalid negotiation request for '%s'")
             :format(route or "<unknown>"))
    end
 end
@@ -410,7 +414,7 @@ function KeyManager:handle_nonce_request (route, message)
    link.transmit(self.output.output, self:request(route, response))
 
    counter.add(self.shm.challenges_offered)
-   audit:log("Offered challenge for '"..route.id.."'")
+   self.audit:log("Offered challenge for '"..route.id.."'")
 
    return true
 end
@@ -432,7 +436,7 @@ function KeyManager:handle_challenge_request (route, message)
    else assert(not ecode) end
 
    counter.add(self.shm.challenges_accepted)
-   audit:log("Accepted challenge for '"..route.id.."'")
+   self.audit:log("Accepted challenge for '"..route.id.."'")
 
    -- If we got here we should offer our nonce and public key
    -- (offer_nonce_key -> accept_key).
@@ -440,7 +444,7 @@ function KeyManager:handle_challenge_request (route, message)
    local ecode, response = route.initiator:offer_nonce_key(response)
    assert(not ecode)
 
-   audit:log("Proposing key exchange for '"..route.id.."'")
+   self.audit:log("Proposing key exchange for '"..route.id.."'")
    link.transmit(self.output.output, self:request(route, response))
 
    return true
@@ -480,7 +484,7 @@ function KeyManager:handle_nonce_key_request (route, message)
    local is_loopback = self.ip:src_eq(route.gw_ip4n)
 
    counter.add(self.shm.keypairs_offered)
-   audit:log(("Offered key pair for '%s' (inbound SA %d, outbound SA %s)"):
+   self.audit:log(("Offered key pair for '%s' (inbound SA %d, outbound SA %s)"):
          format(route.id,
                 inbound_sa.spi,
                 (is_loopback and "-") or outbound_sa.spi))
@@ -517,7 +521,7 @@ function KeyManager:handle_key_request (route, message)
    local is_loopback = self.ip:src_eq(route.gw_ip4n)
 
    counter.add(self.shm.keypairs_negotiated)
-   audit:log(("Completed AKE for '%s' (inbound SA %s, outbound SA %d)"):
+   self.audit:log(("Completed AKE for '%s' (inbound SA %s, outbound SA %d)"):
          format(route.id,
                 (is_loopback and "-") or inbound_sa.spi,
                 outbound_sa.spi))
@@ -566,7 +570,7 @@ function KeyManager:upsert_outbound_sa (route, sa)
    end
    if remove_existing_sa_for_update() then
       counter.add(self.shm.outbound_sa_updated)
-      audit:log("Updating outbound SA "..sa.spi.." for '"..route.id.."'")
+      self.audit:log("Updating outbound SA "..sa.spi.." for '"..route.id.."'")
    end
    -- enqueue new outbound SA at the end of the queue
    table.insert(route.outbound_sa_queue, {
