@@ -671,15 +671,11 @@ function KeyManager:commit_sa_db ()
       end
    end
    -- Commit active SAs to SA database
-   local success, err = pcall(
-      yang.compile_config_for_schema,
+   yang.compile_config_for_schema(
       schemata['ephemeral-keys'],
       {outbound_sa=esp_keys, inbound_sa=dsp_keys},
       self.sa_db_file
    )
-   if not success then
-      audit:log("Failed to commit SA database: "..err)
-   end
 end
 
 -- Vita: simple key exchange (vita-ske, version 2a). See README.exchange
