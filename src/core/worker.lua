@@ -43,7 +43,7 @@ function start (name, luacode)
       S.setenv("SNABB_PROGRAM_LUACODE", luacode, true)
       -- Save this worker's qualified name in the environment.
       local parent = engine.program_name or S.getppid()
-      S.setenv("SNABB_WORKER_NAME", parent.."/"..name, true)
+      S.setenv("SNABB_WORKER_NAME", parent.."."..name, true)
       -- Restart the process with execve().
       -- /proc/$$/exe is a link to the same Snabb executable that we are running
       local filename = ("/proc/%d/exe"):format(S.getpid())
