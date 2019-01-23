@@ -35,7 +35,7 @@ local confspec = {
    private_interface4 = {},
    public_interface4 = {},
    public_interface6 = {},
-   mtu = {default=8937},
+   mtu = {default=8923},
    route4 = {default={}},
    route46 = {default={}},
    negotiation_ttl = {},
@@ -168,18 +168,12 @@ function run_vita (opt)
    }
 
    -- Listen for SA database changes.
-   local notify_fd, sa_db_wd = assert(S.inotify_init("cloexec, nonblock"))
+   local sa_db_last_modified
    local function sa_db_needs_reload ()
-      if not sa_db_wd then
-         sa_db_wd = notify_fd:inotify_add_watch(sa_db_path, "close_write")
-         -- sa_db_wd ~= nil means the SA database was newly created and we
-         -- should load it.
-         return (sa_db_wd ~= nil)
-      else
-         local events, err = notify_fd:inotify_read()
-         -- Any event indicates the SA database was written to and we should
-         -- reload it.
-         return not (err and assert(err.again, err)) and #events > 0
+      local stat = S.stat(sa_db_path)
+      if stat and stat.st_mtime ~= sa_db_last_modified then
+         sa_db_last_modified = stat.st_mtime
+         return true
       end
    end
 
