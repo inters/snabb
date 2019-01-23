@@ -31,7 +31,7 @@ local confighelp = require("program.vita.README_config_inc")
 local confspec = {
    private_interface = {},
    public_interface = {},
-   mtu = {default=8937},
+   mtu = {default=8923},
    route = {default={}},
    negotiation_ttl = {},
    sa_ttl = {},
