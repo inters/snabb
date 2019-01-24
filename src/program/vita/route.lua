@@ -68,7 +68,7 @@ function PrivateRouter:route (p)
    assert(self.ip4:new_from_mem(p.data, p.length))
    local route = self:find_route4(self.ip4:dst())
    if route then
-      if p.length + ethernet:sizeof() <= self.mtu then
+      if p.length <= self.mtu then
          link.transmit(route, p)
       else
          counter.add(self.shm.rxerrors)
