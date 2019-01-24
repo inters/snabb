@@ -6,6 +6,7 @@ local vita = require("program.vita.vita")
 local ARP = require("apps.ipv4.arp").ARP
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
+local ipv6 = require("lib.protocol.ipv6")
 local basic_apps = require("apps.basic.basic_apps")
 local pcap = require("apps.pcap.pcap")
 local filter = require("apps.packet_filter.pcap_filter")
@@ -17,11 +18,11 @@ local ffi = require("ffi")
 
 -- Synopsis:
 --
---    sudo selftest.snabb [regenerate]
+--    sudo selftest6.snabb [regenerate]
 --
 -- Basic event-sourced (selftest-*-in.pcap) test that exercises various
 -- non-happy paths of Vita. Regenerates reference outputs (selftest-*-out.pcap)
--- when called with an argument.
+-- when called with an argument. IPv6 version.
 --
 -- TODO: doesn’t exercise KeyManager yet.
 
@@ -34,17 +35,18 @@ local cfg = {
       nexthop_ip4 = "192.168.0.1",
       mac = "52:54:00:00:00:00"
    },
-   public_interface4 = {
+   public_interface6 = {
       pci = "00:00.0",
-      ip4 = "203.0.113.1",
-      nexthop_ip4 = "203.0.0.1",
-      mac = "52:54:00:00:00:FF"
+      ip6 = "203:0:113::1",
+      nexthop_ip6 = "203:0:0::1",
+      mac = "52:54:00:00:00:FF",
+      nexthop_mac = "52:54:00:00:00:FE"
    },
    mtu = 500,
-   route4 = {
+   route46 = {
       loopback = {
          net_cidr4 = "192.168.10.0/24",
-         gw_ip4 = "203.0.113.1",
+         gw_ip6 = "203:0:113::1",
          preshared_key = string.rep("00", 32),
          spi = 1001
       }
@@ -82,46 +84,40 @@ config.app(c, "private_arp", ARP, {
               self_ip = ipv4:pton("192.168.0.1"),
               next_ip = ipv4:pton("192.168.10.1")
 })
-config.app(c, "public_arp", ARP, {
-              self_mac = ethernet:pton("52:54:00:00:00:FE"),
-              self_ip = ipv4:pton("203.0.0.1"),
-              next_ip = ipv4:pton("203.0.113.1")
-})
 config.link(c, "private_arp.south -> "..private.input)
 config.link(c, private.output.." -> private_arp.south")
-config.link(c, "public_arp.south -> "..public.input)
-config.link(c, public.output.." -> public_arp.south")
 
 -- Loopback ESP traffic.
 config.app(c, "public_out", basic_apps.Tee)
 config.app(c, "join", basic_apps.Join)
 config.app(c, "filter", filter.PcapFilter, {filter="ip proto esp"})
-config.link(c, "public_arp.north -> public_out.input")
+config.link(c, public.output.." -> public_out.input")
 config.link(c, "public_out.loopback -> filter.input")
 config.link(c, "filter.output -> join.loopback")
-config.link(c, "join.output -> public_arp.north")
+config.link(c, "join.output -> "..public.input)
 
 -- Add PCAP sources and sinks.
-config.app(c, "private_pcap_in", pcap.PcapReader,
-           "program/vita/selftest-private-in.pcap")
+--config.app(c, "private_pcap_in", pcap.PcapReader,
+--           "program/vita/selftest-private-in.pcap")
+config.app(c, "private_pcap_in", basic_apps.Sink) -- null
 config.app(c, "public_pcap_in", pcap.PcapReader,
-           "program/vita/selftest-public-in.pcap")
+           "program/vita/selftest6-public-in.pcap")
 config.link(c, "private_pcap_in.output -> private_arp.north")
 config.link(c, "public_pcap_in.output -> join.input")
 if regenerate_pcaps then
    -- Regenerate reference outputs.
    config.app(c, "private_pcap_out", pcap.PcapWriter,
-              "program/vita/selftest-private-out.pcap")
+              "program/vita/selftest6-private-out.pcap")
    config.app(c, "public_pcap_out", pcap.PcapWriter,
-              "program/vita/selftest-public-out.pcap")
+              "program/vita/selftest6-public-out.pcap")
    config.link(c, "private_arp.north -> private_pcap_out.input")
    config.link(c, "public_out.output -> public_pcap_out.input")
 else
    -- Match reference outputs.
    config.app(c, "private_pcap_out", pcap.PcapReader,
-              "program/vita/selftest-private-out.pcap")
+              "program/vita/selftest6-private-out.pcap")
    config.app(c, "public_pcap_out", pcap.PcapReader,
-              "program/vita/selftest-public-out.pcap")
+              "program/vita/selftest6-public-out.pcap")
    config.app(c, "match_private", match.Match, {})
    config.link(c, "private_pcap_out.output -> match_private.comparator")
    config.link(c, "private_arp.north -> match_private.rx")
@@ -169,53 +165,38 @@ else
       main.exit(1)
       end
    for app, counters in pairs{
-      PrivateRouter = {
-         rxerrors = 2,
-         mtu_errors = 2
-      },
       PublicRouter = {
-         route_errors = 1,
+         route_errors = 1, -- Bogus SPI
       },
-      PrivateDispatch = {
-         rxerrors = 1,
-         checksum_errors = 1
-      },
-      PublicDispatch = {
-         rxerrors = 2,
-         fragment_errors = 2
-      },
-      DSP_loopback_1001 = {
+      DSP_loopback_1001 = { -- Bogus SeqNo, Bogus NextHeader
          rxerrors = 2,
          protocol_errors = 1,
          decrypt_errors = 1
       },
-      PrivateICMP4 = {
-         rxerrors = 15,
-         protocol_errors = 3,
-         redirect = 5,
-         redirect_net = 1,
-         redirect_host = 1,
-         redirect_tos_net = 1,
-         redirect_tos_host = 1,
-         destination_unreachable = 7,
+      PublicICMP6 = {
+         echo_request = 2, -- Echo request, Broken echo request (too long)
+         destination_unreachable = 8,-- Standard codes, Code 100
          net_unreachable = 1,
-         protocol_unreachable = 1,
-         port_unreachable = 1,
+         destination_denied = 1,
+         scope_denied = 1,
          host_unreachable = 1,
-         fragmentation_needed = 1,
-         source_route_failed = 1,
-         echo_request = 3,
-         time_exceeded = 3,
-         transit_ttl_exceeded = 1,
+         port_unreachable = 1,
+         source_denied = 1,
+         net_denied = 1,
+         packet_too_big = 2, -- Code 0, Code 100
+         time_exceeded = 3, -- Standard codes, Code 100
          fragment_reassembly_time_exceeded = 1,
-         parameter_problem = 2,
-         type_not_implemented_errors = 12,
-         code_not_implemented_errors = 3
+         transit_hop_limit_exceeded = 1,
+         parameter_problem = 4, -- Standard codes, Code 100
+         next_header_problem = 1,
+         header_field_problem = 1,
+         option_problem = 1,
+         rxerrors = 4,
+         protocol_errors = 2, -- Broken echo request (too short), Bogus checksum
+         type_not_implemented_errors = 2, -- Echo reply, Type 100
+         code_not_implemented_errors = 3 -- Code 100
       },
-      PublicICMP4 = {
-         echo_request = 1
-      },
-      InboundICMP4 = {
+      InboundICMP4 = { -- Encapsulated echo request
          echo_request = 1
       }
    } do

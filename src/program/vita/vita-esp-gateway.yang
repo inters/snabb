@@ -8,27 +8,49 @@ module vita-esp-gateway {
   import ietf-inet-types { prefix inet; }
 
   // APPLICATION MODEL
-  grouping interface {
+  grouping interface4 {
     leaf pci { type pci-address; mandatory true; }
-    leaf ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+    leaf ip4 { type inet:ipv4-address-no-zone; }
     leaf mac { type yang:mac-address; }
-    leaf nexthop-ip4 { type inet:ipv4-address-no-zone; mandatory true; }
+    leaf nexthop-ip4 { type inet:ipv4-address-no-zone; }
+    leaf nexthop-mac { type yang:mac-address; }
+  }
+  grouping interface6 {
+    leaf pci { type pci-address; mandatory true; }
+    leaf ip6 { type inet:ipv6-address-no-zone; }
+    leaf mac { type yang:mac-address; }
+    leaf nexthop-ip6 { type inet:ipv6-address-no-zone; }
     leaf nexthop-mac { type yang:mac-address; }
   }
 
-  container private-interface { uses interface; }
-  container public-interface { uses interface; }
+  grouping route {
+     leaf id { type id; mandatory true; }
+     leaf spi { type spi; mandatory true; }
+     leaf preshared-key { type key32; mandatory true; }
+  }
+
+  choice router {
+    case v4-over-v4 {
+      container private-interface4 { uses interface4; }
+      container public-interface4 { uses interface4; }
+      list route4 {
+        key id; unique "net-cidr4"; unique "preshared-key"; unique "spi"; uses route;
+        leaf net-cidr4 { type inet:ipv4-prefix; mandatory true; }
+        leaf gw-ip4 { type inet:ipv4-address-no-zone; }
+      }
+    }
+    case v4-over-v6 {
+      container private-interface4 { uses interface4; }
+      container public-interface6 { uses interface6; }
+      list route46 {
+        key id; unique "net-cidr4"; unique "preshared-key"; unique "spi"; uses route;
+        leaf net-cidr4 { type inet:ipv4-prefix; mandatory true; }
+        leaf gw-ip6 { type inet:ipv6-address-no-zone; }
+      }
+    }
+  }
 
   leaf mtu { type uint16 { range "0..8937"; } }
-
-  list route {
-    key id; unique "net-cidr4"; unique "preshared-key"; unique "spi";
-    leaf id { type id; mandatory true; }
-    leaf net-cidr4 { type inet:ipv4-prefix; mandatory true; }
-    leaf gw-ip4 { type inet:ipv4-address-no-zone; mandatory true; }
-    leaf spi { type spi; mandatory true; }
-    leaf preshared-key { type key32; mandatory true; }
-  }
 
   leaf negotiation-ttl { type time-to-live; }
   leaf sa-ttl { type time-to-live; }
@@ -411,6 +433,131 @@ module vita-esp-gateway {
       }
     }
 
+    grouping icmp6-state {
+      leaf rxerrors {
+        type yang:zero-based-counter64;
+        description
+          "Total ICMPv6 messages that were dropped because they were invalid.";
+      }
+      leaf protocol-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 messages that were dropped because their checksum
+           was invalid, or they were IP fragments.";
+      }
+      leaf type-not-implemented-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 messages received that had an unrecognized type.";
+      }
+      leaf code-not-implemented-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 messages received that had an unrecognized code.";
+      }
+      leaf destination-unreachable {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 messages received of type
+           'destination unreachable'."; 
+      }
+      leaf net-unreachable {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'destination unreachable' messages received with
+           code 'no route to destination'.";
+      }
+      leaf destination-denied {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'destination unreachable' messages received with
+           code 'communication with destination administratively prohibited'.";
+      }
+      leaf scope-denied {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'destination unreachable' messages received with
+           code 'beyond scope of source address'.";
+      }
+      leaf host-unreachable {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'destination unreachable' messages received with
+           code 'address unreachable'.";
+      }
+      leaf port-unreachable {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'destination unreachable' messages received with
+           code 'port unreachable'.";
+      }
+      leaf source-denied {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'destination unreachable' messages received with
+           code 'source address failed ingress/egress policy'.";
+      }
+      leaf net-denied {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'destination unreachable' messages received with
+           code 'reject route to destination'.";
+      }
+      leaf packet-too-big {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 messages received of type
+           'packet too big'.";
+      }
+      leaf time-exceeded {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 messages received of type
+           'time exceeded'."; 
+      }
+      leaf transit-hop-limit-exceeded {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'time exceeded' messages received with code
+           'hop limit exceeded in transit'.";
+      }
+      leaf fragment-reassembly-time-exceeded {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'time exceeded' messages received with code
+           'fragment reassembly time exceeded'.";
+      }
+      leaf parameter-problem {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 messages received of type
+           'parameter problem'."; 
+      }
+      leaf header-field-problem {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'parameter exceeded' messages received with code
+           'erroneous header field encountered'.";
+      }
+      leaf next-header-problem {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'parameter exceeded' messages received with code
+           'unrecognized next header type encountered'.";
+      }
+      leaf option-problem {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 'parameter exceeded' messages received with code
+           'unrecognized IPv6 option encountered'.";
+      }
+      leaf echo-request {
+        type yang:zero-based-counter64;
+        description
+          "Count of ICMPv6 echo requests handled.";
+      }
+    }
+
     container private-icmp4 {
       description "ICMPv4 events on the private interface.";
       uses icmp4-state;
@@ -419,6 +566,11 @@ module vita-esp-gateway {
     container public-icmp4 {
       description "ICMPv4 events on the public interface.";
       uses icmp4-state;
+    }
+
+    container public-icmp6 {
+      description "ICMPv6 events on the public interface.";
+      uses icmp6-state;
     }
 
     container inbound-icmp4 {

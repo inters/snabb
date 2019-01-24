@@ -153,6 +153,7 @@ local counter = require("core.counter")
 local header = require("lib.protocol.header")
 local lib = require("core.lib")
 local ipv4 = require("lib.protocol.ipv4")
+local ipv6 = require("lib.protocol.ipv6")
 local yang = require("lib.yang.yang")
 local schemata = require("program.vita.schemata")
 local audit = lib.logger_new({rate=32, module='KeyManager'})
@@ -164,7 +165,8 @@ PROTOCOL = 99 -- “Any private encryption scheme”
 KeyManager = {
    name = "KeyManager",
    config = {
-      node_ip4 = {required=true},
+      node_ip4 = {},
+      node_ip6 = {},
       routes = {required=true},
       sa_db_path = {required=true},
       num_outbound_sa = {default=1},
@@ -193,7 +195,8 @@ KeyManager = {
 function KeyManager:new (conf)
    local o = {
       routes = {},
-      ip = ipv4:new({}),
+      ip4 = ipv4:new({}),
+      ip6 = ipv6:new({}),
       transport = Transport.header:new({}),
       nonce_message = Protocol.nonce_message:new({}),
       key_message = Protocol.key_message:new({}),
@@ -255,9 +258,11 @@ function KeyManager:reconfig (conf)
          end
       else
          -- insert new new route
+         assert(route.gw_ip4 or route.gw_ip6, "Need either gw_ip4 or gw_ip6")
          local new_route = {
             id = id,
-            gw_ip4n = ipv4:pton(route.gw_ip4),
+            gw_ip4n = route.gw_ip4 and ipv4:pton(route.gw_ip4),
+            gw_ip6n = route.gw_ip6 and ipv6:pton(route.gw_ip6),
             preshared_key = new_key,
             spi = route.spi,
             inbound_sa = {}, outbound_sa = {}, outbound_sa_queue = {},
@@ -282,7 +287,9 @@ function KeyManager:reconfig (conf)
    end
 
    -- switch to new configuration
-   self.node_ip4n = ipv4:pton(conf.node_ip4)
+   assert(conf.node_ip4 or conf.node_ip6, "Need either node_ip4 or node_ip6")
+   self.node_ip4n = conf.node_ip4 and ipv4:pton(conf.node_ip4)
+   self.node_ip6n = conf.node_ip6 and ipv6:pton(conf.node_ip6)
    self.routes = new_routes
    self.sa_db_file = shm.root.."/"..shm.resolve(conf.sa_db_path)
    self.num_outbound_sa = conf.num_outbound_sa
@@ -472,7 +479,8 @@ function KeyManager:handle_nonce_key_request (route, message)
    -- This is an optimization for loopback testing: if we are negotiating with
    -- ourselves, configure an inbound SA only (outbound SA will be configured
    -- by the initiator.)
-   local is_loopback = self.ip:src_eq(route.gw_ip4n)
+   local is_loopback = (route.gw_ip4n and self.ip4:src_eq(route.gw_ip4n)) or
+                       (route.gw_ip6n and self.ip6:src_eq(route.gw_ip6n))
 
    counter.add(self.shm.keypairs_offered)
    audit:log(("Offered key pair for '%s' (inbound SA %d, outbound SA %s)"):
@@ -509,7 +517,8 @@ function KeyManager:handle_key_request (route, message)
    -- This is an optimization for loopback testing: if we are negotiating with
    -- ourselves, configure an outbound SA only (inbound SA has been configured
    -- by the responder.)
-   local is_loopback = self.ip:src_eq(route.gw_ip4n)
+   local is_loopback = (route.gw_ip4n and self.ip4:src_eq(route.gw_ip4n)) or
+                       (route.gw_ip6n and self.ip6:src_eq(route.gw_ip6n))
 
    counter.add(self.shm.keypairs_negotiated)
    audit:log(("Completed AKE for '%s' (inbound SA %s, outbound SA %d)"):
@@ -585,16 +594,27 @@ end
 function KeyManager:request (route, message)
    local request = packet.allocate()
 
-   self.ip:new({
-         total_length = ipv4:sizeof()
-            + Transport.header:sizeof()
-            + message:sizeof(),
-         ttl = 64,
-         protocol = PROTOCOL,
-         src = self.node_ip4n,
-         dst = route.gw_ip4n
-   })
-   packet.append(request, self.ip:header(), ipv4:sizeof())
+   if self.node_ip4n then
+      self.ip4:new({
+            total_length = ipv4:sizeof()
+               + Transport.header:sizeof()
+               + message:sizeof(),
+            ttl = 64,
+            protocol = PROTOCOL,
+            src = self.node_ip4n,
+            dst = route.gw_ip4n
+      })
+      packet.append(request, self.ip4:header(), ipv4:sizeof())
+   elseif self.node_ip6n then
+      self.ip6:new({
+            payload_length = Transport.header:sizeof() + message:sizeof(),
+            hop_limit = 64,
+            next_header = PROTOCOL,
+            src = self.node_ip6n,
+            dst = route.gw_ip6n
+      })
+      packet.append(request, self.ip6:header(), ipv6:sizeof())
+   else error("BUG") end
 
    self.transport:new({
          spi = route.spi,
