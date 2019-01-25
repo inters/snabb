@@ -190,8 +190,12 @@ function data_grammar_from_schema(schema, is_config)
    function handlers.choice(node)
       local choices = {}
       for choice, n in pairs(node.body) do
-         local members = visit_body(n)
-         if not is_empty(members) then choices[choice] = members end
+         if n.kind == 'case' then
+            local members = visit_body(n)
+            if not is_empty(members) then choices[choice] = members end
+         else
+            choices[choice] = { [choice] = visit(n) }
+         end
       end
       if is_empty(choices) then return end
       return {type="choice", default=node.default, mandatory=node.mandatory,
@@ -1931,6 +1935,21 @@ function selftest()
    assert(choice_data.baz == 1)
    assert(choice_data.qu_x.me.v == "hey")
    assert(choice_data.qu_x.you.v == "hi")
+
+   -- Test choice with case short form.
+   local choice_schema = schema.load_schema([[module shortform-choice-schema {
+      namespace "urn:ietf:params:xml:ns:yang:shortform-choice-schema";
+      prefix "test";
+
+      choice test {
+        default foo;
+        leaf foo { type string; default "something"; }
+        leaf bar { type string; }
+      }
+   }]])
+   local choice_data = load_config_for_schema(choice_schema,
+                                              mem.open_input_string "")
+   assert(choice_data.foo == "something")
 
    -- Check native number key.
    local native_number_key_schema = schema.load_schema([[module native-number-key {
