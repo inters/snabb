@@ -13,7 +13,7 @@ INCLUDE = *.* core arch jit syscall pf \
           program/top program/shm
 
 INCLUDE_TEST = $(INCLUDE) \
-               lib/pmu* apps/test apps/packet_filter apps/ipv4 apps/pcap \
+               lib/pmu* apps/test apps/packet_filter apps/ipv4 \
                program/snsh program/snabbmark \
                lib/virtio apps/vhost apps/ipsec apps/pcap \
                apps/lwaftr/lwutil.* apps/lwaftr/constants.* \
