@@ -8,14 +8,14 @@ INCLUDE = *.* core arch jit syscall pf \
           lib/hardware lib/macaddress.* lib/numa.* lib/cpuset.* \
           lib/scheduling.* lib/timers \
           apps/basic apps/interlink apps/intel_mp \
+          apps/ipv6/nd_light.lua lib/pcap \
           program/vita program/config program/ps program/pci_bind \
           program/top program/shm
 
 INCLUDE_TEST = $(INCLUDE) \
-               lib/pmu* apps/test apps/packet_filter apps/ipv4 \
-               lib/pcap apps/pcap \
+               lib/pmu* apps/test apps/packet_filter apps/ipv4 apps/pcap \
                program/snsh program/snabbmark \
-               lib/virtio apps/vhost apps/ipsec apps/ipv6 \
+               lib/virtio apps/vhost apps/ipsec apps/pcap \
                apps/lwaftr/lwutil.* apps/lwaftr/constants.* \
                apps/lwaftr/loadgen.* program/loadtest
 
