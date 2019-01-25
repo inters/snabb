@@ -46,6 +46,7 @@ module vita-esp-gateway {
       list public-interface4 {
         key ip4; unique queue;
         uses interface; uses interface4;
+        leaf queue { type queue; default 1; }
       }
       list route4 {
         key id; unique spi; unique preshared-key; unique net-cidr4;
@@ -60,6 +61,7 @@ module vita-esp-gateway {
       list public-interface6 {
         key ip6; unique queue;
         uses interface; uses interface6;
+        leaf queue { type queue; default 1; }
       }
       list route46 {
         key id; unique spi; unique preshared-key; unique net-cidr4;
