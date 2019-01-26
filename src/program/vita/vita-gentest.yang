@@ -4,15 +4,10 @@ module vita-gentest {
 
   import vita-esp-gateway { prefix vita; }
 
-  choice router {
-    case v4-over-v4 {
-      container private-interface4 { uses vita:interface4; }
-      container public-interface4 { uses vita:interface4; }
-    }
-    case v4-over-v6 {
-      container private-interface4 { uses vita:interface4; }
-      container public-interface6 { uses vita:interface6; }
-    }
+  container private-interface4 { uses vita:interface4; }
+  choice public-router {
+    container public-interface4 { uses vita:interface4; }
+    container public-interface6 { uses vita:interface6; }
   }
 
   leaf negotiation-ttl { type vita:time-to-live; }

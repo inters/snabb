@@ -29,9 +29,9 @@ module vita-esp-gateway {
      leaf preshared-key { type key32; mandatory true; }
   }
 
-  choice router {
-    case v4-over-v4 {
-      container private-interface4 { uses interface4; }
+  container private-interface4 { uses interface4; }
+  choice public-router {
+    case over-v4 {
       container public-interface4 { uses interface4; }
       list route4 {
         key id; unique "net-cidr4"; unique "preshared-key"; unique "spi"; uses route;
@@ -39,8 +39,7 @@ module vita-esp-gateway {
         leaf gw-ip4 { type inet:ipv4-address-no-zone; }
       }
     }
-    case v4-over-v6 {
-      container private-interface4 { uses interface4; }
+    case over-v6 {
       container public-interface6 { uses interface6; }
       list route46 {
         key id; unique "net-cidr4"; unique "preshared-key"; unique "spi"; uses route;
