@@ -38,11 +38,11 @@ module vita-esp-gateway {
     leaf queue { type queue; default 1;}
   }
 
+  container private-interface4 {
+    uses interface; uses interface4;
+  }
   choice router {
-    case v4-over-v4 {
-      container private-interface4 {
-        uses interface; uses interface4;
-      }
+    case over-v4 {
       list public-interface4 {
         key ip4; unique queue;
         uses interface; uses interface4;
@@ -56,10 +56,7 @@ module vita-esp-gateway {
         }
       }
     }
-    case v4-over-v6 {
-      container private-interface4 {
-        uses interface; uses interface4;
-      }
+    case over-v6 {
       list public-interface6 {
         key ip6; unique queue;
         uses interface; uses interface6;
