@@ -188,7 +188,8 @@ KeyManager = {
       inbound_sa_expired  = {counter},
       outbound_sa_expired = {counter},
       outbound_sa_updated = {counter}
-   }
+   },
+   max_pps = 100
 }
 
 function KeyManager:new (conf)
@@ -202,7 +203,9 @@ function KeyManager:new (conf)
       challenge_message = Protocol.challenge_message:new({}),
       nonce_key_message = Protocol.nonce_key_message:new({}),
       sa_db_updated = false,
-      sa_db_commit_throttle = lib.throttle(1)
+      sa_db_commit_throttle = lib.throttle(1),
+      rate_bucket = KeyManager.max_pps,
+      rate_throttle = lib.throttle(1)
    }
    local self = setmetatable(o, { __index = KeyManager })
    self:reconfig(conf)
@@ -310,7 +313,7 @@ end
 function KeyManager:push ()
    -- handle negotiation protocol requests
    local input = self.input.input
-   while not link.empty(input) do
+   while not link.empty(input) and self:rate_limit() do
       local request = link.receive(input)
       self:handle_negotiation(request)
       packet.free(request)
@@ -374,6 +377,16 @@ function KeyManager:push ()
    if self.sa_db_updated and self.sa_db_commit_throttle() then
       self:commit_sa_db()
       self.sa_db_updated = false
+   end
+end
+
+function KeyManager:rate_limit ()
+   if self.rate_throttle() then
+      self.rate_bucket = self.max_pps
+   end
+   if self.rate_bucket > 0 then
+      self.rate_bucket = self.rate_bucket - 1
+      return true
    end
 end
 
