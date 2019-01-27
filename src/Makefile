@@ -29,7 +29,8 @@ INCSRC = $(sort $(shell find $(INCLUDE) -regex '[^\#]*\.inc' -printf '%p ') prog
 YANGSRC= $(shell find $(INCLUDE) -regex '[^\#]*\.yang' -printf '%p ')
 
 LUAOBJ := $(patsubst %.lua,obj/%_lua.o,$(LUASRC))
-LIBSODIUMOBJ := $(shell find ../lib/libsodium/src/ -path '*/.libs/*' -name '*.o' -printf '%p ')
+BLAKEOBJ := $(shell find ../lib/blake/sse -name '*.o' -printf '%p ')
+CURVE25519OBJ := $(shell find ../lib/curve25519sandy2x -name '*.o' -printf '%p ')
 COBJ   := $(patsubst %.c,obj/%_c.o,    $(CSRC))
 HOBJ   := $(patsubst %.h,obj/%_h.o,    $(CHDR))
 ARCHOBJ:= $(patsubst %.c,obj/%_c.o,    $(ARCHSRC))
@@ -66,7 +67,7 @@ snabb: $(LUAOBJ) $(PFLUAOBJ) $(HOBJ) $(COBJ) $(ARCHOBJ) $(ASMOBJ) $(PFLUAASMOBJ)
 	$(E) "LINK      $@"
 	$(Q) $(CC) $(DEBUG) -Wl,--no-as-needed -Wl,-E -Werror -Wall -o $@ $^ \
 	    obj/version_lua.o \
-	    $(LIBSODIUMOBJ) \
+	    $(BLAKEOBJ) $(CURVE25519OBJ) \
 	    -lrt -lc -ldl -lm -lpthread
 	@echo -n "BINARY    "
 	@ls -sh snabb

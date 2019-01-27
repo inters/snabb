@@ -156,9 +156,8 @@ local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
 local yang = require("lib.yang.yang")
 local schemata = require("program.vita.schemata")
+local crypto = require("program.vita.crypto")
 local audit = lib.logger_new({rate=32, module='KeyManager'})
-require("program.vita.sodium_h")
-local C = ffi.C
 
 PROTOCOL = 99 -- “Any private encryption scheme”
 
@@ -207,7 +206,6 @@ function KeyManager:new (conf)
    }
    local self = setmetatable(o, { __index = KeyManager })
    self:reconfig(conf)
-   assert(C.sodium_init() >= 0, "Failed to initialize libsodium.")
    return self
 end
 
@@ -713,10 +711,10 @@ Protocol = {
               offer_key = 4, offer_nonce_key = 5, accept_key = 7 },
    code = { protocol = 0, authentication = 1, parameter = 2, expired = 3},
    spi_counter = 0,
-   preshared_key_bytes = C.crypto_auth_hmacsha512256_KEYBYTES,
-   public_key_bytes = C.crypto_scalarmult_curve25519_BYTES,
-   secret_key_bytes = C.crypto_scalarmult_curve25519_SCALARBYTES,
-   auth_code_bytes = C.crypto_auth_hmacsha512256_BYTES,
+   preshared_key_bytes = 32,
+   public_key_bytes = crypto.curve25519_BYTES,
+   secret_key_bytes = crypto.curve25519_SCALARBYTES,
+   auth_code_bytes = crypto.blake2s_OUTBYTES,
    nonce_bytes = 32,
    spi_t = ffi.typeof("union { uint32_t u32; uint8_t bytes[4]; }"),
    buffer_t = ffi.typeof("uint8_t[?]"),
@@ -863,8 +861,8 @@ function Protocol:new (initial_status, r, key, timeout)
       h  = ffi.new(Protocol.buffer_t, Protocol.auth_code_bytes),
       q  = ffi.new(Protocol.buffer_t, Protocol.secret_key_bytes),
       e  = ffi.new(Protocol.key_t),
-      hmac_state = ffi.new("struct crypto_auth_hmacsha512256_state"),
-      hash_state = ffi.new("struct crypto_generichash_blake2b_state")
+      hmac_state = ffi.new(crypto.hmac_blake2s_state_t),
+      hash_state = ffi.new(crypto.blake2s_state_t)
    }
    ffi.copy(o.k, key, ffi.sizeof(o.k))
    o.r.u32 = lib.htonl(r)
@@ -987,13 +985,13 @@ function Protocol:send_key (key_message)
    local r, k, n1, n2, spi1, p1 =
       self.r, self.k, self.n1, self.n2, self.spi1, self.p1
    local state, h1 = self.hmac_state, self.h
-   C.crypto_auth_hmacsha512256_init(state, k, ffi.sizeof(k))
-   C.crypto_auth_hmacsha512256_update(state, r.bytes, ffi.sizeof(r))
-   C.crypto_auth_hmacsha512256_update(state, n1, ffi.sizeof(n1))
-   C.crypto_auth_hmacsha512256_update(state, n2, ffi.sizeof(n2))
-   C.crypto_auth_hmacsha512256_update(state, spi1.bytes, ffi.sizeof(spi1))
-   C.crypto_auth_hmacsha512256_update(state, p1, ffi.sizeof(p1))
-   C.crypto_auth_hmacsha512256_final(state, h1)
+   crypto.hmac_blake2s_init(state, k, ffi.sizeof(k))
+   crypto.hmac_blake2s_update(state, r.bytes, ffi.sizeof(r))
+   crypto.hmac_blake2s_update(state, n1, ffi.sizeof(n1))
+   crypto.hmac_blake2s_update(state, n2, ffi.sizeof(n2))
+   crypto.hmac_blake2s_update(state, spi1.bytes, ffi.sizeof(spi1))
+   crypto.hmac_blake2s_update(state, p1, ffi.sizeof(p1))
+   crypto.hmac_blake2s_final(state, h1)
    key_message:spi(spi1.bytes)
    key_message:public_key(p1)
    key_message:auth_code(h1)
@@ -1004,14 +1002,14 @@ function Protocol:intern_key (m)
    local r, k, n1, n2, spi2, p2 =
       self.r, self.k, self.n1, self.n2, self.spi2, self.p2
    local state, h2 = self.hmac_state, self.h
-   C.crypto_auth_hmacsha512256_init(state, k, ffi.sizeof(k))
-   C.crypto_auth_hmacsha512256_update(state, r.bytes, ffi.sizeof(r))
-   C.crypto_auth_hmacsha512256_update(state, n2, ffi.sizeof(n2))
-   C.crypto_auth_hmacsha512256_update(state, n1, ffi.sizeof(n1))
-   C.crypto_auth_hmacsha512256_update(state, m:spi(), ffi.sizeof(spi2))
-   C.crypto_auth_hmacsha512256_update(state, m:public_key(), ffi.sizeof(p2))
-   C.crypto_auth_hmacsha512256_final(state, h2)
-   if C.sodium_memcmp(h2, m:auth_code(), ffi.sizeof(h2)) == 0 then
+   crypto.hmac_blake2s_init(state, k, ffi.sizeof(k))
+   crypto.hmac_blake2s_update(state, r.bytes, ffi.sizeof(r))
+   crypto.hmac_blake2s_update(state, n2, ffi.sizeof(n2))
+   crypto.hmac_blake2s_update(state, n1, ffi.sizeof(n1))
+   crypto.hmac_blake2s_update(state, m:spi(), ffi.sizeof(spi2))
+   crypto.hmac_blake2s_update(state, m:public_key(), ffi.sizeof(p2))
+   crypto.hmac_blake2s_final(state, h2)
+   if crypto.bytes_equal(h2, m:auth_code(), ffi.sizeof(h2)) then
       ffi.copy(spi2.bytes, m:spi(), ffi.sizeof(spi2))
       ffi.copy(p2, m:public_key(), ffi.sizeof(p2))
       return true
@@ -1021,12 +1019,12 @@ end
 function Protocol:intern_challenge_nonce (m)
    local r, k, n1 = self.r, self.k, self.n1
    local state, c = self.hmac_state, self.h
-   C.crypto_auth_hmacsha512256_init(state, k, ffi.sizeof(k))
-   C.crypto_auth_hmacsha512256_update(state, r.bytes, ffi.sizeof(r))
-   C.crypto_auth_hmacsha512256_update(state, m:nonce(), ffi.sizeof(m:nonce()))
-   C.crypto_auth_hmacsha512256_update(state, n1, ffi.sizeof(n1))
-   C.crypto_auth_hmacsha512256_final(state, c)
-   if C.sodium_memcmp(c, m:auth_code(), ffi.sizeof(c)) == 0 then
+   crypto.hmac_blake2s_init(state, k, ffi.sizeof(k))
+   crypto.hmac_blake2s_update(state, r.bytes, ffi.sizeof(r))
+   crypto.hmac_blake2s_update(state, m:nonce(), ffi.sizeof(m:nonce()))
+   crypto.hmac_blake2s_update(state, n1, ffi.sizeof(n1))
+   crypto.hmac_blake2s_final(state, c)
+   if crypto.bytes_equal(c, m:auth_code(), ffi.sizeof(c)) then
       self:intern_nonce(m)
       return true
    end
@@ -1035,11 +1033,11 @@ end
 function Protocol:send_challenge (challenge_message)
    local r, k, n1, n2 = self.r, self.k, self.n1, self.n2
    local state, c = self.hmac_state, self.h
-   C.crypto_auth_hmacsha512256_init(state, k, ffi.sizeof(k))
-   C.crypto_auth_hmacsha512256_update(state, r.bytes, ffi.sizeof(r))
-   C.crypto_auth_hmacsha512256_update(state, n1, ffi.sizeof(n1))
-   C.crypto_auth_hmacsha512256_update(state, n2, ffi.sizeof(n2))
-   C.crypto_auth_hmacsha512256_final(state, c)
+   crypto.hmac_blake2s_init(state, k, ffi.sizeof(k))
+   crypto.hmac_blake2s_update(state, r.bytes, ffi.sizeof(r))
+   crypto.hmac_blake2s_update(state, n1, ffi.sizeof(n1))
+   crypto.hmac_blake2s_update(state, n2, ffi.sizeof(n2))
+   crypto.hmac_blake2s_final(state, c)
    challenge_message:auth_code(c)
    return self:send_nonce(challenge_message)
 end
@@ -1053,16 +1051,16 @@ function Protocol:derive_ephemeral_keys ()
 end
 
 function Protocol:derive_shared_secret ()
-   return C.crypto_scalarmult_curve25519(self.q, self.s1, self.p2) == 0
+   return crypto.curve25519_scalarmult(self.q, self.s1, self.p2) == 0
 end
 
 function Protocol:derive_key_material (spi, salt_a, salt_b)
    local q, e, state = self.q, self.e, self.hash_state
-   C.crypto_generichash_blake2b_init(state, nil, 0, ffi.sizeof(e))
-   C.crypto_generichash_blake2b_update(state, q, ffi.sizeof(q))
-   C.crypto_generichash_blake2b_update(state, salt_a, ffi.sizeof(salt_a))
-   C.crypto_generichash_blake2b_update(state, salt_b, ffi.sizeof(salt_b))
-   C.crypto_generichash_blake2b_final(state, e.bytes, ffi.sizeof(e.bytes))
+   crypto.blake2s_init(state, ffi.sizeof(e))
+   crypto.blake2s_update(state, q, ffi.sizeof(q))
+   crypto.blake2s_update(state, salt_a, ffi.sizeof(salt_a))
+   crypto.blake2s_update(state, salt_b, ffi.sizeof(salt_b))
+   crypto.blake2s_final(state, e.bytes, ffi.sizeof(e.bytes))
    return { spi = lib.ntohl(spi.u32),
             key = ffi.string(e.slot.key, ffi.sizeof(e.slot.key)),
             salt = ffi.string(e.slot.salt, ffi.sizeof(e.slot.salt)) }
@@ -1088,12 +1086,12 @@ function Protocol:next_spi ()
 end
 
 function Protocol:next_nonce ()
-   C.randombytes_buf(self.n1, ffi.sizeof(self.n1))
+   crypto.random_bytes(self.n1, ffi.sizeof(self.n1))
 end
 
 function Protocol:next_dh_key ()
-   C.randombytes_buf(self.s1, ffi.sizeof(self.s1))
-   C.crypto_scalarmult_curve25519_base(self.p1, self.s1)
+   crypto.random_bytes(self.s1, ffi.sizeof(self.s1))
+   crypto.curve25519_scalarmult_base(self.p1, self.s1)
 end
 
 function Protocol:clear_external_inputs ()
@@ -1107,8 +1105,7 @@ end
 assert(Protocol.preshared_key_bytes == 32)
 assert(Protocol.public_key_bytes == 32)
 assert(Protocol.auth_code_bytes == 32)
-assert(ffi.sizeof(Protocol.key_t) >= C.crypto_generichash_blake2b_BYTES_MIN)
-assert(ffi.sizeof(Protocol.key_t) <= C.crypto_generichash_blake2b_BYTES_MAX)
+assert(ffi.sizeof(Protocol.key_t) <= crypto.blake2s_OUTBYTES)
 
 -- Transport wrapper for vita-ske that encompasses an SPI to map requests to
 -- routes, and a message type to facilitate parsing.

@@ -4,11 +4,14 @@ VITA: SIMPLE KEY EXCHANGE (vita-ske, version 2a)
  provides authentication, perfect forward secrecy, and is immune to replay
  attacks.
 
-Primitives (from libsodium 1.0.15):
+Primitives:
 
- • HMAC: crypto_auth_hmacsha512256 (key is 256‑bits, output is 256‑bits)
- • DH: crypto_scalarmult_curve25519 (keys are 256‑bits, output is 256‑bits)
- • HASH: crypto_generichash_blake2b (output is choosen to be 160‑bits)
+ • HMAC: hmac-blake2s, hmac from crypto.lua
+    (key is 256‑bits, output is 256‑bits)
+ • DH: curve25519, sandy2x
+   (keys are 256‑bits, output is 256‑bits)
+ • HASH: blake2s, official SSE implementation
+   (output is choosen to be 160‑bits) 
 
 Notational Conventions:
 
@@ -97,8 +100,8 @@ Notes:
    algorithm with 128‑bit keys as used in an IPsec ESP data plane.
 
  • Future versions of this protocol may introduce the use of a key derivation
-   function (KDF), such as libsodium’s crypto_kdf_blake2b_derive_from_key, to
-   derive additional key material from rx or tx.
+   function (KDF), such as HKDF (RFC 5869), to derive additional key material
+   from rx or tx.
 
 References:
 
@@ -108,8 +111,17 @@ References:
  • Additional discussion of the spiped protocol:
    https://github.com/Tarsnap/spiped/issues/151
 
- • The Sodium crypto library (libsodium):
-   https://download.libsodium.org/doc/
+ • HMAC: Keyed-Hashing for Message Authentication (RFC 2104):
+   https://tools.ietf.org/html/rfc2104
+
+ • BLAKE2:
+   https://blake2.net/
+
+ • Curve25519:
+   https://cr.yp.to/ecdh.html
+
+ • Sandy2x:
+   https://www.win.tue.nl/~tchou/sandy2x/
 
  • Security Architecture for the Internet Protocol:
    https://tools.ietf.org/html/rfc4301

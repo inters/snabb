@@ -7,7 +7,7 @@ RECIPE ?= Makefile.vita-test
 
 LUAJIT_CFLAGS := -include $(CURDIR)/gcc-preinclude.h -DLUAJIT_VMPROFILE
 
-all: $(LUAJIT) $(SYSCALL) $(PFLUA) luajit ljsyscall pflua ljndpi libsodium
+all: $(LUAJIT) $(SYSCALL) $(PFLUA) luajit ljsyscall pflua ljndpi blake2s curve25519sandy2x
 	cd src && $(MAKE) -f $(RECIPE)
 luajit: $(LUAJIT)
 	@(cd lib/luajit && (cd src && $(MAKE) reusevm) && $(MAKE) CFLAGS="$(LUAJIT_CFLAGS)")
@@ -25,15 +25,20 @@ ljndpi:
 	@mkdir -p src/ndpi
 	@cp -p lib/ljndpi/ndpi.lua src/
 	@cp -p lib/ljndpi/ndpi/*.lua src/ndpi/
-libsodium:
-	@(cd lib/libsodium && ./configure && $(MAKE))
+blake2s:
+	@(cd lib/blake/sse && \
+		$(CC) $(DEBUG) -Wl,-E -O2 -c -Wall -Werror blake2s.c)
+curve25519sandy2x:
+	@(cd lib/curve25519sandy2x && \
+		$(CC) $(DEBUG) -Wl,-E -O2 -c -Wall -Werror -static *.c *.S)
 
 install: all
 	install -D src/snabb ${DESTDIR}${PREFIX}/bin/snabb
 
 clean:
 	(cd lib/luajit && $(MAKE) clean)
-	(cd lib/libsodium && $(MAKE) clean || true)
+	(rm -rf lib/blake/sse/*.o)
+	(rm -rf lib/curve25519sandy2x/*.o)
 	(cd src; $(MAKE) clean)
 	(cd src; rm -rf syscall.lua syscall ndpi.lua ndpi pf.lua pf)
 
@@ -57,4 +62,4 @@ docker:
 	@echo "Usage: docker run -ti --rm snabb <program> ..."
 	@echo "or simply call 'src/snabb <program> ...'"
 .SERIAL: all
-.PHONY: luajit ljsyscall pflua ljndpi libsodium
+.PHONY: luajit ljsyscall pflua ljndpi blake2s curve25519sandy2x
