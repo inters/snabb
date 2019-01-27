@@ -696,7 +696,7 @@ function KeyManager:commit_sa_db ()
    )
 end
 
--- Vita: simple key exchange (vita-ske, version 2a). See README.exchange
+-- Vita: simple key exchange (vita-ske, version 2b). See README.exchange
 
 Message = subClass(header)
 function Message:new_from_mem (mem, size)
@@ -1114,7 +1114,7 @@ assert(ffi.sizeof(Protocol.key_t) <= crypto.blake2s_OUTBYTES)
 -- requests through protocol filters.
 
 Transport = {
-   message_type = { nonce = 4, challenge = 5, key = 6, nonce_key = 7 },
+   message_type = { nonce = 4, challenge = 8, key = 9, nonce_key = 10 },
    header = subClass(header)
 }
 Transport.header:init({

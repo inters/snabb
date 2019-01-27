@@ -1,4 +1,4 @@
-VITA: SIMPLE KEY EXCHANGE (vita-ske, version 2a)
+VITA: SIMPLE KEY EXCHANGE (vita-ske, version 2b)
 
  A simple key negotiation protocol based on pre-shared symmetric keys that
  provides authentication, perfect forward secrecy, and is immune to replay
