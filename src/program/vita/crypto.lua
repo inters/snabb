@@ -106,8 +106,19 @@ ffi.cdef[[
 curve25519_BYTES = C.CURVE25519_BYTES
 curve25519_SCALARBYTES = C.CURVE25519_SCALARBYTES
 
-curve25519_scalarmult_base = C.crypto_scalarmult_base_curve25519
-curve25519_scalarmult = C.crypto_scalarmult_curve25519
+function curve25519_scalarmult_base (...)
+   C.crypto_scalarmult_base_curve25519(...)
+end
+
+function curve25519_scalarmult (q, ...)
+   C.crypto_scalarmult_curve25519(q, ...)
+   -- Return false if q is the all-zero value
+   local d = 0
+   for i = 0, C.CURVE25519_BYTES-1 do
+      d = bit.bor(d, q[i])
+   end
+   return d > 0
+end
 
 function selftest ()
    local lib = require("core.lib")
@@ -131,8 +142,11 @@ function selftest ()
    curve25519_scalarmult_base(p2, s2)
    assert(not bytes_equal(p1, p2, curve25519_BYTES), "Broken bytes_equal?")
    local q1 = ffi.new("uint8_t[?]", curve25519_BYTES)
-   curve25519_scalarmult(q1, s1, p2)
+   assert(curve25519_scalarmult(q1, s1, p2))
    local q2 = ffi.new("uint8_t[?]", curve25519_BYTES)
-   curve25519_scalarmult(q2, s2, p1)
+   assert(curve25519_scalarmult(q2, s2, p1))
    assert(bytes_equal(q1, q2, curve25519_BYTES), "DH failed")
+   local pzero = ffi.new("uint8_t[?]", curve25519_BYTES)
+   local qzero = ffi.new("uint8_t[?]", curve25519_BYTES)
+   assert(not curve25519_scalarmult(qzero, s1, pzero), "DH zero not signaled")
 end
