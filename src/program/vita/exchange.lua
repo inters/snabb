@@ -1051,7 +1051,7 @@ function Protocol:derive_ephemeral_keys ()
 end
 
 function Protocol:derive_shared_secret ()
-   return crypto.curve25519_scalarmult(self.q, self.s1, self.p2) == 0
+   return crypto.curve25519_scalarmult(self.q, self.s1, self.p2)
 end
 
 function Protocol:derive_key_material (spi, salt_a, salt_b)
