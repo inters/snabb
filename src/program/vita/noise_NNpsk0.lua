@@ -238,18 +238,18 @@ end
 
 function HandshakeState:commit ()
    self.ss:copy(self.rollback_ss)
-   return true
 end
 
 function HandshakeState:revert ()
    self.rollback_ss:copy(self.ss)
-   return false
 end
 
 function HandshakeState:init (prologue, len)
-   local ss = self.ss
+   local ss, e, psk = self.ss, self.e, self.psk
    ss:mixHash(prologue, len)
+   ss:mixKeyAndHash(psk)
    self:commit()
+   self:generateKeypair(e)
 end
 
 function HandshakeState:clear ()
@@ -259,21 +259,17 @@ function HandshakeState:clear ()
    fill(self.q, sizeof(self.q))
 end
 
-function HandshakeState:generateKeypair ()
-   local e = self.e
+function HandshakeState:generateKeypair (e)
    crypto.random_bytes(e.sk, sizeof(e.sk))
    crypto.curve25519_scalarmult_base(e.pk, e.sk)
-   return e
 end
 
-function HandshakeState:dh (s, p)
-   crypto.curve25519_scalarmult(self.q, s, p)
-   return self.q
+function HandshakeState:dh (q, s, p)
+   return crypto.curve25519_scalarmult(q, s, p)
 end
 
 function HandshakeState:writeMessageA (msg)
-   local ss, e, psk = self.ss, self:generateKeypair(), self.psk
-   ss:mixKeyAndHash(psk)
+   local ss, e = self.ss, self.e
    ss:mixHash(e.pk)
    ss:mixKey(e.pk)
    copy(msg.ne, e.pk, sizeof(msg.ne))
@@ -282,34 +278,50 @@ function HandshakeState:writeMessageA (msg)
 end
 
 function HandshakeState:readMessageA (msg)
-   local ss, re, psk = self.ss, self.re, self.psk
-   ss:mixKeyAndHash(psk)
+   local ss, e, re, q = self.ss, self.e, self.re, self.q
    copy(re, msg.ne, sizeof(re))
    ss:mixHash(re)
    ss:mixKey(re)
-   return ss:decryptAndHash(msg.payload, msg.payload, sizeof(msg.payload))
-       or self:revert()
+   local valid, dh_ok
+   if ss:decryptAndHash(msg.payload, msg.payload, sizeof(msg.payload)) then
+      valid = true
+      if self:dh(q, e.sk, re) then
+         dh_ok = true
+         ss:mixHash(e.pk)
+         ss:mixKey(e.pk)
+         ss:mixKey(q)
+         self:commit()
+         return valid, dh_ok
+      end
+   end
+   self:revert()
+   return valid, dh_ok
 end
 
 function HandshakeState:writeMessageB (msg, cs1, cs2)
-   local ss, e, re, psk = self.ss, self:generateKeypair(), self.re
-   ss:mixHash(e.pk)
-   ss:mixKey(e.pk)
-   ss:mixKey(self:dh(e.sk, re))
+   local ss, e  = self.ss, self.e
    copy(msg.ne, e.pk, sizeof(msg.ne))
    ss:encryptAndHash(msg.payload, msg.payload, sizeof(msg.payload))
    self.ss:split(self.initiator, cs1, cs2)
 end
 
 function HandshakeState:readMessageB (msg, cs1, cs2)
-   local ss, e, re = self.ss, self.e, self.re
+   local ss, e, re, q = self.ss, self.e, self.re, self.q
    copy(re, msg.ne, sizeof(re))
    ss:mixHash(re)
    ss:mixKey(re)
-   ss:mixKey(self:dh(e.sk, re))
-   return ss:decryptAndHash(msg.payload, msg.payload, sizeof(msg.payload))
-      and ss:split(self.initiator, cs1, cs2)
-       or self:revert()
+   local valid, dh_ok
+   if self:dh(q, e.sk, re) then
+      dh_ok = true
+      ss:mixKey(q)
+      if ss:decryptAndHash(msg.payload, msg.payload, sizeof(msg.payload)) then
+         valid = true
+         ss:split(self.initiator, cs1, cs2)
+         return valid, dh_ok
+      end
+   end
+   self:revert()
+   return valid, dh_ok
 end
 
 function selftest ()
