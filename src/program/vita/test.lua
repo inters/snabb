@@ -124,7 +124,7 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec, use_v6)
    end
 
    local function configure_vita_softbench (conf)
-      local c, private, public = vita.configure_vita_queue(conf, 1)
+      local c, private, public = vita.configure_vita_queue(conf, 1, 'free')
 
       config.app(c, "bridge", basic_apps.Join)
       config.link(c, "bridge.output -> "..private.input)

@@ -310,7 +310,7 @@ function vita_workers (conf)
    return workers
 end
 
-function configure_vita_queue (conf, queue)
+function configure_vita_queue (conf, queue, free_links)
    conf = parse_conf(conf, queue)
 
    local c = config.new()
@@ -323,10 +323,7 @@ function configure_vita_queue (conf, queue)
 
    local function link (from, to) config.link(c, from.." -> "..to) end
 
-   if conf.data_plane then
-      config.app(c, "Null", basic_apps.Sink)
-      link(public_router.protocol_input, "Null.input")
-   else
+   if not conf.data_plane then
       link(public_router.protocol_input, key_manager.input)
       link(key_manager.output, public_router.protocol_output)
    end
@@ -334,10 +331,18 @@ function configure_vita_queue (conf, queue)
    if interfaces.private then
       link(interfaces.private.rx, private_router.input)
       link(private_router.output, interfaces.private.tx)
+   elseif not free_links then
+      config.app(c, "PrivateSink", basic_apps.Sink)
+      link("PrivateSink.rx", private_router.input)
+      link(private_router.output, "PrivateSink.tx")
    end
    if interfaces.public then
       link(interfaces.public.rx, public_router.input)
       link(public_router.output, interfaces.public.tx)
+   elseif not free_links then
+      config.app(c, "PublicSink", basic_apps.Sink)
+      link("PublicSink.rx", public_router.input)
+      link(public_router.output, "PublicSink.tx")
    end
 
    for _, sa in pairs(conf.outbound_sa) do
@@ -350,7 +355,7 @@ function configure_vita_queue (conf, queue)
       link(inbound_sa.output[id], private_router.inbound[id])
    end
 
-   return c, private_router, public_router
+   return c, free_links and private_router, free_links and public_router
 end
 
 function configure_interfaces (conf, append)
