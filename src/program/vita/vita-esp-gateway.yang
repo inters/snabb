@@ -8,43 +8,68 @@ module vita-esp-gateway {
   import ietf-inet-types { prefix inet; }
 
   // APPLICATION MODEL
-  grouping interface4 {
+  grouping interface {
     leaf pci { type pci-address; mandatory true; }
-    leaf ip4 { type inet:ipv4-address-no-zone; }
     leaf mac { type yang:mac-address; }
-    leaf nexthop-ip4 { type inet:ipv4-address-no-zone; }
     leaf nexthop-mac { type yang:mac-address; }
+  }
+  grouping interface4 {
+    leaf ip4 { type inet:ipv4-address-no-zone; }
+    leaf nexthop-ip4 { type inet:ipv4-address-no-zone; }
   }
   grouping interface6 {
-    leaf pci { type pci-address; mandatory true; }
     leaf ip6 { type inet:ipv6-address-no-zone; }
-    leaf mac { type yang:mac-address; }
     leaf nexthop-ip6 { type inet:ipv6-address-no-zone; }
-    leaf nexthop-mac { type yang:mac-address; }
   }
-
   grouping route {
-     leaf id { type id; mandatory true; }
-     leaf spi { type spi; mandatory true; }
-     leaf preshared-key { type key32; mandatory true; }
+    leaf id { type id; mandatory true; }
+    leaf spi { type spi; mandatory true; }
+    leaf preshared-key { type key32; mandatory true; }
+  }
+  grouping route4 {
+    leaf net-cidr4 { type inet:ipv4-prefix; mandatory true; }
+  }
+  grouping gateway4 {
+    leaf ip4 { type inet:ipv4-address-no-zone; }
+    leaf queue { type queue; default 1;}
+  }
+  grouping gateway6 {
+    leaf ip6 { type inet:ipv6-address-no-zone; }
+    leaf queue { type queue; default 1;}
   }
 
-  container private-interface4 { uses interface4; }
-  choice public-router {
+  container private-interface4 {
+    uses interface; uses interface4;
+  }
+  choice router {
     case over-v4 {
-      container public-interface4 { uses interface4; }
+      list public-interface4 {
+        key ip4; unique queue;
+        uses interface; uses interface4;
+        leaf queue { type queue; default 1; }
+      }
       list route4 {
-        key id; unique "net-cidr4"; unique "preshared-key"; unique "spi"; uses route;
-        leaf net-cidr4 { type inet:ipv4-prefix; mandatory true; }
-        leaf gw-ip4 { type inet:ipv4-address-no-zone; }
+        key id; unique spi; unique preshared-key; unique net-cidr4;
+        uses route; uses route4;
+        list gateway {
+          key ip4; unique queue; min-elements 1;
+          uses gateway4;
+        }
       }
     }
     case over-v6 {
-      container public-interface6 { uses interface6; }
+      list public-interface6 {
+        key ip6; unique queue;
+        uses interface; uses interface6;
+        leaf queue { type queue; default 1; }
+      }
       list route46 {
-        key id; unique "net-cidr4"; unique "preshared-key"; unique "spi"; uses route;
-        leaf net-cidr4 { type inet:ipv4-prefix; mandatory true; }
-        leaf gw-ip6 { type inet:ipv6-address-no-zone; }
+        key id; unique spi; unique preshared-key; unique net-cidr4;
+        uses route; uses route4;
+        list gateway {
+          key ip6; unique queue; min-elements 1;
+          uses gateway6;
+        }
       }
     }
   }
@@ -64,9 +89,13 @@ module vita-esp-gateway {
   }
 
   // Active outbound SAs (at most one per route) and inbound SAs (possibly
-  // multiple per route.) 
-  list outbound-sa { key "spi"; unique "route"; uses sa; }
-  list inbound-sa { key "spi"; uses sa; }
+  // multiple per route) per queue.
+  list sa-database {
+    key queue;
+    leaf queue { type queue; }
+    list outbound-sa { key "spi"; unique "route"; uses sa; }
+    list inbound-sa { key "spi"; uses sa; }
+  }
 
   // If true, disables KeyManager (route.spi, route.preshared-key,
   // negotiation-ttl, and sa-ttl are ignored.)
@@ -700,4 +729,5 @@ module vita-esp-gateway {
   typedef key16 { type string { pattern '([0-9a-fA-F]{2}\s*){16}'; } }
   typedef key4  { type string { pattern '([0-9a-fA-F]{2}\s*){4}'; } }
   typedef time-to-live { type uint32 { range "1..max"; } }
+  typedef queue { type uint16 { range "1..max"; } }
 }

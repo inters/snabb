@@ -29,6 +29,7 @@ local ffi = require("ffi")
 local regenerate_pcaps = main.parameters[1]
 
 local cfg = {
+   data_plane = true,
    private_interface4 = {
       pci = "00:00.0",
       ip4 = "192.168.10.1",
@@ -36,47 +37,48 @@ local cfg = {
       mac = "52:54:00:00:00:00"
    },
    public_interface6 = {
-      pci = "00:00.0",
-      ip6 = "203:0:113::1",
-      nexthop_ip6 = "203:0:0::1",
-      mac = "52:54:00:00:00:FF",
-      nexthop_mac = "52:54:00:00:00:FE"
+      ["203:0:113::1"] = {
+         pci = "00:00.0",
+         nexthop_ip6 = "203:0:0::1",
+         mac = "52:54:00:00:00:FF",
+         nexthop_mac = "52:54:00:00:00:FE",
+         queue = 1
+      }
    },
    mtu = 500,
    route46 = {
       loopback = {
          net_cidr4 = "192.168.10.0/24",
-         gw_ip6 = "203:0:113::1",
+         gateway = { ["203:0:113::1"] = {queue=1} },
          preshared_key = string.rep("00", 32),
          spi = 1001
       }
    },
-   outbound_sa = {
-      [1001] = {
-         route = "loopback",
-         aead = "aes-gcm-16-icv",
-         key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
-         salt = "00 00 00 00"
-      }
-   },
-   inbound_sa =  {
-      [1001] = {
-         route = "loopback",
-         aead = "aes-gcm-16-icv",
-         key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
-         salt = "00 00 00 00",
-         auditing = true
+   sa_database = {
+      [1] = {
+         outbound_sa = {
+            [1001] = {
+               route = "loopback",
+               aead = "aes-gcm-16-icv",
+               key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+               salt = "00 00 00 00"
+            }
+         },
+         inbound_sa =  {
+            [1001] = {
+               route = "loopback",
+               aead = "aes-gcm-16-icv",
+               key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+               salt = "00 00 00 00",
+               auditing = true
+            }
+         }
       }
    }
 }
 
-local c = config.new()
-
--- Configure Vita app network (all-in-one process.)
-local _, private = vita.configure_private_router(cfg, c)
-local _, public = vita.configure_public_router(cfg, c)
-vita.configure_esp(cfg, c)
-vita.configure_dsp(cfg, c)
+-- Configure Vita queue (without KeyManager.)
+local c, private, public = vita.configure_vita_queue(cfg, 1, 'free')
 
 -- Add ARP resolvers.
 config.app(c, "private_arp", ARP, {
@@ -129,7 +131,7 @@ end
 engine.configure(c)
 
 -- Hack to avoid ESP seq# reuse because of packets from public_in.pcap
-engine.app_table.ESP_loopback.sa.seq.no = 100
+engine.app_table.OutboundSA_loopback.sa.seq.no = 100
 
 -- Run engine until its idle (all packets have been processed).
 local last_frees = counter.read(engine.frees)
@@ -163,12 +165,12 @@ else
    if #engine.app_table.match_public:errors() > 0 then
       engine.app_table.match_public:report()
       main.exit(1)
-      end
+   end
    for app, counters in pairs{
       PublicRouter = {
          route_errors = 1, -- Bogus SPI
       },
-      DSP_loopback_1001 = { -- Bogus SeqNo, Bogus NextHeader
+      InboundSA_loopback_1001 = { -- Bogus SeqNo, Bogus NextHeader
          rxerrors = 2,
          protocol_errors = 1,
          decrypt_errors = 1
