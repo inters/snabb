@@ -76,7 +76,7 @@ local cfg = {
 }
 
 -- Configure Vita queue (without KeyManager.)
-local c, private, public = vita.configure_vita_queue(cfg, 1)
+local c, private, public = vita.configure_vita_queue(cfg, 1, 'free')
 
 -- Add ARP resolvers.
 config.app(c, "private_arp", ARP, {

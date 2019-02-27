@@ -12,7 +12,7 @@ vita.init_sa_db()
 
 local function test_conf (conf)
    conf = lib.deepcopy(conf) -- ensure purity
-   local c, private, public = vita.configure_vita_queue(conf, 1)
+   local c, private, public = vita.configure_vita_queue(conf, 1, 'free')
    config.link(c, private.output.."->"..private.input)
    config.link(c, public.output.."->"..public.input)
    engine.configure(c)
