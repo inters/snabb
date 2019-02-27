@@ -142,6 +142,7 @@ function PublicDispatch:forward6 ()
 end
 
 function PublicDispatch:protocol ()
+   if not self.output.protocol then self:reject_protocol(); return end
    local p = packet.shiftleft(self.p_box[0], ethernet:sizeof() + ipv4:sizeof())
    link.transmit(self.output.protocol, p)
 end
