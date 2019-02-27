@@ -7,6 +7,7 @@ local icmp = require("program.vita.icmp")
 local counter = require("core.counter")
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
+local ipv6 = require("lib.protocol.ipv6")
 local pf_match = require("pf.match")
 local ffi = require("ffi")
 
@@ -86,7 +87,8 @@ end
 PublicDispatch = {
    name = "PublicDispatch",
    config = {
-      node_ip4 = {required=true}
+      node_ip4 = {},
+      node_ip6 = {}
    },
    shm = {
       rxerrors = {counter},
@@ -98,8 +100,10 @@ PublicDispatch = {
 
 function PublicDispatch:new (conf)
    local o = {
-      p_box = ffi.new("struct packet *[1]"),
-      dispatch = pf_match.compile(([[match {
+      p_box = ffi.new("struct packet *[1]")
+   }
+   if conf.node_ip4 then
+      o.dispatch = pf_match.compile(([[match {
          ip[6:2] & 0x3FFF != 0 => reject_fragment
          ip proto esp => forward4
          ip proto %d => protocol
@@ -109,7 +113,17 @@ function PublicDispatch:new (conf)
          arp => arp
          otherwise => reject_ethertype
       }]]):format(exchange.PROTOCOL, conf.node_ip4, conf.node_ip4))
-   }
+   elseif conf.node_ip6 then
+      o.dispatch = pf_match.compile(([[match {
+         ip6 proto esp => forward6
+         ip6 proto %d => protocol6
+         ip6 and icmp6 and (ip6[40] = 135 or ip6[40] = 136) => nd
+         ip6 dst host %s and icmp6 => icmp6
+         ip6 dst host %s => protocol6_unreachable
+         ip6 => reject_protocol
+         otherwise => reject_ethertype
+      }]]):format(exchange.PROTOCOL, conf.node_ip6, conf.node_ip6, conf.node_ip6))
+   else error("Need either node_ip4 or node_ip6.") end
    return setmetatable(o, {__index=PublicDispatch})
 end
 
@@ -120,8 +134,21 @@ function PublicDispatch:forward4 ()
    link.transmit(self.output.forward4, p)
 end
 
+function PublicDispatch:forward6 ()
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof() + ipv6:sizeof())
+   -- NB: Ignore potential differences between IP datagram and Ethernet size
+   -- since the minimum ESP packet exceeds 60 bytes in payload.
+   link.transmit(self.output.forward6, p)
+end
+
 function PublicDispatch:protocol ()
+   if not self.output.protocol then self:reject_protocol(); return end
    local p = packet.shiftleft(self.p_box[0], ethernet:sizeof() + ipv4:sizeof())
+   link.transmit(self.output.protocol, p)
+end
+
+function PublicDispatch:protocol6 ()
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof() + ipv6:sizeof())
    link.transmit(self.output.protocol, p)
 end
 
@@ -130,14 +157,28 @@ function PublicDispatch:icmp4 ()
    link.transmit(self.output.icmp4, p)
 end
 
+function PublicDispatch:icmp6 ()
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+   link.transmit(self.output.icmp6, p)
+end
+
 function PublicDispatch:arp ()
    local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
    link.transmit(self.output.arp, p)
 end
 
+function PublicDispatch:nd ()
+   link.transmit(self.output.nd, self.p_box[0])
+end
+
 function PublicDispatch:protocol4_unreachable ()
    local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
    link.transmit(self.output.protocol4_unreachable, p)
+end
+
+function PublicDispatch:protocol6_unreachable ()
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+   link.transmit(self.output.protocol6_unreachable, p)
 end
 
 function PublicDispatch:reject_fragment ()
