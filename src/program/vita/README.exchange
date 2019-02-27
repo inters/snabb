@@ -1,4 +1,4 @@
-VITA: SIMPLE KEY EXCHANGE (vita-ske, version 1i)
+VITA: SIMPLE KEY EXCHANGE (vita-ske, version 2a)
 
  A simple key negotiation protocol based on pre-shared symmetric keys that
  provides authentication, perfect forward secrecy, and is immune to replay
@@ -24,38 +24,57 @@ Notational Conventions:
 Description:
 
  Let k be a pre-shared symmetric key. Let r be a “Security Parameter Index”
- (SPI). Let n1 and n2 be random 256‑bit nonces, where n1 is chosen by us.
+ (SPI).
+
+ Two parties participate in the protocol: an initiator and a responder.
+
+ ----
+
+ The initiator behaves as follows: Let n1 and n2 be random 256‑bit nonces,
+ where n1 is chosen by us. Let s1 be a random ephemeral key and p1 its
+ corresponding public key chosen by us, and p2 be a public key chosen by the
+ other party. Let spi1 and spi2 be child SPIs, where spi1 is choosen by us.
 
   ← n1
-  → n2
+  → n2 ‖ c
 
- Let (p1, s1) and (p2, s2) be random, ephemeral, asymmetric key pairs, where
- (p1, s1) is choosen by us. Let spi1 and spi2 be child SPIs, where spi1 is
- choosen by us. Let h1 = HMAC(k, r ‖ n1 ‖ n2 ‖ spi1 ‖ p1).
+ Ensure c = HMAC(k, r ‖ n1 ‖ n2). Let h1 = HMAC(k, r ‖ n1 ‖ n2 ‖ spi1 ‖ p1).
 
-  ← spi1 ‖ p1 ‖ h1
+  ← n1 ‖ spi1 ‖ p1 ‖ h1
   → spi2 ‖ p2 ‖ h2
+
+ Ensure that h2 = HMAC(k, r ‖ n2 ‖ n1 ‖ spi2 ‖ p2).
+
+ Let q = DH(s1, p2), and ensure that p2 is a valid argument. Let
+ rx = HASH(q ‖ p1 ‖ p2) and tx = HASH(q ‖ p2 ‖ p1) be key material. Assign
+ (spi1, rx) to the inbound “Security Association” (SA), and (spi2, tx) to the
+ outbound SA.
+
+ Discard s1, n1, n2, p1, and p2.
+
+ ----
+
+ The responder behaves as follows: Let nc, n1 and n2 be random 256‑bit nonces,
+ where n1 is chosen by us. Let s1 be a random ephemeral key and p1 its
+ corresponding public key chosen by us, and p2 be a public key chosen by the
+ other party. Let spi1 and spi2 be child SPIs, where spi1 is choosen by us.
+
+  ← nc
+
+ Let c = HMAC(k, r ‖ nc ‖ n1).
+
+  → n1 ‖ c
+  ← n2 ‖ spi2 ‖ p2 ‖ h2
 
  Ensure that h2 = HMAC(k, r ‖ n2 ‖ n1 ‖ spi2 ‖ p2). Let q = DH(s1, p2), and
  ensure that p2 is a valid argument. Let rx = HASH(q ‖ p1 ‖ p2) and
  tx = HASH(q ‖ p2 ‖ p1) be key material. Assign (spi1, rx) to the inbound
  “Security Association” (SA), and (spi2, tx) to the outbound SA.
+ Let h1 = HMAC(k, r ‖ n1 ‖ n2 ‖ spi1 ‖ p1).
 
- The description above illustrates the perspective of an active party adhering
- to the protocol, i.e. the exchange is initiated by us. An opposite, passive
- party adhering to the protocol, i.e. one that is merely responding to a key
- exchange initiated by an active party, must ensure that the tuple
- (spi2, p2, h2) was received and authenticated before computing and sending its
- response tuple (spi1, p1, h1). For a passive party the order of messages
- during the exchange is reversed:
+  → spi1 ‖ p1 ‖ h1
 
-  → n2
-  ← n1
-  → spi2 ‖ p2 ‖ h2        (ensure h2 is verified before we reply)
-  ← spi1 ‖ p1 ‖ h1
-
- Note that there might be no passive party in an exchange if both parties have
- initiated the exchange before receiving an initial nonce message.
+ Discard s1, n1, n2, p1, and p2.
 
 Security Proof:
 
@@ -68,9 +87,9 @@ Security Proof:
  q = DH(s1, p2) or q = DH(s2, p1), and subsequently derive rx or tx, and thus
  perfect forward secrecy is provided.
 
- A party passively adhering to the protocol will not produce a tuple
- (spi, p1, h1) unless it has previously authenticated its counterpart tuple
- (spi, p2, h2), and thus can not be used as an oracle.
+ A party that adheres to the protocol will not produce a tuple (spi1, p1, h1)
+ unless it has previously authenticated either the tuple (n2, spi2, p2, h2), or
+ the tuple (n2, c), and thus can not be used as an oracle.
 
 Notes:
 

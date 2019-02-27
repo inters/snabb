@@ -1,0 +1,24 @@
+digraph VitaAKE {
+	subgraph responder {
+		responder [style=bold]
+	        offer_challenge
+	       	offer_key
+	}
+        responder -> offer_challenge [label="→nc "]
+        offer_challenge -> responder [label="←n1‖c "]
+	responder -> offer_key [label="→n2‖spi2‖p2‖h2 "]
+	offer_key -> responder [label="←spi1‖p1‖h1 "]
+
+	subgraph initiator {
+		initiator [style=bold]
+		accept_challenge [style=filled]
+		offer_nonce_key
+		accept_key [style=filled]
+	}
+	initiator -> accept_challenge [label="←n1 "]
+	accept_challenge -> offer_nonce_key [label="→n2‖c "]
+	accept_challenge-> initiator [label="ttl " style=dashed]
+	offer_nonce_key -> accept_key [label="←n1‖spi1‖p1‖h1 "]
+	accept_key -> initiator [label="→spi2‖p2‖h2 "]
+	accept_key -> initiator [label="ttl " style=dashed]
+}
