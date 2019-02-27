@@ -1,0 +1,14 @@
+#!snabb snsh
+
+-- Use of this source code is governed by the GNU AGPL license; see COPYING.
+
+local vita_test = require("program.vita.test")
+
+-- IPv6 version of test.snabb
+
+local pktsize = tonumber(main.parameters[1]) or main.parameters[1]
+local npackets = tonumber(main.parameters[2]) or 10e6
+local nroutes = tonumber(main.parameters[3])
+local cpuspec = main.parameters[4]
+
+vita_test.run_softbench(pktsize, npackets, nroutes, cpuspec, 'IPv6')

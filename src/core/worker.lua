@@ -46,10 +46,13 @@ function start (name, luacode)
       shm.alias("group", "/"..S.getppid().."/group")
       -- Save the code we want to run in the environment.
       S.setenv("SNABB_PROGRAM_LUACODE", luacode, true)
+      -- Save this worker's qualified name in the environment.
+      local parent = engine.program_name or S.getppid()
+      S.setenv("SNABB_WORKER_NAME", parent.."."..name, true)
       -- Restart the process with execve().
       -- /proc/$$/exe is a link to the same Snabb executable that we are running
       local filename = ("/proc/%d/exe"):format(S.getpid())
-      local argv = { ("[snabb worker '%s' for %d]"):format(name, S.getppid()) }
+      local argv = { ("[snabb worker '%s' for %s]"):format(name, parent) }
       lib.execv(filename, argv)
    else
       vmprofile.start() -- re-enable profiling
