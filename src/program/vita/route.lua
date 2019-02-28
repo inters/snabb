@@ -39,7 +39,7 @@ function PrivateRouter:new (conf)
       assert(ffi.cast("uint16_t", index) == index, "index overflow")
       assert(route.net_cidr4, "Missing net_cidr4")
       local prefix, length = ipv4:pton_cidr(route.net_cidr4)
-      o.routing_table4:add(ffi.cast("uint32_t *", prefix)[0], length, index)
+      o.routing_table4:add(prefix, length, index)
       o.ports[index] = id
    end
    o.routing_table4:build()
@@ -53,8 +53,7 @@ function PrivateRouter:link ()
 end
 
 function PrivateRouter:find_route4 (dst)
-   local address = ffi.cast("uint32_t *", dst)[0]
-   return self.routes[self.routing_table4:lookup64(address)]
+   return self.routes[self.routing_table4:lookup32(dst)]
 end
 
 function PrivateRouter:route (p)
