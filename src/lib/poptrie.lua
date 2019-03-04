@@ -60,13 +60,9 @@ function new (init)
          self.directmap = array(Poptrie.base_t, 2^self.s)
       end
    end
-   for _, keysize in ipairs{ 32, 64, 128 } do
-      self["asm_lookup"..keysize] = poptrie_lookup.generate(self, keysize)
-      self["lookup"..keysize] = function (self, key)
-         local lookup = self["asm_lookup"..keysize]
-         return lookup(self.leaves, self.nodes, key, self.directmap)
-      end
-   end
+   self.asm_lookup32 = poptrie_lookup.generate(self, 32)
+   self.asm_lookup64 = poptrie_lookup.generate(self, 64)
+   self.asm_lookup128 = poptrie_lookup.generate(self, 128)
    return self
 end
 
@@ -87,8 +83,9 @@ end
 -- Extract bits at offset
 -- key=uint8_t[?]
 function extract (key, offset, length)
-   assert(length <= 32); assert(offset < 128)
-   local byte_offset = math.min(math.floor(offset/8), 12)
+   assert(offset >= 0 and length > 0 and length <= 32)
+   assert(offset <= ffi.sizeof(key) * 8)
+   local byte_offset = math.min(math.floor(offset / 8), ffi.sizeof(key) - 4)
    local bit_offset = offset - byte_offset*8
    local dword = ffi.cast("uint32_t*", key + byte_offset)[0]
    return band(rshift(dword, bit_offset), lshift(1, length) - 1)
@@ -326,6 +323,16 @@ function Poptrie:lookup (key)
    end
    if debug then print(base + bc - 1) end
    return L[base + bc - 1]
+end
+
+function Poptrie:lookup32 (key)
+   return self.asm_lookup32(self.leaves, self.nodes, key, self.directmap)
+end
+function Poptrie:lookup64 (key)
+   return self.asm_lookup64(self.leaves, self.nodes, key, self.directmap)
+end
+function Poptrie:lookup64 (key)
+   return self.asm_lookup64(self.leaves, self.nodes, key, self.directmap)
 end
 
 function Poptrie:fib_info ()
