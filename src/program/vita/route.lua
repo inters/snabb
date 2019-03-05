@@ -7,7 +7,6 @@ local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local esp = require("lib.protocol.esp")
 local lpm = require("lib.lpm.lpm4_248").LPM4_248
-local ctable = require("lib.ctable")
 local ffi = require("ffi")
 
 
@@ -110,10 +109,7 @@ PublicRouter = {
 
 function PublicRouter:new (conf)
    local o = {
-      routing_table4 = ctable.new{
-         key_type = ffi.typeof("uint32_t"),
-         value_type = ffi.typeof("uint32_t")
-      },
+      routing_table4 = ffi.new("uint32_t[?]", 2^16),
       esp = esp:new({})
    }
    self.build_fib(o, conf)
@@ -128,18 +124,13 @@ end
 function PublicRouter:build_fib (conf)
    self.ports = {}
    self.routes = {}
-   -- Update FIB entries for SAs
+   ffi.fill(self.routing_table4, ffi.sizeof(self.routing_table4), 0)
    for spi, sa in pairs(conf.sa) do
       local index = #self.ports+1
+      assert(spi < 2^16, "SPI overflow")
       assert(ffi.cast("uint32_t", index) == index, "index overflow")
-      self.routing_table4:add(spi, index, 'update')
+      self.routing_table4[spi] = index
       self.ports[index] = sa.route.."_"..spi
-   end
-   -- Remove obsolete FIB entries
-   for entry in self.routing_table4:iterate() do
-      if not conf.sa[tonumber(entry.key)] then
-         self.routing_table4:remove_ptr(entry)
-      end
    end
 end
 
@@ -150,8 +141,7 @@ function PublicRouter:link ()
 end
 
 function PublicRouter:find_route4 (spi)
-   local entry = self.routing_table4:lookup_ptr(spi)
-   return entry and self.routes[entry.value]
+   return self.routes[self.routing_table4[spi]]
 end
 
 function PublicRouter:push ()

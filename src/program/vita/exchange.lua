@@ -1106,7 +1106,7 @@ end
 
 function Protocol:next_spi ()
    self.spi1.u32 = lib.htonl(Protocol.spi_counter + 256)
-   Protocol.spi_counter = (Protocol.spi_counter + 1) % (2^32 - 1 - 256)
+   Protocol.spi_counter = (Protocol.spi_counter + 1) % (2^16 - 1 - 256)
 end
 
 function Protocol:next_nonce ()
