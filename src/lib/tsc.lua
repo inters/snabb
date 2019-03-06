@@ -27,6 +27,16 @@ rdtsc = require('dynasm').loadstring [[
    return ffi.cast('uint64_t (*)()', rdtsc_code)
 ]]()
 
+local function rdtsc_calibrate ()
+   local start_ns = C.get_time_ns()
+   local start_ticks = rdtsc()
+   for _ = 1, calibration_interval do end
+   local end_ticks = rdtsc()
+   local end_ns = C.get_time_ns()
+   return tonumber(end_ticks - start_ticks)/tonumber(end_ns - start_ns)
+      * 1000000000 + 0ULL
+end
+
 local cpuinfo = lib.readfile("/proc/cpuinfo", "*a")
 assert(cpuinfo, "failed to read /proc/cpuinfo for tsc check")
 local have_usable_rdtsc = (cpuinfo:match("constant_tsc") and
@@ -35,21 +45,11 @@ local have_usable_rdtsc = (cpuinfo:match("constant_tsc") and
 local time_sources = {
    rdtsc = {
       time_fn = rdtsc,
-      calibrate_fn = function ()
-         local start_ns = C.get_time_ns()
-         local start_ticks = rdtsc()
-         for _ = 1, calibration_interval do end
-         local end_ticks = rdtsc()
-         local end_ns = C.get_time_ns()
-         return tonumber(end_ticks - start_ticks)/tonumber(end_ns - start_ns)
-            * 1000000000 + 0ULL
-      end
+      tps = have_usable_rdtsc and rdtsc_calibrate()
    },
    system = {
       time_fn = C.get_time_ns,
-      calibrate_fn = function ()
-         return 1000000000ULL
-      end
+      tps = 1000000000ULL
    }
 }
 
@@ -69,7 +69,7 @@ function new (arg)
                          "tsc: unknown time source '" .. o._source .."'")
    o._time_fn = source.time_fn
    -- Ticks per second (uint64)
-   o._tps = source.calibrate_fn()
+   o._tps = source.tps
    -- Nanoseconds per tick (Lua number)
    o._nspt = 1/tonumber(o._tps) * 1000000000
 
