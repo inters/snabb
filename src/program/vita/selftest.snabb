@@ -124,10 +124,10 @@ else
               "program/vita/selftest-private-out.pcap")
    config.app(c, "public_pcap_out", pcap.PcapReader,
               "program/vita/selftest-public-out.pcap")
-   config.app(c, "match_private", match.Match, {})
+   config.app(c, "match_private", match.Match, {fuzzy=true})
    config.link(c, "private_pcap_out.output -> match_private.comparator")
    config.link(c, "private_arp.north -> match_private.rx")
-   config.app(c, "match_public", match.Match, {})
+   config.app(c, "match_public", match.Match, {fuzzy=true})
    config.link(c, "public_pcap_out.output -> match_public.comparator")
    config.link(c, "public_out.output -> match_public.rx")
 end
