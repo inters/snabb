@@ -25,19 +25,22 @@ end
 function Match:push ()
    while not link.empty(self.input.rx) do
       local p = link.receive(self.input.rx)
-      local cmp = link.front(self.input.comparator)
-      if not cmp then
-      elseif cmp.length ~= p.length
-         or C.memcmp(cmp.data, p.data, cmp.length) ~= 0 then
-         if not self.fuzzy then
+      for n = 1, link.nreadable(self.input.comparator) do
+         local cmp = link.front(self.input.comparator)
+         if p.length == cmp.length and C.memcmp(p, cmp, p.length) == 0 then
+            self.seen = self.seen + 1
+            packet.free(link.receive(self.input.comparator))
+            break
+         elseif self.fuzzy then
+            link.transmit(self.input.comparator,
+                          link.receive(self.input.comparator))
+         else
             table.insert(self.errs,
                          "Mismatch at packet #"..(self.seen+1)..":\n"
                             ..dump(cmp).."\n"
                             ..dump(p))
+            break
          end
-      else
-         self.seen = self.seen + 1
-         packet.free(link.receive(self.input.comparator))
       end
       packet.free(p)
    end
@@ -88,8 +91,33 @@ function selftest()
    assert(#engine.app_table.sink:errors() > 0)
 
    engine.configure(config.new())
+   local c = config.new()
+   config.app(c, "sink", Match, {})
+   config.app(c, "comparator", basic_apps.Source, 8)
+   config.link(c, "comparator.output -> sink.comparator")
+   config.app(c, "garbage", basic_apps.Source, 12)
+   config.link(c, "garbage.output -> sink.rx")
+   engine.configure(c)
+   engine.main({duration=0.0001})
+   assert(#engine.app_table.sink:errors() > 0)
+
+   engine.configure(config.new())
+   local c = config.new()
    config.app(c, "sink", Match, {fuzzy=true})
    config.app(c, "comparator", basic_apps.Source, 8)
+   config.link(c, "comparator.output -> sink.comparator")
+   config.app(c, "garbage", basic_apps.Source, 12)
+   config.link(c, "garbage.output -> sink.rx")
+   engine.configure(c)
+   engine.main({duration=0.0001})
+   assert(#engine.app_table.sink:errors() > 0)
+
+   engine.configure(config.new())
+   local c = config.new()
+   config.app(c, "sink", Match, {fuzzy=true})
+   config.app(c, "comparator", basic_apps.Source, 8)
+   config.link(c, "comparator.output -> sink.comparator")
+   config.app(c, "src", basic_apps.Source, 8)
    config.app(c, "garbage", basic_apps.Source, 12)
    config.app(c, "join", basic_apps.Join)
    config.link(c, "src.output -> join.src")
