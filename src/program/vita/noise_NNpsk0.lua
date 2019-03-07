@@ -29,13 +29,22 @@ local empty_key = ffi.new("uint8_t[32]")
 
 local CipherState = {}
 
+local aes_gcm_nonce_t = ffi.typeof[[
+   struct {
+      uint32_t salt;
+      uint32_t benh;
+      uint32_t benl;
+      uint32_t pad;
+   } __attribute__((packed, aligned(16)))
+]]
+
 function CipherState:new ()
    local o = {
       k = new("uint8_t[32]"),
       n = 0ULL,
       aes_gcm_state = ffi.new("gcm_data __attribute__((aligned(16)))"),
       aes_gcm_block = ffi.new("uint8_t[16]"),
-      aes_gcm_nonce = ffi.new("struct { uint32_t pad, benh, benl; }"),
+      aes_gcm_nonce = ffi.new(aes_gcm_nonce_t),
       hash_state = ffi.new(crypto.blake2s_state_t),
       ad_hash = ffi.new("uint8_t[16]")
    }
