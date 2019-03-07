@@ -100,6 +100,10 @@ Notes:
    aes256-gcm. This is due to a limitation of the maximum AD length of our
    aes-gcm implementation.
 
+ • The vi value is transmitted solely for informational purposes and has no
+   effect on the protocol. The responder MUST NOT consider it to, i.e.,
+   downgrade vr or select an aead value.
+
 References:
 
  • The Noise protocol framework:
