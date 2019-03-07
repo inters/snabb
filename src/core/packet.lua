@@ -52,8 +52,7 @@ local max_packets = 1e6
 ffi.cdef([[
 struct freelist {
     int32_t lock[1];
-    uint64_t nfree;
-    uint64_t max;
+    uint32_t nfree, max;
     struct packet *list[]]..max_packets..[[];
 };
 ]])
@@ -94,6 +93,22 @@ local function freelist_nfree(freelist)
    return freelist.nfree
 end
 
+local function freelist_room(freelist)
+   return freelist.max - freelist.nfree
+end
+
+local function freelist_move (dst, src, n)
+   -- Safety check
+   if _G.developer_debug then
+      assert(dst.nfree + n <= dst.max, "freelist overflow")
+      assert(n <= src.nfree, "freelist underflow")
+   end
+   ffi.copy(dst.list + dst.nfree, src.list + (src.nfree-n),
+            n * ffi.sizeof("struct packet *"))
+   dst.nfree = dst.nfree + n
+   src.nfree = src.nfree - n
+end
+
 local function freelist_lock(freelist)
    sync.lock(freelist.lock)
 end
@@ -123,10 +138,9 @@ end
 function rebalance_freelists ()
    if group_fl and freelist_nfree(packets_fl) > packets_allocated then
       freelist_lock(group_fl)
-      while freelist_nfree(packets_fl) > packets_allocated
-      and not freelist_full(group_fl) do
-         freelist_add(group_fl, freelist_remove(packets_fl))
-      end
+      local surplus = math.min(freelist_nfree(packets_fl) - packets_allocated,
+                               freelist_room(group_fl))
+      freelist_move(group_fl, packets_fl, surplus)
       freelist_unlock(group_fl)
    end
 end
@@ -143,10 +157,8 @@ function allocate ()
    if freelist_nfree(packets_fl) == 0 then
       if group_fl then
          freelist_lock(group_fl)
-         while freelist_nfree(group_fl) > 0
-         and freelist_nfree(packets_fl) < packets_allocated do
-            freelist_add(packets_fl, freelist_remove(group_fl))
-         end
+         local deficit = math.min(packets_allocated, freelist_nfree(group_fl))
+         freelist_move(packets_fl, group_fl, deficit)
          freelist_unlock(group_fl)
       end
       if freelist_nfree(packets_fl) == 0 then
@@ -363,4 +375,17 @@ function selftest ()
                     default_headroom + 2, packet_alignment - 2)
    check_slow_shift(packet_alignment, shiftleft,
                     packet_alignment - default_headroom, default_headroom)
+
+   local fl1 = freelist_create("test.freelist")
+   local fl2 = freelist_create("test2.freelist")
+   freelist_add(fl1, ffi.cast("struct packet *", 42))
+   freelist_add(fl1, ffi.cast("struct packet *", 43))
+   freelist_add(fl2, ffi.cast("struct packet *", 44))
+   freelist_move(fl2, fl1, 2)
+   assert(freelist_nfree(fl1) == 0)
+   assert(freelist_nfree(fl2) == 3)
+   assert(freelist_remove(fl2) == ffi.cast("struct packet *", 43))
+   assert(freelist_remove(fl2) == ffi.cast("struct packet *", 42))
+   assert(freelist_remove(fl2) == ffi.cast("struct packet *", 44))
+   assert(freelist_nfree(fl2) == 0)
 end
