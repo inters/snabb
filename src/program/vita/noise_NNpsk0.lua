@@ -20,23 +20,18 @@ local htonl = lib.htonl
 --    <- e, ee
 
 -- Kludge: our AES-GCM implementation only supports AAD between four and
--- sixteen bytes (multiples of four.) Hence, we include 16 zero bytes of AAD
--- when none is needed, and hash supplied AAD exceeding 16 bytes to 16 bytes
--- using blake2s.
+-- sixteen bytes (multiples of four.) Hence, we use a 16 byte blake2s hash of
+-- the AAD.
 
 local name = "Noise_NNpsk0_25519_AESGCM_BLAKE2s"
 local empty_key = ffi.new("uint8_t[32]")
 
-local CipherState = {}
-
-local aes_gcm_nonce_t = ffi.typeof[[
-   struct {
-      uint32_t salt;
-      uint32_t benh;
-      uint32_t benl;
-      uint32_t pad;
-   } __attribute__((packed, aligned(16)))
-]]
+local CipherState = {
+   aes_gcm_nonce_t = ffi.typeof[[union {
+      uint8_t bytes[16];
+      struct { uint32_t pad, benh, benl; } slot;
+   } __attribute__((packed, aligned(16)))]]
+}
 
 function CipherState:new ()
    local o = {
@@ -44,9 +39,10 @@ function CipherState:new ()
       n = 0ULL,
       aes_gcm_state = ffi.new("gcm_data __attribute__((aligned(16)))"),
       aes_gcm_block = ffi.new("uint8_t[16]"),
-      aes_gcm_nonce = ffi.new(aes_gcm_nonce_t),
+      aes_gcm_nonce = ffi.new(self.aes_gcm_nonce_t),
       hash_state = ffi.new(crypto.blake2s_state_t),
-      ad_hash = ffi.new("uint8_t[16]")
+      ad_hash = ffi.new("uint8_t[16]"),
+      mac_size = 16
    }
    return setmetatable(o, {__index=CipherState})
 end
@@ -80,57 +76,57 @@ function CipherState:hasKey ()
    return not crypto.bytes_equal(self.k, empty_key, sizeof(self.k))
 end
 
-function CipherState:nonce (n)
+function CipherState:nonce ()
    local nonce = self.aes_gcm_nonce
-   nonce.benl = htonl(band(n or self.n, 0x00000000ffffffff))
-   nonce.benh = htonl(rshift(n or self.n, 32))
-   if not n then self.n = self.n + 1 end
-   return cast("uint8_t*", nonce)
+   nonce.slot.benl = htonl(band(self.n, 0x00000000ffffffff))
+   nonce.slot.benh = htonl(rshift(self.n, 32))
+   self.n = self.n + 1
+   return nonce.bytes
 end
 
-function CipherState:encryptWithAd (out, plaintext, len, ad, tag)
-   local ad, adlen = ad or empty_key, ad and sizeof(ad) or 16
-   if adlen > 16 then
-      local hash_s, h = self.hash_state, self.ad_hash
-      crypto.blake2s_init(hash_s, sizeof(h))
-      crypto.blake2s_update(hash_s, ad, adlen)
-      crypto.blake2s_final(hash_s, h, sizeof(h))
-      ad, adlen = h, sizeof(h)
-   end
+function CipherState:encryptWithAd (out, plaintext, len, ad)
+   local hash_s, h = self.hash_state, self.ad_hash
+   crypto.blake2s_init(hash_s, sizeof(h))
+   crypto.blake2s_update(hash_s, ad, sizeof(ad))
+   crypto.blake2s_final(hash_s, h, sizeof(h))
    local aes_gcm_s = self.aes_gcm_state
-   assert(adlen>=4 and adlen%4==0)
-   aes_gcm.aesni_gcm_enc_256_avx_gen4(
-      aes_gcm_s, out, plaintext, len, self:nonce(), ad, adlen, tag, 16
-   )
+   aes_gcm.aesni_gcm_enc_256_avx_gen4(aes_gcm_s,
+                                      out, plaintext, len,
+                                      self:nonce(),
+                                      h, sizeof(h),
+                                      out+len, self.mac_size)
 end
 
-function CipherState:decryptWithAd (out, ciphertext, len, ad, tag)
-   local ad, adlen = ad or empty_key, ad and sizeof(ad) or 16
-   if adlen > 16 then
-      local hash_s, h = self.hash_state, self.ad_hash
-      crypto.blake2s_init(hash_s, 16)
-      crypto.blake2s_update(hash_s, ad, adlen)
-      crypto.blake2s_final(hash_s, h, 16)
-      ad, adlen = h, 16
-   end
+function CipherState:decryptWithAd (out, ciphertext, len, ad)
+   local hash_s, h = self.hash_state, self.ad_hash
+   crypto.blake2s_init(hash_s, sizeof(h))
+   crypto.blake2s_update(hash_s, ad, sizeof(ad))
+   crypto.blake2s_final(hash_s, h, sizeof(h))
    local aes_gcm_s, auth = self.aes_gcm_state, self.aes_gcm_block
-   assert(adlen>=4 and adlen%4==0)
-   aes_gcm.aesni_gcm_dec_256_avx_gen4(
-      aes_gcm_s, out, ciphertext, len, self:nonce(), ad, adlen, auth, 16
-   )
-   return aes_gcm.auth16_equal(tag, auth) == 0
+   aes_gcm.aesni_gcm_dec_256_avx_gen4(aes_gcm_s,
+                                      out, ciphertext, len,
+                                      self:nonce(),
+                                      h, sizeof(h),
+                                      auth, sizeof(auth))
+   return aes_gcm.auth16_equal(ciphertext+len, auth) == 0
 end
 
-local SymmetricState = {}
+local SymmetricState = {
+   tmp_t = ffi.typeof[[union {
+      uint8_t bytes[128];
+      struct { uint8_t a[32], b[32], c[32]; } slot;
+   } __attribute__((packed))]]
+}
 
 function SymmetricState:new ()
    local o = {
       h = new("uint8_t[32]"),
       ck = new("uint8_t[32]"),
       cs = CipherState:new(),
+      ad = new("uint8_t[32]"),
       hkdf_state = new(crypto.hkdf_blake2s_state_t),
       hash_state = new(crypto.blake2s_state_t),
-      tmp = new("struct { uint8_t a[32], b[32], c[32]; }")
+      tmp = new(self.tmp_t)
    }
    SymmetricState.init(o)
    return setmetatable(o, {__index=SymmetricState})
@@ -138,7 +134,7 @@ end
 
 function SymmetricState:init ()
    local hash_s, h, ck = self.hash_state, self.h, self.ck
-   if #name <= 32 then
+   if #name <= sizeof(h) then
       copy(h, name, #name)
    else
       crypto.blake2s_init(hash_s, sizeof(h))
@@ -158,6 +154,7 @@ function SymmetricState:clear ()
    fill(self.h, sizeof(self.h))
    fill(self.ck, sizeof(self.ck))
    self.cs:clear()
+   fill(self.ad, sizeof(self.ad))
    fill(self.hkdf_state, sizeof(self.hkdf_state))
    fill(self.hash_state, sizeof(self.hash_state))
    fill(self.tmp, sizeof(self.tmp))
@@ -166,9 +163,10 @@ end
 
 function SymmetricState:mixKey (ikm)
    local hkdf_s, tmp, ck, cs = self.hkdf_state, self.tmp, self.ck, self.cs
-   crypto.hkdf_blake2s(hkdf_s, cast("uint8_t*", tmp), sizeof(tmp), ikm, ck)
-   copy(ck, tmp.a, sizeof(ck))
-   cs:initializeKey(tmp.b)
+   local a, b = tmp.slot.a, tmp.slot.b
+   crypto.hkdf_blake2s(hkdf_s, tmp.bytes, sizeof(a)+sizeof(b), ikm, ck)
+   copy(ck, a, sizeof(ck))
+   cs:initializeKey(b)
 end
 
 function SymmetricState:mixHash (data, len)
@@ -181,49 +179,42 @@ end
 
 function SymmetricState:mixKeyAndHash (ikm)
    local hkdf_s, tmp, ck, cs = self.hkdf_state, self.tmp, self.ck, self.cs
-   crypto.hkdf_blake2s(hkdf_s, cast("uint8_t*", tmp), sizeof(tmp), ikm, ck)
-   copy(ck, tmp.a, sizeof(ck))
-   self:mixHash(tmp.b)
-   cs:initializeKey(tmp.c)
+   local a, b, c = tmp.slot.a, tmp.slot.b, tmp.slot.c
+   crypto.hkdf_blake2s(hkdf_s, tmp.bytes, sizeof(a)+sizeof(b)+sizeof(c), ikm, ck)
+   copy(ck, a, sizeof(ck))
+   self:mixHash(b)
+   cs:initializeKey(c)
 end
 
 function SymmetricState:encryptAndHash (out, plaintext, len)
    local cs, h = self.cs, self.h
-   if cs:hasKey() then
-      cs:encryptWithAd(out, plaintext, len, h, out+len)
-   else
-      ffi.copy(out, plaintext, len)
-   end
-   self:mixHash(out, len+16)
+   assert(cs:hasKey())
+   cs:encryptWithAd(out, plaintext, len, h)
+   self:mixHash(out, len + cs.mac_size)
 end
 
 function SymmetricState:decryptAndHash (out, ciphertext, len)
-   local cs, h, ad = self.cs, self.h, self.tmp.a
+   local cs, h, ad = self.cs, self.h, self.ad
    assert(sizeof(ad) == sizeof(h))
    copy(ad, h, sizeof(ad))
-   self:mixHash(ciphertext, len+16)
-   local valid
-   if cs:hasKey() then
-      valid = cs:decryptWithAd(out, ciphertext, len, ad, out+len)
-   else
-      ffi.copy(out, plaintext, len)
-      valid = true
-   end
-   return valid
+   self:mixHash(ciphertext, len + cs.mac_size)
+   assert(cs:hasKey())
+   return cs:decryptWithAd(out, ciphertext, len, ad)
 end
 
 function SymmetricState:split (initiator, cs1, cs2)
    local hkdf_s, tmp, ck = self.hkdf_state, self.tmp, self.ck
-   crypto.hkdf_blake2s(hkdf_s, cast("uint8_t*", tmp), sizeof(tmp), ck, empty_key)
-   assert(sizeof(cs1) + sizeof(cs2) <= sizeof(tmp), "split underflow")
+   local len = sizeof(cs1) + sizeof(cs2)
+   assert(len <= sizeof(tmp), "split underflow")
+   crypto.hkdf_blake2s(hkdf_s, tmp.bytes, len, ck, empty_key)
    if initiator then
-      copy(cs1, tmp, sizeof(cs1))
-      copy(cs2, cast("uint8_t*", tmp) + sizeof(cs1), sizeof(cs2))
+      copy(cs1, tmp.bytes, sizeof(cs1))
+      copy(cs2, tmp.bytes + sizeof(cs1), sizeof(cs2))
    else
-      copy(cs2, tmp, sizeof(cs2))
-      copy(cs1, cast("uint8_t*", tmp) + sizeof(cs2), sizeof(cs1))
+      copy(cs2, tmp.bytes, sizeof(cs2))
+      copy(cs1, tmp.bytes + sizeof(cs2), sizeof(cs1))
    end
-   return true
+   fill(tmp, sizeof(tmp))
 end
 
 HandshakeState = {
@@ -235,7 +226,7 @@ HandshakeState = {
 function HandshakeState:new (psk, initiator)
    local o = {
       ss = SymmetricState:new(),
-      e = new("struct { uint8_t pk[32], sk[32]; }"),
+      e = { pk = new("uint8_t[32]"), sk = new("uint8_t[32]") },
       re = new("uint8_t[32]"),
       q = new("uint8_t[32]"),
       psk = psk,
@@ -263,7 +254,8 @@ end
 
 function HandshakeState:clear ()
    self.ss:clear()
-   fill(self.e, sizeof(self.e))
+   fill(self.e.sk, sizeof(self.e.sk))
+   fill(self.e.pk, sizeof(self.e.pk))
    fill(self.re, sizeof(self.re))
    fill(self.q, sizeof(self.q))
 end
@@ -359,7 +351,7 @@ function selftest ()
    i2:init(prologue)
    r2:init(prologue)
 
-   local spi = ffi.cast("uint32_t *", msg.payload)
+   local spi = cast("uint32_t *", msg.payload)
 
    -- A
    i2:writeMessageA(msg2)
