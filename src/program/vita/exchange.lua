@@ -198,10 +198,15 @@ function KeyManager:new (conf)
       ip4 = ipv4:new({}),
       ip6 = ipv6:new({}),
       transport = Transport.header:new({}),
+      transport_in = Transport.header:new({}),
       nonce_message = Protocol.nonce_message:new({}),
+      nonce_message_in = Protocol.nonce_message:new({}),
       key_message = Protocol.key_message:new({}),
+      key_message_in = Protocol.key_message:new({}),
       challenge_message = Protocol.challenge_message:new({}),
+      challenge_message_in = Protocol.challenge_message:new({}),
       nonce_key_message = Protocol.nonce_key_message:new({}),
+      nonce_key_message_in = Protocol.nonce_key_message:new({}),
       sa_db_updated = false,
       sa_db_commit_throttle = lib.throttle(1),
       rate_bucket = KeyManager.max_pps,
@@ -416,7 +421,7 @@ function KeyManager:handle_negotiation (request)
 end
 
 function KeyManager:handle_nonce_request (route, message)
-   if not route or message ~= self.nonce_message then return end
+   if not route or message ~= self.nonce_message_in then return end
 
    -- Receive nonce message if the protocol fsm permits
    -- (responder -> offer_challenge), otherwise reject the message and return.
@@ -440,7 +445,7 @@ function KeyManager:handle_nonce_request (route, message)
 end
 
 function KeyManager:handle_challenge_request (route, message)
-   if not route or message ~= self.challenge_message then return end
+   if not route or message ~= self.challenge_message_in then return end
 
    -- Receive challenge message if the protocol fsm permits
    -- (accept_challenge -> offer_nonce_key), reject the message and return
@@ -471,7 +476,7 @@ function KeyManager:handle_challenge_request (route, message)
 end
 
 function KeyManager:handle_nonce_key_request (route, message)
-   if not route or message ~= self.nonce_key_message then return end
+   if not route or message ~= self.nonce_key_message_in then return end
 
    -- Receive an authenticated, combined nonce and key message if the protocol
    -- fsm permits (responder -> offer_key), reject the message and return
@@ -517,7 +522,7 @@ function KeyManager:handle_nonce_key_request (route, message)
 end
 
 function KeyManager:handle_key_request (route, message)
-   if not route or message ~= self.key_message then return end
+   if not route or message ~= self.key_message_in then return end
 
    -- Receive an authenticated key message if the protocol fsm permits
    -- (accept_key -> initiator), reject the message and return otherwise or
@@ -658,7 +663,8 @@ function KeyManager:request (route, message)
 end
 
 function KeyManager:parse_request (request)
-   local transport = self.transport:new_from_mem(request.data, request.length)
+   local transport =
+      self.transport_in:new_from_mem(request.data, request.length)
    if not transport then
       counter.add(self.shm.protocol_errors)
       return
@@ -680,13 +686,13 @@ function KeyManager:parse_request (request)
    local length = request.length - Transport.header:sizeof()
    local message =
          (transport:message_type() == Transport.message_type.nonce
-             and self.nonce_message:new_from_mem(data, length))
+             and self.nonce_message_in:new_from_mem(data, length))
       or (transport:message_type() == Transport.message_type.key
-             and self.key_message:new_from_mem(data, length))
+             and self.key_message_in:new_from_mem(data, length))
       or (transport:message_type() == Transport.message_type.challenge
-             and self.challenge_message:new_from_mem(data, length))
+             and self.challenge_message_in:new_from_mem(data, length))
       or (transport:message_type() == Transport.message_type.nonce_key
-             and self.nonce_key_message:new_from_mem(data, length))
+             and self.nonce_key_message_in:new_from_mem(data, length))
    if not message then
       counter.add(self.shm.protocol_errors)
       return
@@ -1106,7 +1112,7 @@ end
 
 function Protocol:next_spi ()
    self.spi1.u32 = lib.htonl(Protocol.spi_counter + 256)
-   Protocol.spi_counter = (Protocol.spi_counter + 1) % (2^32 - 1 - 256)
+   Protocol.spi_counter = (Protocol.spi_counter + 1) % (2^16 - 1 - 256)
 end
 
 function Protocol:next_nonce ()

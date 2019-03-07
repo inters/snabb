@@ -49,6 +49,8 @@ static void set_sigsegv_handler()
   assert(sigaction(SIGSEGV, &sa, NULL) != -1);
 }
 
+void lua_stacktrace ();
+
 static void memory_sigsegv_handler(int sig, siginfo_t *si, void *uc)
 {
   int fd = -1;
@@ -91,6 +93,7 @@ static void memory_sigsegv_handler(int sig, siginfo_t *si, void *uc)
           (void *)((ucontext_t *)uc)->uc_mcontext.gregs[REG_RSP],
           si->si_code,
           si->si_errno);
+  lua_stacktrace();
   fflush(stderr);
   // Fall back to the default SEGV behavior by resending the signal
   // now that the handler is disabled.
