@@ -60,7 +60,7 @@ Decapsulate = {
       key = {required=true},
       salt = {required=true},
       window_size = {},
-      resync_threshold = {},
+      resync_threshold = {default=1/0}, -- disable resynchronization
       resync_attempts = {},
       auditing = {}
    },
