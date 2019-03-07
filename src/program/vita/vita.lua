@@ -13,8 +13,7 @@ local nexthop = require("program.vita.nexthop")
 local exchange = require("program.vita.exchange")
 local icmp = require("program.vita.icmp")
       schemata = require("program.vita.schemata")
-local Receiver = require("apps.interlink.receiver")
-local Transmitter = require("apps.interlink.transmitter")
+local basic_apps = require("apps.basic.basic_apps")
 local intel_mp = require("apps.intel_mp.intel_mp")
 local nd_light = require("apps.ipv6.nd_light").nd_light
 local Join = require("apps.basic.basic_apps").Join
@@ -33,16 +32,15 @@ local confighelp = require("program.vita.README_config_inc")
 
 local confspec = {
    private_interface4 = {},
-   public_interface4 = {},
-   public_interface6 = {},
+   public_interface4 = {default={}},
+   public_interface6 = {default={}},
    mtu = {default=8923},
    route4 = {default={}},
    route46 = {default={}},
    negotiation_ttl = {},
    sa_ttl = {},
    data_plane = {},
-   inbound_sa = {default={}},
-   outbound_sa = {default={}}
+   sa_database = {default={}}
 }
 
 local ifspec = {
@@ -52,7 +50,8 @@ local ifspec = {
    nexthop_ip4 = {},
    nexthop_ip6 = {},
    mac = {},
-   nexthop_mac = {}
+   nexthop_mac = {},
+   queue = {}
 }
 
 local function derive_local_unicast_mac (prefix, ip)
@@ -77,15 +76,83 @@ local function parse_ifconf (conf, mac_prefix)
    return conf
 end
 
-local function parse_conf (conf)
-   conf = lib.parse(conf, confspec)
+-- This takes a Vita configuration (potentially defining multiple queues) and a
+-- queue id and returns the configuration for a single given queue by mutating
+-- a copy of the configuration.
+local function parse_conf (conf, queue)
+   conf = lib.parse(lib.deepcopy(conf), confspec)
+   conf.queue = queue
+   -- all queues share a single private interface
    conf.private_interface4 = parse_ifconf(conf.private_interface4, {0x2a,0xbb})
-   conf.public_interface4 = parse_ifconf(conf.public_interface4, {0x3a,0xbb})
-   conf.public_interface6 = parse_ifconf(conf.public_interface6, {0x3a,0xbb})
+   -- select the public interface for the queue from the public interface list
+   -- (it is possible that no such interface is configured)
+   local public_interfaces4 = conf.public_interface4
+   conf.public_interface4 = nil
+   for ip4, interface in pairs(public_interfaces4) do
+      interface.ip4 = ip4
+      local interface = parse_ifconf(interface, {0x3a, 0xbb})
+      if interface.queue == conf.queue then
+         conf.public_interface4 = interface
+         break
+      end
+   end
+   local public_interfaces6 = conf.public_interface6
+   conf.public_interface6 = nil
+   for ip6, interface in pairs(public_interfaces6) do
+      interface.ip6 = ip6
+      local interface = parse_ifconf(interface, {0x3a, 0xbb})
+      if interface.queue == conf.queue then
+         conf.public_interface6 = interface
+         break
+      end
+   end
+   -- for each route, select a single gateway ip to use for this queue
+   for id, route in pairs(conf.route4) do
+      local gateways = route.gateway
+      route.gateway = nil
+      for ip4, gateway in pairs(gateways) do
+         if gateway.queue == 1 then -- default to the first defined gateway
+            route.gw_ip4 = ip4
+         end
+         if gateway.queue == conf.queue then
+            route.gw_ip4 = ip4
+            break
+         end
+      end
+   end
+   for id, route in pairs(conf.route46) do
+      local gateways = route.gateway
+      route.gateway = nil
+      for ip6, gateway in pairs(gateways) do
+         if gateway.queue == 1 then -- default to the first defined gateway
+            route.gw_ip6 = ip6
+         end
+         if gateway.queue == conf.queue then
+            route.gw_ip6 = ip6
+            break
+         end
+      end
+   end
+   -- select the SAs configured for this queue, default to empty SA lists
+   conf.outbound_sa = {}
+   conf.inbound_sa = {}
+   local sa_database = conf.sa_database
+   conf.sa_database = nil
+   for queue, sa_db in pairs(sa_database) do
+      if queue == conf.queue then
+         conf.outbound_sa = sa_db.outbound_sa
+         conf.inbound_sa = sa_db.inbound_sa
+         break
+      end
+   end
    return conf
 end
 
 local sa_db_path = "group/sa_db"
+
+function init_sa_db ()
+   shm.mkdir(shm.resolve(sa_db_path))
+end
 
 -- Vita command-line interface (CLI)
 function run (args)
@@ -129,7 +196,7 @@ end
 -- configuration.
 -- This function does not halt except for fatal error situations.
 function run_vita (opt)
-   local sa_db_path = shm.root.."/"..shm.resolve(sa_db_path)
+   init_sa_db()
 
    -- Schema support: because Vita configurations are generally shallow we
    -- choose to reliably delegate all configuration transitions to core.app by
@@ -167,22 +234,47 @@ function run_vita (opt)
       worker_jit_flush = false
    }
 
+   local function absolute_sa_db_path (queue)
+      return shm.root.."/"..shm.resolve(sa_db_path)
+   end
+
    -- Listen for SA database changes.
-   local sa_db_last_modified
+   local sa_db_last_modified = {}
    local function sa_db_needs_reload ()
-      local stat = S.stat(sa_db_path)
-      if stat and stat.st_mtime ~= sa_db_last_modified then
-         sa_db_last_modified = stat.st_mtime
-         return true
+      local modified = false
+      for _, queue in ipairs(shm.children(sa_db_path)) do
+         queue = tonumber(queue)
+         if queue then -- ignore temp files
+            local stat = S.stat(absolute_sa_db_path().."/"..queue)
+            if stat and stat.st_mtime ~= sa_db_last_modified[queue] then
+               sa_db_last_modified[queue] = stat.st_mtime
+               modified = true
+            end
+         end
       end
+      return modified
+   end
+
+   -- Load current SA database.
+   local function load_sa_db ()
+      local sa_db = {}
+      for _, queue in ipairs(shm.children(sa_db_path)) do
+         queue = tonumber(queue)
+         if queue then -- ignore temp files
+            sa_db[queue] = yang.load_configuration(
+               absolute_sa_db_path().."/"..queue,
+               {schema_name='vita-ephemeral-keys'}
+            )
+         end
+      end
+      return sa_db
    end
 
    -- This is how we imperatively incorporate the SA database into the
    -- configuration proper. NB: see schema_support and the use of purify above.
    local function merge_sa_db (sa_db)
       return function (current_config)
-         current_config.outbound_sa = sa_db.outbound_sa
-         current_config.inbound_sa = sa_db.inbound_sa
+         current_config.sa_database = sa_db
          return current_config
       end
    end
@@ -198,40 +290,126 @@ function run_vita (opt)
    while true do
       supervisor:main(1)
       if sa_db_needs_reload() then
-         local success, sa_db = pcall(yang.load_configuration, sa_db_path,
-                                      {schema_name='vita-ephemeral-keys'})
-         if success then
-            supervisor:info("Reloading SA database: %s", sa_db_path)
-            supervisor:update_configuration(merge_sa_db(sa_db), 'set', '/')
-         else
-            supervisor:warn("Failed to read SA database %s: %s",
-                            sa_db_path, sa_db)
-         end
+         supervisor:info("Reloading SA database: %s", sa_db_path)
+         supervisor:update_configuration(merge_sa_db(load_sa_db()), 'set', '/')
       end
    end
 end
 
 function vita_workers (conf)
-   return {
-      key_manager = configure_exchange(conf),
-      private_router = configure_private_router_with_nic(conf),
-      public_router = configure_public_router_with_nic(conf),
-      encapsulate = configure_esp(conf),
-      decapsulate =  configure_dsp(conf)
+   local workers = {}
+   -- Provision a dedicated process/queue for each address of the public
+   -- interface.
+   local public_interfaces = conf.public_interface4 or
+                             conf.public_interface6 or
+                             {}
+   for _, interface in pairs(public_interfaces) do
+      local name = "queue"..interface.queue
+      workers[name] = configure_vita_queue(conf, interface.queue)
+   end
+   return workers
+end
+
+function configure_vita_queue (conf, queue, free_links)
+   conf = parse_conf(conf, queue)
+
+   local c = config.new()
+   local _, key_manager = configure_exchange(conf, c)
+   local _, private_router = configure_private_router(conf, c)
+   local _, public_router = configure_public_router(conf, c)
+   local _, outbound_sa = configure_outbound_sa(conf, c)
+   local _, inbound_sa = configure_inbound_sa(conf, c)
+   local _, interfaces = configure_interfaces(conf, c)
+
+   local function link (from, to) config.link(c, from.." -> "..to) end
+
+   if not conf.data_plane then
+      link(public_router.protocol_input, key_manager.input)
+      link(key_manager.output, public_router.protocol_output)
+   end
+
+   if interfaces.private then
+      link(interfaces.private.rx, private_router.input)
+      link(private_router.output, interfaces.private.tx)
+   elseif not free_links then
+      config.app(c, "PrivateSink", basic_apps.Sink)
+      link("PrivateSink.rx", private_router.input)
+      link(private_router.output, "PrivateSink.tx")
+   end
+   if interfaces.public then
+      link(interfaces.public.rx, public_router.input)
+      link(public_router.output, interfaces.public.tx)
+   elseif not free_links then
+      config.app(c, "PublicSink", basic_apps.Sink)
+      link("PublicSink.rx", public_router.input)
+      link(public_router.output, "PublicSink.tx")
+   end
+
+   for _, sa in pairs(conf.outbound_sa) do
+      link(private_router.outbound[sa.route], outbound_sa.input[sa.route])
+      link(outbound_sa.output[sa.route], public_router.outbound[sa.route])
+   end
+   for spi, sa in pairs(conf.inbound_sa) do
+      local id = sa.route.."_"..spi
+      link(public_router.inbound[id], inbound_sa.input[id])
+      link(inbound_sa.output[id], private_router.inbound[id])
+   end
+
+   return c, free_links and private_router, free_links and public_router
+end
+
+function configure_interfaces (conf, append)
+   local c = append or config.new()
+
+   local ports = {
+      private = nil, -- private interface receive/transmit
+      public = nil -- punlic interface receive/transmit
    }
+
+   local private_interface = conf.private_interface4
+   if private_interface and private_interface.pci ~= "00:00.0" then
+      config.app(c, "PrivateNIC", intel_mp.Intel, {
+                    pciaddr = private_interface.pci,
+                    rxq = conf.queue - 1,
+                    txq = conf.queue - 1
+      })
+      ports.private = {
+         rx = "PrivateNIC.output",
+         tx = "PrivateNIC.input"
+      }
+   end
+
+   local public_interface = conf.public_interface4 or conf.public_interface6
+   if public_interface and public_interface.pci ~= "00:00.0" then
+      config.app(c, "PublicNIC", intel_mp.Intel, {
+                    pciaddr = public_interface.pci,
+                    macaddr = public_interface.mac,
+                    vmdq = true
+      })
+      ports.public = {
+         rx = "PublicNIC.output",
+         tx = "PublicNIC.input"
+      }
+   end
+
+   return c, ports
 end
 
 function configure_private_router (conf, append)
-   conf = parse_conf(conf)
    local c = append or config.new()
 
+   local ports = {
+      input = nil, -- private input
+      output = nil, -- private output
+      outbound = {}, -- outbound SA queues (to encapsulate)
+      inbound = {} -- inbound SA queues (decapsulated)
+   }
+
    local interface = conf.private_interface4
-   if not interface then return c end
+   if not interface then return c, ports end
 
    local routes = (conf.public_interface4 and conf.route4) or
                   (conf.public_interface6 and conf.route46)
-
-   local private_links = {}
 
    config.app(c, "PrivateDispatch", dispatch.PrivateDispatch, {
                  node_ip4 = interface.ip4
@@ -256,7 +434,8 @@ function configure_private_router (conf, append)
                  node_mac = interface.mac,
                  node_ip4 = interface.ip4,
                  nexthop_ip4 = interface.nexthop_ip4,
-                 nexthop_mac = interface.nexthop_mac
+                 nexthop_mac = interface.nexthop_mac,
+                 synchronize = true
    })
    config.link(c, "PrivateDispatch.forward4 -> OutboundTTL.input")
    config.link(c, "PrivateDispatch.icmp4 -> PrivateICMP4.input")
@@ -272,37 +451,39 @@ function configure_private_router (conf, append)
    config.link(c, "InboundTTL.output -> PrivateNextHop.forward")
    config.link(c, "InboundTTL.time_exceeded -> InboundICMP4.transit_ttl_exceeded")
    config.link(c, "InboundICMP4.output -> PrivateRouter.control")
-   private_links.input = "PrivateDispatch.input"
-   private_links.output = "PrivateNextHop.output"
+
+   ports.input = "PrivateDispatch.input"
+   ports.output = "PrivateNextHop.output"
 
    for id, route in pairs(routes) do
-      local private_in = "PrivateRouter."..id
-      local ESP_in = "ESP_"..id.."_in"
-      config.app(c, ESP_in.."_Tx", Transmitter, ESP_in)
-      config.link(c, private_in.." -> "..ESP_in.."_Tx.input")
+      ports.outbound[id] = "PrivateRouter."..id
    end
 
    for spi, sa in pairs(conf.inbound_sa) do
-      local private_out = "InboundDispatch."..sa.route.."_"..spi
-      local DSP_out = "DSP_"..sa.route.."_"..spi.."_out"
-      config.app(c, DSP_out.."_Rx", Receiver, DSP_out)
-      config.link(c, DSP_out.."_Rx.output -> "..private_out)
+      local id = sa.route.."_"..spi
+      ports.inbound[id] = "InboundDispatch."..id
    end
 
-   return c, private_links
+   return c, ports
 end
 
 function configure_public_router (conf, append)
-   conf = parse_conf(conf)
    local c = append or config.new()
 
+   local ports = {
+      input = nil, -- public router input
+      output = nil, -- public router output
+      protocol_input = nil, -- incoming key exchange messages
+      protocol_output = nil, -- outgoing key exchange messages
+      inbound = {}, -- inbound SA queues (to be decapsulated)
+      outbound = {} -- outbound SA queues (encapsulated)
+   }
+
    local interface = conf.public_interface4 or conf.public_interface6
-   if not interface then return c end
+   if not interface then return c, ports end
 
    local routes = (conf.public_interface4 and conf.route4) or
                   (conf.public_interface6 and conf.route46)
-
-   local public_links = {}
 
    config.app(c, "PublicRouter", route.PublicRouter, {
                  sa = conf.inbound_sa
@@ -326,8 +507,8 @@ function configure_public_router (conf, append)
       config.link(c, "PublicDispatch.arp -> PublicNextHop.arp")
       config.link(c, "PublicDispatch.protocol4_unreachable -> PublicICMP4.protocol_unreachable")
       config.link(c, "PublicICMP4.output -> PublicNextHop.icmp4")
-      public_links.input = "PublicDispatch.input"
-      public_links.output = "PublicNextHop.output"
+      ports.input = "PublicDispatch.input"
+      ports.output = "PublicNextHop.output"
 
    elseif conf.public_interface6 then
       config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
@@ -349,22 +530,15 @@ function configure_public_router (conf, append)
       config.link(c, "PublicDispatch.protocol6_unreachable -> PublicICMP6.protocol_unreachable")
       config.link(c, "PublicICMP6.output -> PublicNextHop.icmp6")
       config.link(c, "PublicNextHop.output -> PublicND.north")
-      public_links.input = "PublicDispatch.input"
-      public_links.output = "PublicND.south"
+      ports.input = "PublicDispatch.input"
+      ports.output = "PublicND.south"
    end
 
-   if not conf.data_plane then
-      config.app(c, "Protocol_in_Tx", Transmitter, "Protocol_in")
-      config.app(c, "Protocol_out_Rx", Receiver, "Protocol_out")
-      config.link(c, "PublicDispatch.protocol -> Protocol_in_Tx.input")
-      config.link(c, "Protocol_out_Rx.output -> PublicNextHop.protocol")
-   end
+   ports.protocol_input = "PublicDispatch.protocol"
+   ports.protocol_output = "PublicNextHop.protocol"
 
    for id, route in pairs(routes) do
-      local public_out = "PublicNextHop."..id
-      local ESP_out = "ESP_"..id.."_out"
       local Tunnel = "Tunnel_"..id
-      config.app(c, ESP_out.."_Rx", Receiver, ESP_out)
       if route.gw_ip4 then
          config.app(c, Tunnel, tunnel.Tunnel4,
                     {src=interface.ip4, dst=route.gw_ip4})
@@ -372,135 +546,89 @@ function configure_public_router (conf, append)
          config.app(c, Tunnel, tunnel.Tunnel6,
                     {src=interface.ip6, dst=route.gw_ip6})
       end
-      config.link(c, ESP_out.."_Rx.output -> "..Tunnel..".input")
-      config.link(c, Tunnel..".output -> "..public_out)
+      config.link(c, Tunnel..".output -> PublicNextHop."..id)
+      ports.outbound[id] = Tunnel..".input"
    end
 
    for spi, sa in pairs(conf.inbound_sa) do
-      local public_in = "PublicRouter."..sa.route.."_"..spi
-      local DSP_in = "DSP_"..sa.route.."_"..spi.."_in"
-      config.app(c, DSP_in.."_Tx", Transmitter, DSP_in)
-      config.link(c, public_in.." -> "..DSP_in.."_Tx.input")
+      local id = sa.route.."_"..spi
+      ports.inbound[id] = "PublicRouter."..id
    end
 
-   return c, public_links
-end
-
-local function nic_config (conf, interface)
-   numa.check_affinity_for_pci_addresses({conf[interface].pci})
-   local needs_vmdq = pci.canonical(conf.private_interface.pci)
-                   == pci.canonical(conf.public_interface.pci)
-   return {
-      pciaddr = conf[interface].pci,
-      vmdq = needs_vmdq,
-      macaddr = needs_vmdq and conf[interface].mac
-   }
-end
-
-function configure_private_router_with_nic (conf, append)
-   local c, private = configure_private_router(conf, append)
-
-   if not conf.private_interface then return c end
-
-   config.app(c, "PrivateNIC", intel_mp.Intel,
-              nic_config(conf, 'private_interface'))
-   config.link(c, "PrivateNIC.output -> "..private.input)
-   config.link(c, private.output.." -> PrivateNIC.input")
-
-   return c
-end
-
-function configure_public_router_with_nic (conf, append)
-   local c, public = configure_public_router(conf, append)
-
-   if not conf.public_interface then return c end
-   
-   config.app(c, "PublicNIC", intel_mp.Intel,
-              nic_config(conf, 'public_interface'))
-   config.link(c, "PublicNIC.output -> "..public.input)
-   config.link(c, public.output.." -> PublicNIC.input")
-
-   return c
+   return c, ports
 end
 
 function configure_exchange (conf, append)
-   conf = parse_conf(conf)
    local c = append or config.new()
 
-   if conf.data_plane then return end
+   local ports = {
+      input = nil, -- key exchange input
+      output = nil, -- key exchange output
+   }
 
    local interface = conf.public_interface4 or conf.public_interface6
-   if not interface then return c end
+   if conf.data_plane or not interface then return c, ports end
 
    local routes = (conf.public_interface4 and conf.route4) or
                   (conf.public_interface6 and conf.route46)
 
-   config.app(c, "KeyExchange", exchange.KeyManager, {
+   config.app(c, "KeyManager", exchange.KeyManager, {
                  node_ip4 = interface.ip4,
                  node_ip6 = interface.ip6,
                  routes = routes,
-                 sa_db_path = sa_db_path,
+                 sa_db_path = sa_db_path.."/"..conf.queue,
                  negotiation_ttl = conf.negotiation_ttl,
                  sa_ttl = conf.sa_ttl
    })
-   config.app(c, "Protocol_in_Rx", Receiver, "Protocol_in")
-   config.app(c, "Protocol_out_Tx", Transmitter, "Protocol_out")
-   config.link(c, "Protocol_in_Rx.output -> KeyExchange.input")
-   config.link(c, "KeyExchange.output -> Protocol_out_Tx.input")
 
-   return c
+   ports.input = "KeyManager.input"
+   ports.output = "KeyManager.output"
+
+   return c, ports
 end
 
 -- sa_db := { outbound_sa={<spi>=(SA), ...}, inbound_sa={<spi>=(SA), ...} }
 -- (see exchange)
 
-function configure_esp (sa_db, append)
-   sa_db = parse_conf(sa_db)
+function configure_outbound_sa (sa_db, append)
    local c = append or config.new()
 
+   local ports = { input={}, output={} } -- SA input/output pairs
+
    for spi, sa in pairs(sa_db.outbound_sa) do
-      -- Configure interlink receiver/transmitter for outbound SA
-      local ESP_in = "ESP_"..sa.route.."_in"
-      local ESP_out = "ESP_"..sa.route.."_out"
-      config.app(c, ESP_in.."_Rx", Receiver, ESP_in)
-      config.app(c, ESP_out.."_Tx", Transmitter, ESP_out)
-      -- Configure outbound SA
-      local ESP = "ESP_"..sa.route
-      config.app(c, ESP, tunnel.Encapsulate, {
+      local OutboundSA = "OutboundSA_"..sa.route
+      config.app(c, OutboundSA, tunnel.Encapsulate, {
                     spi = spi,
                     aead = sa.aead,
                     key = sa.key,
                     salt = sa.salt
       })
-      config.link(c, ESP_in.."_Rx.output -> "..ESP..".input4")
-      config.link(c, ESP..".output -> "..ESP_out.."_Tx.input")
+      ports.input[sa.route] = OutboundSA..".input4"
+      ports.output[sa.route] = OutboundSA..".output"
    end
 
-   return c
+   return c, ports
 end
 
-function configure_dsp (sa_db, append)
-   sa_db = parse_conf(sa_db)
+function configure_inbound_sa (sa_db, append)
    local c = append or config.new()
 
+   local ports = { input={}, output={} } -- SA input/output pairs
+
    for spi, sa in pairs(sa_db.inbound_sa) do
-      -- Configure interlink receiver/transmitter for inbound SA
-      local DSP_in = "DSP_"..sa.route.."_"..spi.."_in"
-      local DSP_out = "DSP_"..sa.route.."_"..spi.."_out"
-      config.app(c, DSP_in.."_Rx", Receiver, DSP_in)
-      config.app(c, DSP_out.."_Tx", Transmitter, DSP_out)
+      local id = sa.route.."_"..spi
       -- Configure inbound SA
-      local DSP = "DSP_"..sa.route.."_"..spi
-      config.app(c, DSP, tunnel.Decapsulate, {
+      local InboundSA = "InboundSA_"..id
+      config.app(c, InboundSA, tunnel.Decapsulate, {
                     spi = spi,
                     aead = sa.aead,
                     key = sa.key,
                     salt = sa.salt,
                     auditing = true
       })
-      config.link(c, DSP_in.."_Rx.output -> "..DSP..".input")
-      config.link(c, DSP..".output4 -> "..DSP_out.."_Tx.input")
+      ports.input[id] = InboundSA..".input"
+      ports.output[id] = InboundSA..".output4"
    end
 
-   return c
+   return c, ports
 end

@@ -6,12 +6,16 @@ local vita = require("program.vita.vita")
 local vita_test = require("program.vita.test")
 local lib = require("core.lib")
 
+vita.init_sa_db()
+
 --engine.log = true 
 
 local function test_conf (conf)
    conf = lib.deepcopy(conf) -- ensure purity
-   engine.configure(vita_test.configure_public_router_loopback(
-                       conf, vita.configure_exchange(conf)))
+   local c, private, public = vita.configure_vita_queue(conf, 1, 'free')
+   config.link(c, private.output.."->"..private.input)
+   config.link(c, public.output.."->"..public.input)
+   engine.configure(c)
    engine.main{duration=3, report={showlinks=false}}
 end
 
@@ -30,12 +34,13 @@ conf.route4.test1.preshared_key = string.rep("FF", 32)
 test_conf(conf)
 
 print("Change route gw_ip4...")
-conf.route4.test1.gw_ip4 = "172.17.1.10"
+conf.route4.test1.gateway = {["172.17.1.10"]={queue=1}}
 test_conf(conf)
 
 print("Change public_ip4 and route net_cidr4...")
-conf.public_interface4.ip4 = "172.16.0.11"
-conf.public_interface4.nexthop_ip4 = conf.public_interface4.ip4
+conf.public_interface4 =
+   { ["172.16.0.11"] = conf.public_interface4["172.16.0.10"] }
+conf.public_interface4["172.16.0.11"].nexthop_ip4 = "172.16.0.11"
 conf.route4.test1.net_cidr4 = "172.16.0.0/16"
 test_conf(conf)
 
