@@ -27,7 +27,7 @@ program/vita/genconf.snabb < program/vita/clitest.conf > $conf
 
 [ $(./snabb config get $name /mtu) = 1500 ]
 
-sleep 1
+sleep 2
 
 [ $(./snabb config get-state $name \
             /gateway-state/private-router/route-errors) = 0 ]
