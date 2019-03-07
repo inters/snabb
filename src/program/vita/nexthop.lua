@@ -2,6 +2,7 @@
 
 module(...,package.seeall)
 
+local shm = require("core.shm")
 local counter = require("core.counter")
 local lib = require("core.lib")
 local ethernet = require("lib.protocol.ethernet")
@@ -20,7 +21,8 @@ NextHop4 = {
       node_mac = {required=true},
       node_ip4 = {required=true},
       nexthop_ip4 = {required=true},
-      nexthop_mac = {}
+      nexthop_mac = {},
+      synchronize = {default=false}
    },
    shm = {
       arp_requests = {counter},
@@ -75,10 +77,12 @@ function NextHop4:new (conf)
 
    -- ...unless its supplied
    if conf.nexthop_mac then
-      print("forced")
       o.eth:dst(ethernet:pton(conf.nexthop_mac))
       o.connected = true
    end
+
+   -- We can get our next hop by synchronizing with other NextHop4 instances
+   o.sync_interval = lib.throttle(1)
 
    return setmetatable(o, {__index = NextHop4})
 end
@@ -128,6 +132,11 @@ function NextHop4:push ()
          packet.free(p)
       end
    end
+
+   -- Synchronize next hop
+   if self.synchronize and self.sync_interval() then
+      self:sync_nexthop()
+   end
 end
 
 function NextHop4:encapsulate (p, type)
@@ -165,6 +174,7 @@ function NextHop4:handle_arp (p)
       --        information in the packet and set Merge_flag to true.
       if ip4eq(arp_ipv4:spa(), self.nexthop_ip4) and self.connected then
          self.eth:dst(arp_ipv4:sha())
+         if self.synchronize then self:share_nexthop() end
          counter.add(self.shm.addresses_updated)
          self.connected = true
       end
@@ -176,6 +186,7 @@ function NextHop4:handle_arp (p)
          --        the translation table.
          if not self.connected then
             self.eth:dst(arp_ipv4:sha())
+            if self.synchronize then self:share_nexthop() end
             counter.add(self.shm.addresses_added)
             self.connected = true
          end
@@ -197,5 +208,27 @@ function NextHop4:handle_arp (p)
       end
    else
       counter.add(self.shm.arp_errors)
+   end
+end
+
+function NextHop4:shared_nexthop_path ()
+   -- We share the resolved next hop with siblings of the same name.
+   return "group/"..self.name.."/"..self.appname
+end
+
+function NextHop4:share_nexthop ()
+   if not self.nexthop then
+      self.nexthop = shm.create(self:shared_nexthop_path(), "uint8_t[6]")
+   end
+   ffi.copy(self.nexthop, self.eth:dst(), ffi.sizeof(self.nexthop))
+end
+
+function NextHop4:sync_nexthop ()
+   if not self.nexthop then
+      local ok, nh = pcall(shm.open, self:shared_nexthop_path(), "uint8_t[6]")
+      self.connected, self.nexthop = ok or self.connected, ok and nh
+   end
+   if self.connected and self.nexthop then
+      self.eth:dst(self.nexthop)
    end
 end

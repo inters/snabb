@@ -74,18 +74,18 @@ First of all, we start two Vita nodes, and assign them the names `node1` and `no
 
 Most of it should be fairly self explanatory: we assign the desired ports via their PCI bus addresses, and set the interface’s own addresses as well as the addresses of the next hops. In this case, the private and public interface addresses are the same, but they need not be. The next hop of the private interface (this would normally be your local router) will be `snabb loadtest`. Since `loadtest` does not speak ARP, we configure a fixed MAC destination address for this next hop. This will prevent Vita from attempting to look up the next hop’s MAC addresses via ARP, and instead use the preconfigured address. The next hop of the public interface (this would normally be your gateway to the Internet) is configured to be the other Vita node in the test setup. Finally, we define a single route to the subnet `172.17.1.0/24` via the second Vita node with a dummy key. For the other Vita node, `node2.conf` is symmetric:
 
-    private-interface {
+    private-interface4 {
       pci 22:00.2;
       ip4 172.17.0.10;
       nexthop-ip4 172.17.0.1;
       nexthop-mac 02:00:00:00:00:00;
     }
-    public-interface {
+    public-interface4 {
       pci 23:00.1;
       ip4 172.17.0.10;
       nexthop-ip4 172.16.0.10;
     }
-    route {
+    route4 {
       id test1;
       gw-ip4 172.16.0.10;
       net-cidr4 "172.16.1.0/24";
@@ -95,13 +95,13 @@ Most of it should be fairly self explanatory: we assign the desired ports via th
 
 Because typing out configuration files for testing gets old fast, and we still need matching Pcap records, Vita comes with a utility that generates both of these from a meta-configuration file. For the first node we have `gentest-node1.conf`:
 
-    private-interface {
+    private-interface4 {
       pci 23:00.0;
       ip4 172.16.0.10;
       nexthop-ip4 172.16.0.1;
       nexthop-mac 02:00:00:00:00:00;
     }
-    public-interface {
+    public-interface4 {
       pci 22:00.1;
       ip4 172.16.0.10;
       nexthop-ip4 172.17.0.10;
@@ -112,13 +112,13 @@ Because typing out configuration files for testing gets old fast, and we still n
 
 …and for the second node `gentest-node2.conf`:
 
-    private-interface {
+    private-interface4 {
       pci 22:00.2;
       ip4 172.17.0.10;
       nexthop-ip4 172.17.0.1;
       nexthop-mac 02:00:00:00:00:00;
     }
-    public-interface {
+    public-interface4 {
       pci 23:00.1;
       ip4 172.17.0.10;
       nexthop-ip4 172.16.0.10;

@@ -6,19 +6,18 @@ The `nd_light` app implements a small subset of IPv6 neighbor discovery
 (RFC4861).  It has two duplex ports, `north` and `south`.  The `south`
 port attaches to a network on which neighbor discovery (ND) must be
 performed.  The `north` port attaches to an app that processes IPv6
-packets (including full ethernet frames). Packets transmitted to the
+packets (without ethernet headers). Packets transmitted to the
 `north` port must be wrapped in full Ethernet frames (which may be
 empty).
 
-The `nd_light` app replies to neighbor solicitations for which it is
-configured as a target and performs rudimentary address resolution for
-its configured *next-hop* address. If address resolution succeeds, the
-Ethernet headers of packets from the `north` port will be overwritten
-with headers containing the discovered destination address and the
-configured source address before they are transmitted over the `south`
-port. All packets from the `north` port are discarded as long as ND has
-not yet succeeded. Packets received from the `south` port are transmitted
-to the `north` port unaltered.
+The `nd_light` app replies to neighbor solicitations for which it is configured
+as a target and performs rudimentary address resolution for its configured
+*next-hop* address. If address resolution succeeds, the Ethernet headers
+containing the discovered destination address and the configured source address
+are prepended to packets received from the `north` port before they are
+transmitted over the `south` port. All packets from the `north` port are
+discarded as long as ND has not yet succeeded. Packets received from the
+`south` port are transmitted to the `north` port unaltered.
 
     DIAGRAM: nd_light
                +----------+

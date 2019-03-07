@@ -6,8 +6,7 @@ local counter = require("core.counter")
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local esp = require("lib.protocol.esp")
-local lpm = require("lib.lpm.lpm4_248").LPM4_248
-local ctable = require("lib.ctable")
+local poptrie = require("lib.poptrie")
 local ffi = require("ffi")
 
 local events = timeline.load_events(engine.timeline(), ...)
@@ -28,29 +27,21 @@ PrivateRouter = {
 }
 
 function PrivateRouter:new (conf)
-   local keybits = 15 -- see lib/lpm/README.md
    local o = {
       ports = {},
       routes = {},
       mtu = conf.mtu,
       ip4 = ipv4:new({}),
-      routing_table4 = lpm:new({keybits=keybits})
+      routing_table4 = poptrie.new{direct_pointing=true, s=24}
    }
    for id, route in pairs(conf.routes) do
       local index = #o.ports+1
-      assert(index < 2^keybits, "index overflow")
-      o.routing_table4:add_string(
-         assert(route.net_cidr4, "Missing net_cidr4"),
-         index
-      )
+      assert(ffi.cast("uint16_t", index) == index, "index overflow")
+      assert(route.net_cidr4, "Missing net_cidr4")
+      local prefix, length = ipv4:pton_cidr(route.net_cidr4)
+      o.routing_table4:add(ffi.cast("uint32_t *", prefix)[0], length, index)
       o.ports[index] = id
    end
-   -- NB: need to add default LPM entry until #1238 is fixed, see
-   --    https://github.com/snabbco/snabb/issues/1238#issuecomment-345362030
-   -- Zero maps to nil in o.routes (which is indexed starting at one), hence
-   -- packets that match the default entry will be dropped (and route_errors
-   -- incremented.)
-   o.routing_table4:add_string("0.0.0.0/0", 0)
    o.routing_table4:build()
    return setmetatable(o, {__index = PrivateRouter})
 end
@@ -62,7 +53,8 @@ function PrivateRouter:link ()
 end
 
 function PrivateRouter:find_route4 (dst)
-   return self.routes[self.routing_table4:search_bytes(dst)]
+   local address = ffi.cast("uint32_t *", dst)[0]
+   return self.routes[self.routing_table4:lookup64(address)]
 end
 
 function PrivateRouter:route (p)
@@ -71,7 +63,7 @@ function PrivateRouter:route (p)
    local route = self:find_route4(self.ip4:dst())
    if route then
       events.private_route4_lookup_success()
-      if p.length + ethernet:sizeof() <= self.mtu then
+      if p.length <= self.mtu then
          link.transmit(route, p)
       else
          counter.add(self.shm.rxerrors)
@@ -115,10 +107,7 @@ PublicRouter = {
 
 function PublicRouter:new (conf)
    local o = {
-      routing_table4 = ctable.new{
-         key_type = ffi.typeof("uint32_t"),
-         value_type = ffi.typeof("uint32_t")
-      },
+      routing_table4 = ffi.new("uint32_t[?]", 2^16),
       esp = esp:new({})
    }
    self.build_fib(o, conf)
@@ -133,18 +122,13 @@ end
 function PublicRouter:build_fib (conf)
    self.ports = {}
    self.routes = {}
-   -- Update FIB entries for SAs
+   ffi.fill(self.routing_table4, ffi.sizeof(self.routing_table4), 0)
    for spi, sa in pairs(conf.sa) do
       local index = #self.ports+1
+      assert(spi < 2^16, "SPI overflow")
       assert(ffi.cast("uint32_t", index) == index, "index overflow")
-      self.routing_table4:add(spi, index, 'update')
+      self.routing_table4[spi] = index
       self.ports[index] = sa.route.."_"..spi
-   end
-   -- Remove obsolete FIB entries
-   for entry in self.routing_table4:iterate() do
-      if not conf.sa[tonumber(entry.key)] then
-         self.routing_table4:remove_ptr(entry)
-      end
    end
 end
 
@@ -155,8 +139,7 @@ function PublicRouter:link ()
 end
 
 function PublicRouter:find_route4 (spi)
-   local entry = self.routing_table4:lookup_ptr(spi)
-   return entry and self.routes[entry.value]
+   return self.routes[self.routing_table4[spi]]
 end
 
 function PublicRouter:push ()
