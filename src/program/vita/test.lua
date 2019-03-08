@@ -260,8 +260,8 @@ function gen_packets (conf)
    local sim_packets = {}
    local sizes = traffic_templates[conf.packet_size]
               or {tonumber(conf.packet_size)}
-   for _, size in ipairs(sizes) do
-      for i = 1, math.floor(1000 / #sizes / conf.nroutes) do
+   for i = 1, math.floor(1000 / #sizes / conf.nroutes) do
+      for _, size in ipairs(sizes) do
          for route = 1, conf.nroutes do
             table.insert(sim_packets, gen_packet(conf, route, size))
          end

@@ -11,6 +11,7 @@ local ipv6 = require("lib.protocol.ipv6")
 local pf_match = require("pf.match")
 local ffi = require("ffi")
 
+local events = timeline.load_events(engine.timeline(), ...)
 
 PrivateDispatch = {
    name = "PrivateDispatch",
@@ -40,13 +41,16 @@ function PrivateDispatch:new (conf)
 end
 
 function PrivateDispatch:forward4 ()
+   events.private_forward4_matched()
    local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
    assert(self.ip4:new_from_mem(p.data, p.length))
    if self.ip4:checksum_ok() then
+      events.checksum_verification_succeeded()
       -- Strip datagram of any Ethernet frame padding before encapsulation.
       local d = packet.resize(p, math.min(self.ip4:total_length(), p.length))
       link.transmit(self.output.forward4, d)
    else
+      events.checksum_verification_failed()
       packet.free(p)
       counter.add(self.shm.rxerrors)
       counter.add(self.shm.checksum_errors)
@@ -79,7 +83,9 @@ function PrivateDispatch:push ()
    while not link.empty(input) do
       local p = link.receive(input)
       self.p_box[0] = p
+      events.private_dispatch_start()
       self:dispatch(p.data, p.length)
+      events.private_dispatch_end()
    end
 end
 
