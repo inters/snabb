@@ -13,6 +13,8 @@ local alarms       = require("lib.yang.alarms")
 local channel      = require("lib.ptree.channel")
 local action_codec = require("lib.ptree.action_codec")
 local ptree_alarms = require("lib.ptree.alarms")
+local timeline     = require("core.timeline")
+local events       = timeline.load_events(engine.timeline(), "core.engine")
 
 local Worker = {}
 
@@ -31,6 +33,7 @@ function new_worker (conf)
    ret.period = 1/conf.Hz
    ret.duration = conf.duration or 1/0
    ret.no_report = conf.no_report
+   ret.measure_latency = conf.measure_latency
    ret.jit_flush = conf.jit_flush
    ret.channel = channel.create('config-worker-channel', 1e6)
    alarms.install_alarm_handler(ptree_alarms:alarm_handler())
@@ -38,11 +41,6 @@ function new_worker (conf)
 
    require("jit.opt").start('sizemcode=256', 'maxmcode=2048')
 
-   ret.breathe = engine.breathe
-   if conf.measure_latency then
-      local latency = histogram.create('engine/latency.histogram', 1e-6, 1e0)
-      ret.breathe = latency:wrap_thunk(ret.breathe, engine.now)
-   end
    return ret
 end
 
@@ -100,27 +98,26 @@ function Worker:handle_actions_from_manager()
 end
 
 function Worker:main ()
-   local vmprofile = require("jit.vmprofile")
    local stop = engine.now() + self.duration
    local next_time = engine.now()
 
-   -- Setup vmprofile.
-   engine.setvmprofile("engine")
-   vmprofile.start()
-
-   if not engine.auditlog_enabled then engine.enable_auditlog() end
-
-   repeat
-      self.breathe()
+   local function control ()
       if next_time < engine.now() then
          next_time = engine.now() + self.period
+         events.engine_stopped()
+         engine.setvmprofile("worker")
          self:handle_actions_from_manager()
-         timer.run()
+         engine.setvmprofile("engine")
+         events.engine_started()
       end
-      if not engine.busywait then engine.pace_breathing() end
-   until stop < engine.now()
-   counter.commit()
-   if not self.no_report then engine.report(self.report) end
+      if stop < engine.now() then
+         return true -- done
+      end
+   end
+
+   engine.main{done=control,
+               report=self.report, no_report=self.no_report,
+               measure_latency=self.measure_latency}
 end
 
 function main (opts)
