@@ -18,7 +18,7 @@ local S         = require("syscall")
 require("core.packet_h")
 
 -- Packet per pull
-pull_npackets = math.floor(link.max / 10)
+pull_npackets = 300 -- Vita specific sweet spot
 
 -- Set to true to enable logging
 log = false
