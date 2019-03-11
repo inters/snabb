@@ -83,12 +83,17 @@ end
 -- Extract bits at offset
 -- key=uint8_t[?]
 function extract (key, offset, length)
-   assert(offset >= 0 and length > 0 and length <= 32)
-   assert(offset <= ffi.sizeof(key) * 8)
-   local byte_offset = math.min(math.floor(offset / 8), ffi.sizeof(key) - 4)
-   local bit_offset = offset - byte_offset*8
-   local dword = ffi.cast("uint32_t*", key + byte_offset)[0]
-   return band(rshift(dword, bit_offset), lshift(1, length) - 1)
+   local bits, read = 0, 0
+   local byte = math.floor(offset/8)
+   while read < length do
+      offset = math.max(offset - byte*8, 0)
+      local nbits = math.min(length - read, 8 - offset)
+      local x = band(rshift(key[byte], offset), lshift(1, nbits) - 1)
+      bits = bor(bits, lshift(x, read))
+      read = read + nbits
+      byte = math.min(byte + 1, ffi.sizeof(key) - 1)
+   end
+   return bits
 end
 
 -- Add key/value pair to RIB (intermediary binary trie)
@@ -331,8 +336,8 @@ end
 function Poptrie:lookup64 (key)
    return self.asm_lookup64(self.leaves, self.nodes, key, self.directmap)
 end
-function Poptrie:lookup64 (key)
-   return self.asm_lookup64(self.leaves, self.nodes, key, self.directmap)
+function Poptrie:lookup128 (key)
+   return self.asm_lookup128(self.leaves, self.nodes, key, self.directmap)
 end
 
 function Poptrie:fib_info ()
@@ -422,10 +427,12 @@ function selftest ()
    assert(t:lookup128(s(0xF0,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x0F)) == 6)
 
    -- Random testing
-   local function reproduce (cases)
+   local function reproduce (cases, config)
       debug = true
       print("repoducing...")
-      local t = new{}
+      print("config:")
+      lib.print_object(config)
+      local t = new(config)
       for entry, case in ipairs(cases) do
          local a, l = unpack(case)
          if l <= 64 then
@@ -450,9 +457,9 @@ function selftest ()
          else print("128:",  t:lookup128(a)) end
       end
    end
-   local function r_assert (condition, cases)
+   local function r_assert (condition, cases, config)
       if condition then return end
-      reproduce(cases)
+      reproduce(cases, config)
       print("selftest failed")
       main.exit(1)
    end
@@ -463,28 +470,31 @@ function selftest ()
       -- ramp up the geometry below to crank up test coverage
       for entries = 1, 3 do
          for i = 1, 10 do
-            math.randomseed(seed+i)
-            cases = {}
-            local t = new{}
-            local k = {}
-            for entry = 1, entries do
-               local a, l = rs(), math.random(keysize)
-               cases[entry] = {a, l}
-               t:add(a, l, entry)
-               k[entry] = a
-            end
-            local v = {}
-            for entry, a in ipairs(k) do
-               v[entry] = t:rib_lookup(a, keysize)
-               r_assert(v[entry] > 0, cases)
-            end
-            t:build()
-            for entry, a in ipairs(k) do
-               r_assert(t:lookup(a) == v[entry], cases)
-               local l = cases[entry][2]
-               if l <= 32 then r_assert(t:lookup32(a) == v[entry], cases)
-               elseif l <= 64 then r_assert(t:lookup64(a) == v[entry], cases)
-               else r_assert(t:lookup128(a) == v[entry], cases) end
+            -- add {direct_pointing=true} to test direct pointing
+            for _, config in ipairs{ {} } do
+               math.randomseed(seed+i)
+               cases = {}
+               local t = new(config)
+               local k = {}
+               for entry = 1, entries do
+                  local a, l = rs(), math.random(keysize)
+                  cases[entry] = {a, l}
+                  t:add(a, l, entry)
+                  k[entry] = a
+               end
+               local v = {}
+               for entry, a in ipairs(k) do
+                  v[entry] = t:rib_lookup(a, keysize)
+                  r_assert(v[entry] > 0, cases, config)
+               end
+               t:build()
+               for entry, a in ipairs(k) do
+                  r_assert(t:lookup(a) == v[entry], cases)
+                  local l = cases[entry][2]
+                  if l <= 32 then r_assert(t:lookup32(a) == v[entry], cases)
+                  elseif l <= 64 then r_assert(t:lookup64(a) == v[entry], cases)
+                  else r_assert(t:lookup128(a) == v[entry], cases) end
+               end
             end
          end
       end
