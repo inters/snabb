@@ -123,14 +123,18 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec, use_v6)
       }
    end
 
+   local start_load = lib.timeout(3)
+
    local function configure_vita_softbench (conf)
       local c, private, public = vita.configure_vita_queue(conf, 1, 'free')
 
       config.app(c, "bridge", basic_apps.Join)
       config.link(c, "bridge.output -> "..private.input)
 
-      config.app(c, "synth", GenerateLoad, testconf)
-      config.link(c, "synth.output -> bridge.synth")
+      if start_load() then -- Generate load once SA is established
+         config.app(c, "synth", GenerateLoad, testconf)
+         config.link(c, "synth.output -> bridge.synth")
+      end
 
       config.app(c, "gauge", GaugeThroughput, {
                     name = "SoftBench",
