@@ -123,7 +123,7 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec, use_v6)
       }
    end
 
-   local start_load = lib.timeout(3)
+   local start_load = lib.timeout(4)
 
    local function configure_vita_softbench (conf)
       local c, private, public = vita.configure_vita_queue(conf, 1, 'free')
