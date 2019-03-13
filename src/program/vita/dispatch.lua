@@ -11,6 +11,7 @@ local ipv6 = require("lib.protocol.ipv6")
 local pf_match = require("pf.match")
 local ffi = require("ffi")
 
+local events = timeline.load_events(engine.timeline(), ...)
 
 PrivateDispatch = {
    name = "PrivateDispatch",
@@ -40,13 +41,16 @@ function PrivateDispatch:new (conf)
 end
 
 function PrivateDispatch:forward4 ()
+   events.private_forward4_matched()
    local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
    assert(self.ip4:new_from_mem(p.data, p.length))
    if self.ip4:checksum_ok() then
+      events.checksum_verification_succeeded()
       -- Strip datagram of any Ethernet frame padding before encapsulation.
       local d = packet.resize(p, math.min(self.ip4:total_length(), p.length))
       link.transmit(self.output.forward4, d)
    else
+      events.checksum_verification_failed()
       packet.free(p)
       counter.add(self.shm.rxerrors)
       counter.add(self.shm.checksum_errors)
@@ -79,7 +83,9 @@ function PrivateDispatch:push ()
    while not link.empty(input) do
       local p = link.receive(input)
       self.p_box[0] = p
+      events.private_dispatch_start()
       self:dispatch(p.data, p.length)
+      events.private_dispatch_end()
    end
 end
 
@@ -221,50 +227,48 @@ InboundDispatch = {
 
 function InboundDispatch:new (conf)
    local o = {
-      node_ip4n = ipv4:pton(conf.node_ip4),
-      ip4 = ipv4:new({})
+      eth4 = ethernet:new{type=0x0800},
+      p_box = ffi.new("struct packet *[1]"),
+      dispatch = pf_match.compile(([[match {
+         ip dst host %s and icmp => icmp4
+         ip dst host %s => protocol4_unreachable
+         ip => forward4
+         otherwise => reject_protocol
+      }]]):format(conf.node_ip4, conf.node_ip4))
    }
    return setmetatable(o, {__index=InboundDispatch})
 end
 
-function InboundDispatch:forward4 (p)
+function InboundDispatch:forward4 ()
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
    link.transmit(self.output.forward4, p)
 end
 
-function InboundDispatch:icmp4 (p)
+function InboundDispatch:icmp4 ()
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
    link.transmit(self.output.icmp4, p)
 end
 
-function InboundDispatch:protocol4_unreachable (p)
+function InboundDispatch:protocol4_unreachable ()
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
    link.transmit(self.output.protocol4_unreachable, p)
 end
 
-function InboundDispatch:reject_protocol (p)
-   packet.free(p)
+function InboundDispatch:reject_protocol ()
+   packet.free(self.p_box[0])
    counter.add(self.shm.protocol_errors)
 end
 
-function InboundDispatch:dispatch (p)
-   local ip4 = self.ip4:new_from_mem(p.data, p.length)
-   if ip4 then
-      if ip4:dst_eq(self.node_ip4n) then
-         if ip4:protocol() == icmp.ICMP4.PROTOCOL then
-            self:icmp4(p)
-         else
-            self:protocol4_unreachable(p)
-         end
-      else
-         self:forward4(p)
-      end
-   else
-      self:reject_protocol(p)
-   end
-end
-
 function InboundDispatch:push ()
+   local eth_hdr4 = self.eth4:header()
    for _, input in ipairs(self.input) do
       while not link.empty(input) do
-         self:dispatch(link.receive(input))
+         local p = link.receive(input)
+         -- Prepend Ethernet pseudo header to please pf.match (we receive plain
+         -- IPv4 frames on the input port.)
+         p = packet.prepend(p, eth_hdr4, ethernet:sizeof())
+         self.p_box[0] = p
+         self:dispatch(p.data, p.length)
       end
    end
 end

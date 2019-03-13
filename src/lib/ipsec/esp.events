@@ -1,0 +1,70 @@
+8,2|encapsulate_transport6_start:
+
+ESP encapsulation for a packet in transport-IPv6 mode has started.
+
+8,2|encapsulate_tunnel_start:
+
+ESP encapsulation for a packet in tunnel mode has started.
+
+9,1|trailer_encoded:
+
+The ESP trailer has been encoded.
+
+9,1|payload_encrypted: length
+
+The ESP payload has been encrypted.
+
+'length' is the byte length of the payload.
+
+9,1|header_encoded:
+
+The ESP header has been encoded.
+
+8,2|encapsulate_transport6_end:
+
+ESP encapsulation for a packet in transport-IPv6 mode has completed.
+
+8,2|encapsulate_tunnel_end:
+
+ESP encapsulation for a packet in tunnel mode has completed.
+
+
+8,2|decapsulate_transport6_start:
+
+ESP decapsulation for a packet in transport-IPv6 mode has started.
+
+8,2|decapsulate_tunnel_start:
+
+ESP decapsulation for a packet in tunnel mode has started.
+
+9,1|sequence_number_checked: seq_low
+
+A ESP sequence number has been checked.
+
+'seq_low' is the lower 32 bits of the sequence number.
+
+9,1|payload_decrypted: length
+
+ESP payload has been decrypted.
+
+'length' is the byte length of the ciphertext.
+
+9,6|resync_attempted: spi
+
+ESP resynchronization has been attempted.
+
+'spi' is the "Security Parameter Index" of the ESP "Security Association" (SA).
+
+9,1|sequence_number_tracked: seq
+
+A new ESP sequence number has been tracked.
+
+'seq' is the 64-bit extended sequence number.
+
+8,2|decapsulate_transport6_end:
+
+ESP decapsulation for a packet in transport-IPv6 mode has completed.
+
+8,2|decapsulate_tunnel_end:
+
+ESP decapsulation for a packet in tunnel mode has completed.
