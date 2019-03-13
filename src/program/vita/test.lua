@@ -32,7 +32,7 @@ function GaugeThroughput:new (conf)
    local self = setmetatable(conf, { __index = GaugeThroughput })
    self.report = lib.logger_new({module=self.name})
    self.progress = lib.throttle(3)
-   self.source = gen_packets(conf.testconf)
+   self.source = gen_packets(self.testconf)
    self.index = 1
    self:init{start=false}
    return self
@@ -45,13 +45,15 @@ function GaugeThroughput:stop ()
 end
 
 function GaugeThroughput:pull ()
+   if not self.start then
+      for route = 1, self.testconf.nroutes do
+         if not engine.app_table.PrivateRouter.output["test"..route] then
+            return -- wait until initial SAs are established
+         end
+      end
+   end
    local source, max = self.source, #self.source
    local output = self.output.source
-   if not self.start and self.packets < engine.pull_npackets then
-      -- probe for connectivity
-      link.transmit(output, packet.clone(source[self.index]))
-      return
-   end
    for i = 1, engine.pull_npackets do
       link.transmit(output, packet.clone(source[self.index]))
       self.index = (self.index % max) + 1
