@@ -7,7 +7,6 @@ local worker = require("core.worker")
 local lib = require("core.lib")
 local CPUSet = require("lib.cpuset")
 local basic_apps = require("apps.basic.basic_apps")
-local Synth = require("apps.test.synth").Synth
 local Receiver = require("apps.interlink.receiver")
 local Transmitter = require("apps.interlink.transmitter")
 local PcapFilter = require("apps.packet_filter.pcap_filter").PcapFilter
@@ -20,16 +19,11 @@ local yang = require("lib.yang.yang")
 
 -- Testing apps for Vita
 
-GenerateLoad = {}
-
-function GenerateLoad:new (testconf)
-   return Synth:new{packets=gen_packets(testconf), sizes={false}}
-end
-
 GaugeThroughput = {
    config = {
       name = {default="GaugeThroughput"},
       npackets = {default=1e6},
+      testconf = {default={}},
       exit_on_completion = {default=false}
    }
 }
@@ -38,8 +32,32 @@ function GaugeThroughput:new (conf)
    local self = setmetatable(conf, { __index = GaugeThroughput })
    self.report = lib.logger_new({module=self.name})
    self.progress = lib.throttle(3)
+   self.source = gen_packets(self.testconf)
+   self.index = 1
    self:init{start=false}
    return self
+end
+
+function GaugeThroughput:stop ()
+   for i = 1, #self.source_packets do
+      packet.free(self.source_packets[i])
+   end
+end
+
+function GaugeThroughput:pull ()
+   if not self.start then
+      for route = 1, self.testconf.nroutes do
+         if not engine.app_table.PrivateRouter.output["test"..route] then
+            return -- wait until initial SAs are established
+         end
+      end
+   end
+   local source, max = self.source, #self.source
+   local output = self.output.source
+   for i = 1, engine.pull_npackets do
+      link.transmit(output, packet.clone(source[self.index]))
+      self.index = (self.index % max) + 1
+   end
 end
 
 function GaugeThroughput:push ()
@@ -126,22 +144,21 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec, use_v6)
    local function configure_vita_softbench (conf)
       local c, private, public = vita.configure_vita_queue(conf, 1, 'free')
 
-      config.app(c, "bridge", basic_apps.Join)
-      config.link(c, "bridge.output -> "..private.input)
-
-      config.app(c, "synth", GenerateLoad, testconf)
-      config.link(c, "synth.output -> bridge.synth")
+      config.app(c, "join", basic_apps.Join)
+      config.link(c, "join.output -> "..private.input)
 
       config.app(c, "gauge", GaugeThroughput, {
                     name = "SoftBench",
                     npackets = npackets,
+                    testconf = testconf,
                     exit_on_completion = true
       })
+      config.link(c, "gauge.source -> join.source")
       config.link(c, private.output.." -> gauge.input")
 
       config.app(c, "sieve", PcapFilter, {filter="arp"})
       config.link(c, "gauge.output -> sieve.input")
-      config.link(c, "sieve.output -> bridge.arp")
+      config.link(c, "sieve.output -> join.arp")
 
       config.link(c, public.output.." -> "..public.input)
 
