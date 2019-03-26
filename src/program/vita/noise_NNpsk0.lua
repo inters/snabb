@@ -40,8 +40,7 @@ function CipherState:new ()
       aes_gcm_state = ffi.new("gcm_data __attribute__((aligned(16)))"),
       aes_gcm_block = ffi.new("uint8_t[16]"),
       aes_gcm_nonce = ffi.new(self.aes_gcm_nonce_t),
-      hash_state = ffi.new(crypto.blake2s_state_t),
-      ad_hash = ffi.new("uint8_t[16]"),
+      aes_gcm_aad = ffi.new("uint8_t[16]"),
       mac_size = 16
    }
    return setmetatable(o, {__index=CipherState})
@@ -53,6 +52,7 @@ function CipherState:clear ()
    fill(self.aes_gcm_state, sizeof(self.aes_gcm_state))
    fill(self.aes_gcm_block, sizeof(self.aes_gcm_block))
    fill(self.aes_gcm_nonce, sizeof(self.aes_gcm_nonce))
+   fill(self.aes_gcm_aad, sizeof(self.aes_gcm_aad))
 end
 
 function CipherState:copy (cs)
@@ -85,28 +85,23 @@ function CipherState:nonce ()
 end
 
 function CipherState:encryptWithAd (out, plaintext, len, ad)
-   local hash_s, h = self.hash_state, self.ad_hash
-   crypto.blake2s_init(hash_s, sizeof(h))
-   crypto.blake2s_update(hash_s, ad, sizeof(ad))
-   crypto.blake2s_final(hash_s, h, sizeof(h))
-   local aes_gcm_s = self.aes_gcm_state
+   local aes_gcm_s, h = self.aes_gcm_state, self.aes_gcm_aad
+   aes_gcm.aad_prehash(aes_gcm_s, h, ad, sizeof(ad))
    aes_gcm.aesni_gcm_enc_256_avx_gen4(aes_gcm_s,
                                       out, plaintext, len,
                                       self:nonce(),
-                                      h, sizeof(h),
+                                      h, sizeof(ad),
                                       out+len, self.mac_size)
 end
 
 function CipherState:decryptWithAd (out, ciphertext, len, ad)
-   local hash_s, h = self.hash_state, self.ad_hash
-   crypto.blake2s_init(hash_s, sizeof(h))
-   crypto.blake2s_update(hash_s, ad, sizeof(ad))
-   crypto.blake2s_final(hash_s, h, sizeof(h))
-   local aes_gcm_s, auth = self.aes_gcm_state, self.aes_gcm_block
+   local aes_gcm_s, h = self.aes_gcm_state, self.aes_gcm_aad
+   aes_gcm.aad_prehash(aes_gcm_s, h, ad, sizeof(ad))
+   local auth = self.aes_gcm_block
    aes_gcm.aesni_gcm_dec_256_avx_gen4(aes_gcm_s,
                                       out, ciphertext, len,
                                       self:nonce(),
-                                      h, sizeof(h),
+                                      h, sizeof(ad),
                                       auth, sizeof(auth))
    return aes_gcm.auth16_equal(ciphertext+len, auth) == 0
 end
