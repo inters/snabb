@@ -29,7 +29,7 @@ local empty_key = ffi.new("uint8_t[32]")
 local CipherState = {
    aes_gcm_nonce_t = ffi.typeof[[union {
       uint8_t bytes[16];
-      struct { uint32_t pad, benh, benl; } slot;
+      struct { uint32_t salt, benh, benl, pad; } slot;
    } __attribute__((packed, aligned(16)))]]
 }
 
@@ -39,7 +39,7 @@ function CipherState:new ()
       n = 0ULL,
       aes_gcm_state = ffi.new("gcm_data __attribute__((aligned(16)))"),
       aes_gcm_block = ffi.new("uint8_t[16]"),
-      aes_gcm_nonce = ffi.new(self.aes_gcm_nonce_t),
+      aes_gcm_nonce = ffi.new(self.aes_gcm_nonce_t, {slot={pad=0x01000000}}),
       aes_gcm_aad = ffi.new("uint8_t[16]"),
       mac_size = 16
    }
@@ -51,7 +51,7 @@ function CipherState:clear ()
    self.n = 0ULL
    fill(self.aes_gcm_state, sizeof(self.aes_gcm_state))
    fill(self.aes_gcm_block, sizeof(self.aes_gcm_block))
-   fill(self.aes_gcm_nonce, sizeof(self.aes_gcm_nonce))
+   self.aes_gcm_nonce.slot.benh, self.aes_gcm_nonce.slot.benl = 0, 0
    fill(self.aes_gcm_aad, sizeof(self.aes_gcm_aad))
 end
 
