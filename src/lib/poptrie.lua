@@ -60,10 +60,24 @@ function new (init)
          self.directmap = array(Poptrie.base_t, 2^self.s)
       end
    end
-   self.asm_lookup32 = poptrie_lookup.generate(self, 32)
-   self.asm_lookup64 = poptrie_lookup.generate(self, 64)
-   self.asm_lookup128 = poptrie_lookup.generate(self, 128)
+   self:configure_lookup()
    return self
+end
+
+local asm_cache = {}
+
+function Poptrie:configure_lookup ()
+   local config = ("leaf_compression=%s,direct_pointing=%s,s=%s")
+      :format(self.leaf_compression, self.direct_pointing, self.s)
+   if not asm_cache[config] then
+      asm_cache[config] = {
+         poptrie_lookup.generate(self, 32),
+         poptrie_lookup.generate(self, 64),
+         poptrie_lookup.generate(self, 128)
+      }
+   end
+   self.asm_lookup32, self.asm_lookup64, self.asm_lookup128 =
+      unpack(asm_cache[config])
 end
 
 function Poptrie:grow_nodes ()
@@ -203,9 +217,9 @@ function Poptrie:build_node (rib, node_index, default)
          end
       end
    end
-   -- Allocate child nodes (this has to be done before recursing into build()
-   -- because their indices into the nodes array need to be node.base1 + index,
-   -- and build() will advance the node_base.)
+   -- Allocate child nodes (this has to be done before recursing into
+   -- build_node() because their indices into the nodes array need to be
+   -- node.base1 + index, and build() will advance the node_base.)
    local child_nodes = {}
    for index = 0, 2^Poptrie.k - 1 do
       if children[index] then
@@ -520,12 +534,19 @@ function selftest ()
    if pmu.is_available() then
       local t = new{direct_pointing=false}
       local k = {}
-      local numentries = 10000
-      local keysize = 32
+      local numentries = tonumber(
+         lib.getenv("SNABB_POPTRIE_NUMENTRIES") or 10000
+      )
+      local numhit = tonumber(
+         lib.getenv("SNABB_POPTRIE_NUMHIT") or 100
+      )
+      local keysize = tonumber(
+         lib.getenv("SNABB_POPTRIE_KEYSIZE") or 32
+      )
       for entry = 0, numentries - 1 do
          local a, l = rs(), math.random(keysize)
          t:add(a, l, entry)
-         k[entry % 100 + 1] = a
+         k[entry % numhit + 1] = a
       end
       local function build ()
          t:build()
@@ -542,7 +563,8 @@ function selftest ()
       local function lookup128 (iter)
          for i=1,iter do t:lookup128(k[i%#k+1]) end
       end
-      print("PMU analysis (numentries="..numentries..", keysize="..keysize..")")
+      print(("PMU analysis (numentries=%d, numhit=%d, keysize=%d)")
+         :format(numentries, numhit, keysize))
       pmu.setup()
       time("build", build)
       measure("lookup", lookup, 1e5)
