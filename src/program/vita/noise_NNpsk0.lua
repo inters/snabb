@@ -19,10 +19,6 @@ local htonl = lib.htonl
 --    -> e
 --    <- e, ee
 
--- Kludge: our AES-GCM implementation only supports AAD between four and
--- sixteen bytes (multiples of four.) Hence, we use a 16 byte blake2s hash of
--- the AAD.
-
 local name = "Noise_NNpsk0_25519_AESGCM_BLAKE2s"
 local empty_key = ffi.new("uint8_t[32]")
 
