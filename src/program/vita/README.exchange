@@ -1,17 +1,20 @@
-VITA: SIMPLE KEY EXCHANGE (vita-ske, version 2b)
+VITA: SIMPLE KEY EXCHANGE (vita-ske, version 4)
 
- A simple key negotiation protocol based on pre-shared symmetric keys that
- provides authentication, perfect forward secrecy, and is immune to replay
- attacks.
+ A simple key negotiation protocol based on Noise NNpsk0 (authenticated via
+ pre-shared symmetric keys) that provides authentication, perfect forward
+ secrecy, and is immune to replay attacks.
 
 Primitives:
 
- • HMAC: hmac-blake2s, hmac from crypto.lua
-    (key is 256‑bits, output is 256‑bits)
+ • The underlying Noise instance is: Noise_NNpsk0_25519_AESGCM_BLAKE2s
+ • HKDF: hkdf-blake2s, hkdf from crypto.lua
+   (input key material is 256‑bits, output is adjustable)
+ • AES-GCM: aes256-gcm from lib/ipsec/aes_gcm_avx.dasl
+   (key is 256‑bits, block size is 128‑bits)
  • DH: curve25519, sandy2x
    (keys are 256‑bits, output is 256‑bits)
  • HASH: blake2s, official SSE implementation
-   (output is choosen to be 160‑bits) 
+   (output is up to 256‑bits) 
 
 Notational Conventions:
 
@@ -24,92 +27,90 @@ Notational Conventions:
  a ‖ b
   Denotes a concatenated with b.
 
+ P (x)
+  Denotes the Noise message pattern P with x as its payload.
+
 Description:
 
- Let k be a pre-shared symmetric key. Let r be a “Security Parameter Index”
- (SPI).
+ Let k be a pre-shared symmetric key of 32 bytes. Let r be the
+ “Security Parameter Index” (SPI) for the parent “Security Association” (SA),
+ i.e. the route.
 
  Two parties participate in the protocol: an initiator and a responder.
 
- ----
-
- The initiator behaves as follows: Let n1 and n2 be random 256‑bit nonces,
- where n1 is chosen by us. Let s1 be a random ephemeral key and p1 its
- corresponding public key chosen by us, and p2 be a public key chosen by the
- other party. Let spi1 and spi2 be child SPIs, where spi1 is choosen by us.
-
-  ← n1
-  → n2 ‖ c
-
- Ensure c = HMAC(k, r ‖ n1 ‖ n2). Let h1 = HMAC(k, r ‖ n1 ‖ n2 ‖ spi1 ‖ p1).
-
-  ← n1 ‖ spi1 ‖ p1 ‖ h1
-  → spi2 ‖ p2 ‖ h2
-
- Ensure that h2 = HMAC(k, r ‖ n2 ‖ n1 ‖ spi2 ‖ p2).
-
- Let q = DH(s1, p2), and ensure that p2 is a valid argument. Let
- rx = HASH(q ‖ p1 ‖ p2) and tx = HASH(q ‖ p2 ‖ p1) be key material. Assign
- (spi1, rx) to the inbound “Security Association” (SA), and (spi2, tx) to the
- outbound SA.
-
- Discard s1, n1, n2, p1, and p2.
+ Let vi and vr be four byte version identifiers choosen by the initiator and
+ the responder respectively. Let aead be a 32 byte identifer for an AEAD
+ algorithm chosen by the responder. Let n be a 32 byte random nonce chosen by
+ the responder.
 
  ----
 
- The responder behaves as follows: Let nc, n1 and n2 be random 256‑bit nonces,
- where n1 is chosen by us. Let s1 be a random ephemeral key and p1 its
- corresponding public key chosen by us, and p2 be a public key chosen by the
- other party. Let spi1 and spi2 be child SPIs, where spi1 is choosen by us.
+ The initiator behaves as follows:
 
-  ← nc
+  ← vi
+  → vr ‖ aead ‖ n
 
- Let c = HMAC(k, r ‖ nc ‖ n1).
+ Ensure vr and aead are acceptable. Initialize NNpsk0 with k, and
+ prologue = vr ‖ r ‖ aead ‖ n. Let rxspi be a SPI choosen by us. Let txspi be a
+ SPI choosen by the responder.
 
-  → n1 ‖ c
-  ← n2 ‖ spi2 ‖ p2 ‖ h2
+  ← psk, e (rxspi)
+  → e, ee (txspi)
 
- Ensure that h2 = HMAC(k, r ‖ n2 ‖ n1 ‖ spi2 ‖ p2). Let q = DH(s1, p2), and
- ensure that p2 is a valid argument. Let rx = HASH(q ‖ p1 ‖ p2) and
- tx = HASH(q ‖ p2 ‖ p1) be key material. Assign (spi1, rx) to the inbound
- “Security Association” (SA), and (spi2, tx) to the outbound SA.
- Let h1 = HMAC(k, r ‖ n1 ‖ n2 ‖ spi1 ‖ p1).
+ Ensure that the response is valid. Split the Noise CipherState into cs1 and
+ cs2. Assign (rxspi, cs1) to the inbound SA, and (txspi, cs2) to the outbound
+ SA.
 
-  → spi1 ‖ p1 ‖ h1
+ Discard all protocol state.
 
- Discard s1, n1, n2, p1, and p2.
+ ----
+
+ The responder behaves as follows: Initialize NNpsk0 with k, and
+ prologue = vr ‖ r ‖ aead ‖ n.
+
+  → vi
+  ← vr ‖ aead ‖ n
+
+ This initial exchange must not effect state, and may be repeated an arbitrary
+ number of times.
+
+ Let txspi be a SPI choosen by the responder.
+
+  → psk, e (txspi)
+
+ Ensure that the response is valid. Let rxspi be a SPI choosen by us.
+
+  ← e, ee (rxspi)
+
+ Split the Noise CipherState into cs1 and cs2. Assign (rxspi, cs2) to the
+ inbound SA, and (txspi, cs1) to the outbound SA.
+
+ Discard all protocol state.
 
 Security Proof:
 
- Assuming an attacker can not guess k, and n1 has enough entropy so that the
- probability that the tuple (n1, p2) has occurred before is negligible, they
- are unable to produce the value h2 = HMAC(k, r ‖ n2 ‖ n1 ‖ spi2 ‖ p2), and
- thus are unable to complete a key exchange.
-
- Assuming an attacker can not guess s1 or s2, they are unable to produce
- q = DH(s1, p2) or q = DH(s2, p1), and subsequently derive rx or tx, and thus
- perfect forward secrecy is provided.
-
- A party that adheres to the protocol will not produce a tuple (spi1, p1, h1)
- unless it has previously authenticated either the tuple (n2, spi2, p2, h2), or
- the tuple (n2, c), and thus can not be used as an oracle.
+ We rely on the proven properties of the Noise protocol framework. In addition
+ we assume that the nonce n has enough entropy so that the probability that an
+ identical prologue has occurred before is negligible, rendering the protocol
+ immune to message replay.
 
 Notes:
 
- • The outputs of this protocol are choosen specifically to support the AES-GCM
-   algorithm with 128‑bit keys as used in an IPsec ESP data plane.
+ • The AD is hashed to 16 bytes with blake2s before being supplied to
+   aes256-gcm. This is due to a limitation of the maximum AD length of our
+   aes-gcm implementation.
 
- • Future versions of this protocol may introduce the use of a key derivation
-   function (KDF), such as HKDF (RFC 5869), to derive additional key material
-   from rx or tx.
+ • The vi value is transmitted solely for informational purposes and has no
+   effect on the protocol. The responder MUST NOT consider it to, i.e.,
+   downgrade vr or select an aead value.
 
 References:
 
- • The spiped protocol:
-   https://github.com/Tarsnap/spiped/blob/d1e62a8/DESIGN.md#spiped-design
+ • The Noise protocol framework:
+   http://noiseprotocol.org/noise.html
 
- • Additional discussion of the spiped protocol:
-   https://github.com/Tarsnap/spiped/issues/151
+ • HKDF: HMAC-based Extract-and-Expand Key Derivation Function (RFC 5869):
+   https://tools.ietf.org/html/rfc5869
 
  • HMAC: Keyed-Hashing for Message Authentication (RFC 2104):
    https://tools.ietf.org/html/rfc2104

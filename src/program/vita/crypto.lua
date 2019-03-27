@@ -50,6 +50,8 @@ function blake2s_init (...) assert(C.blake2s_init(...) == 0) end
 function blake2s_update (...) assert(C.blake2s_update(...) == 0) end
 function blake2s_final (...) assert(C.blake2s_final(...) == 0) end
 
+-- HMAC-blake2s (https://tools.ietf.org/html/rfc2104)
+
 ffi.cdef[[
   struct hmac_blake2s_state {
     uint8_t i[BLAKE2S_BLOCKBYTES], o[BLAKE2S_BLOCKBYTES];
@@ -87,6 +89,41 @@ function hmac_blake2s_final (s, out)
    blake2s_update(s.s, s.o, blake2s_BLOCKBYTES)
    blake2s_update(s.s, s.h, blake2s_OUTBYTES)
    blake2s_final(s.s, out, blake2s_OUTBYTES)
+end
+
+-- HKDF-blake2s (https://tools.ietf.org/html/rfc5869)
+
+ffi.cdef[[
+  struct hkdf_blake2s_state {
+    uint8_t prk[BLAKE2S_OUTBYTES], ctr[1], okm[BLAKE2S_OUTBYTES];
+    struct hmac_blake2s_state s;
+  };
+]]
+
+hkdf_blake2s_state_t = ffi.typeof("struct hkdf_blake2s_state")
+
+function hkdf_blake2s (s, okm, l, ikm, salt, info, infolen)
+   -- HKDF-Extract(salt, IKM) -> PRK
+   assert(ffi.sizeof(salt) == blake2s_OUTBYTES, "salt < blake2s_OUTBYTES")
+   hmac_blake2s_init(s.s, salt, ffi.sizeof(salt))
+   assert(ffi.sizeof(ikm) == blake2s_OUTBYTES, "ikm < blake2s_OUTBYTES")
+   hmac_blake2s_update(s.s, ikm, ffi.sizeof(ikm))
+   hmac_blake2s_final(s.s, s.prk, ffi.sizeof(s.prk))
+   -- HKDF-Expand(PRK, info, L) -> OKM
+   assert(l > 0, "negative l")
+   local t = okm
+   s.ctr[0] = 0
+   for w = 0, l-1, blake2s_OUTBYTES do
+      hmac_blake2s_init(s.s, s.prk, ffi.sizeof(s.prk))
+      if s.ctr[0] > 0 then hmac_blake2s_update(s.s, t, blake2s_OUTBYTES) end
+      if info then hmac_blake2s_update(s.s, info, infolen) end
+      s.ctr[0] = (s.ctr[0] + 1) % 2^8
+      hmac_blake2s_update(s.s, s.ctr, 1)
+      hmac_blake2s_final(s.s, s.okm)
+      t = okm + w
+      ffi.copy(t, s.okm, math.min(l - w, blake2s_OUTBYTES))
+   end
+   ffi.fill(s.okm, ffi.sizeof(s.okm))
 end
 
 -- curve25519 FFI
@@ -131,6 +168,20 @@ function selftest ()
    assert(ffi.string(h, blake2s_OUTBYTES) == lib.hexundump(
              "51477cc5bdf1faf952cf97bb934ee936de1f4d5d7448a84eeb6f98d23b392166",
              blake2s_OUTBYTES), "wrong hmac_blake2s result")
+   -- test hkdf_blake2s against test vectors
+   local s = ffi.new(hkdf_blake2s_state_t)
+   local ikm = ffi.new("uint8_t[32]")
+   local salt = ffi.new("uint8_t[32]")
+   local info = ffi.new("uint8_t[7]")
+   local okm = ffi.new("uint8_t[64]")
+   hkdf_blake2s(s, okm, ffi.sizeof(okm), ikm, salt, info, 7)
+   assert(ffi.string(okm, ffi.sizeof(okm)) == lib.hexundump(
+                        "baa04a3963902ccdb86393e08eeb3f2fb8cf15f817a33628ae42764c990bdeccaeab047ad9f557af0faac0b734150d1175f3a8cdd12631eb32878f3a2600f29c",
+                        ffi.sizeof(okm)), "wrong hkdf_blake2s result")
+   hkdf_blake2s(s, okm, 13, ikm, salt)
+   assert(ffi.string(okm, 13) == lib.hexundump(
+                        "1090894613df8aef670b0b867e",
+                        13), "wrong hkdf_blake2s result (2)")
    -- try a DH
    local s1 = ffi.new("uint8_t[?]", curve25519_SCALARBYTES)
    random_bytes(s1, curve25519_SCALARBYTES)
