@@ -204,7 +204,8 @@ function data_grammar_from_schema(schema, is_config)
    handlers['leaf-list'] = function(node)
       if node.config ~= is_config then return end
       local t = elide_unions(node.type)
-      return {type='array', element_type=t, ctype=value_ctype(t)}
+      return {type='array', element_type=t, ctype=value_ctype(t),
+              min_elements=node.min_elements, max_elements=node.max_elements}
    end
    function handlers.list(node)
       local norm = {}
@@ -234,7 +235,8 @@ function data_grammar_from_schema(schema, is_config)
               native_key=table_native_key(keys),
               key_ctype=struct_ctype(keys),
               value_ctype=struct_ctype(values),
-              unique = node.unique}
+              unique = node.unique,
+              min_elements=node.min_elements, max_elements=node.max_elements}
    end
    function handlers.leaf(node, for_key)
       if node.config ~= is_config and not for_key then return end
