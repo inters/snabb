@@ -76,6 +76,12 @@ module(...,package.seeall)
 --        protocol_errors         count of requests that violated the protocol
 --                                (order of messages and message format)
 --
+--        version_errors          count of challenge requests with incompatible
+--                                protocol versions (initiator)
+--
+--        aead_errors             count of challenge requests with incompatible
+--                                AEAD proposals.
+--
 --        authentication_errors   count of requests that were detected to be
 --                                unauthentic (had an erroneous MAC, this
 --                                includes packets corrupted during transit)
@@ -108,7 +114,7 @@ module(...,package.seeall)
 --
 --        outbound_sa_updated     count of outbound SAs that were updated
 --
---  2. The Protocol subsystem implements vita-ske2 (the cryptographic key
+--  2. The Protocol subsystem implements vita-ske 4 (the cryptographic key
 --     exchange protocol defined in README.exchange) as two finite-state
 --     machines (responder and initiator).
 --
@@ -120,13 +126,13 @@ module(...,package.seeall)
 --     to its public API methods. I.e. it is driven by calling the methods
 --
 --        initiate_exchange
---        receive_nonce
+--        receive_knock
 --        offer_challenge
 --        receive_challenge
---        offer_key
---        receive_key
---        offer_nonce_key
---        receive_nonce_key
+--        offer_proposal
+--        receive_proposal
+--        offer_agreement
+--        receive_agreement
 --        reset_if_expired
 --
 --     which uphold invariants that should ensure any resulting key material is
@@ -157,6 +163,7 @@ local ipv6 = require("lib.protocol.ipv6")
 local yang = require("lib.yang.yang")
 local schemata = require("program.vita.schemata")
 local crypto = require("program.vita.crypto")
+local noise_NNpsk0 = require("program.vita.noise_NNpsk0")
 
 PROTOCOL = 99 -- “Any private encryption scheme”
 
@@ -176,6 +183,8 @@ KeyManager = {
       rxerrors = {counter},
       route_errors = {counter},
       protocol_errors = {counter},
+      version_errors = {counter},
+      parameter_errors = {counter},
       authentication_errors = {counter},
       public_key_errors = {counter},
       negotiations_initiated = {counter},
@@ -198,14 +207,14 @@ function KeyManager:new (conf)
       ip6 = ipv6:new({}),
       transport = Transport.header:new({}),
       transport_in = Transport.header:new({}),
-      nonce_message = Protocol.nonce_message:new({}),
-      nonce_message_in = Protocol.nonce_message:new({}),
-      key_message = Protocol.key_message:new({}),
-      key_message_in = Protocol.key_message:new({}),
+      knock_message = Protocol.knock_message:new({}),
+      knock_message_in = Protocol.knock_message:new({}),
       challenge_message = Protocol.challenge_message:new({}),
       challenge_message_in = Protocol.challenge_message:new({}),
-      nonce_key_message = Protocol.nonce_key_message:new({}),
-      nonce_key_message_in = Protocol.nonce_key_message:new({}),
+      proposal_message = Protocol.proposal_message:new({}),
+      proposal_message_in = Protocol.proposal_message:new({}),
+      agreement_message = Protocol.agreement_message:new({}),
+      agreement_message_in = Protocol.agreement_message:new({}),
       sa_db_updated = false,
       sa_db_commit_throttle = lib.throttle(1),
       rate_bucket = KeyManager.max_pps,
@@ -396,34 +405,34 @@ end
 function KeyManager:negotiate (route)
    -- Inititate AKE if the protocol fsm permits (i.e., is in the initiator
    -- state.)
-   local ecode, nonce_message =
-      route.initiator:initiate_exchange(self.nonce_message)
+   local ecode, knock_message =
+      route.initiator:initiate_exchange(self.knock_message)
    if not ecode then
       counter.add(self.shm.negotiations_initiated)
       self.audit:log("Initiating negotiation for '"..route.id.."'")
-      link.transmit(self.output.output, self:request(route, nonce_message))
+      link.transmit(self.output.output, self:request(route, knock_message))
    else assert(ecode == Protocol.code.protocol) end
 end
 
 function KeyManager:handle_negotiation (request)
    local route, message = self:parse_request(request)
 
-   if not (self:handle_nonce_request(route, message)
-           or self:handle_key_request(route, message)
+   if not (self:handle_knock_request(route, message)
            or self:handle_challenge_request(route, message)
-           or self:handle_nonce_key_request(route, message)) then
+           or self:handle_proposal_request(route, message)
+           or self:handle_agreement_request(route, message)) then
       counter.add(self.shm.rxerrors)
       self.audit:log(("Rejected invalid negotiation request for '%s'")
             :format(route or "<unknown>"))
    end
 end
 
-function KeyManager:handle_nonce_request (route, message)
-   if not route or message ~= self.nonce_message_in then return end
+function KeyManager:handle_knock_request (route, message)
+   if not route or message ~= self.knock_message_in then return end
 
-   -- Receive nonce message if the protocol fsm permits
+   -- Receive challenge request message if the protocol fsm permits
    -- (responder -> offer_challenge), otherwise reject the message and return.
-   local ecode = route.responder:receive_nonce(message)
+   local ecode = route.responder:receive_knock(message)
    if ecode == Protocol.code.protocol then
       counter.add(self.shm.protocol_errors)
       return false
@@ -446,25 +455,29 @@ function KeyManager:handle_challenge_request (route, message)
    if not route or message ~= self.challenge_message_in then return end
 
    -- Receive challenge message if the protocol fsm permits
-   -- (accept_challenge -> offer_nonce_key), reject the message and return
+   -- (accept_challenge -> offer_proposal), reject the message and return
    -- otherwise or if...
    local ecode = route.initiator:receive_challenge(message)
    if ecode == Protocol.code.protocol then
       counter.add(self.shm.protocol_errors)
       return false
-   elseif ecode == Protocol.code.authentication then
-      -- ...the message failed to authenticate.
-      counter.add(self.shm.authentication_errors)
+   elseif ecode == Protocol.code.version then
+      -- ...the protocol version is incompatible,
+      counter.add(self.shm.version_errors)
+      return false
+   elseif ecode == Protocol.code.parameter then
+      -- ...or the proposed parameters are incompatible.
+      counter.add(self.shm.parameter_errors)
       return false
    else assert(not ecode) end
 
    counter.add(self.shm.challenges_accepted)
-   self.audit:log("Accepted challenge for '"..route.id.."'")
+   self.audit:log("Received challenge for '"..route.id.."'")
 
-   -- If we got here we should offer our nonce and public key
-   -- (offer_nonce_key -> accept_key).
-   local response = self.nonce_key_message
-   local ecode, response = route.initiator:offer_nonce_key(response)
+   -- If we got here we should offer an authenticated key exchange proposal
+   -- (offer_proposal -> accept_agreement).
+   local response = self.proposal_message
+   local ecode, response = route.initiator:offer_proposal(response)
    assert(not ecode)
 
    self.audit:log("Proposing key exchange for '"..route.id.."'")
@@ -473,14 +486,13 @@ function KeyManager:handle_challenge_request (route, message)
    return true
 end
 
-function KeyManager:handle_nonce_key_request (route, message)
-   if not route or message ~= self.nonce_key_message_in then return end
+function KeyManager:handle_proposal_request (route, message)
+   if not route or message ~= self.proposal_message_in then return end
 
-   -- Receive an authenticated, combined nonce and key message if the protocol
-   -- fsm permits (responder -> offer_key), reject the message and return
-   -- otherwise or if...
-   local ecode, inbound_sa, outbound_sa =
-      route.responder:receive_nonce_key(message)
+   -- Receive an authenticated key exchange proposal if the protocol fsm
+   -- permits (responder -> offer_agreement), reject the message and return
+   -- otherwise if...
+   local ecode = route.responder:receive_proposal(message)
    if ecode == Protocol.code.protocol then
       counter.add(self.shm.protocol_errors)
       return false
@@ -494,9 +506,10 @@ function KeyManager:handle_nonce_key_request (route, message)
       return false
    else assert(not ecode) end
 
-   -- If we got here we should respond with our own public key
-   -- (offer_key -> responder).
-   local ecode, response = route.responder:offer_key(self.key_message)
+   -- If we got here we should respond with an agreement
+   -- (offer_agreement -> responder).
+   local ecode, response, inbound_sa, outbound_sa =
+      route.responder:offer_agreement(self.agreement_message)
    assert(not ecode)
 
    link.transmit(self.output.output, self:request(route, response))
@@ -519,13 +532,14 @@ function KeyManager:handle_nonce_key_request (route, message)
    return true
 end
 
-function KeyManager:handle_key_request (route, message)
-   if not route or message ~= self.key_message_in then return end
+function KeyManager:handle_agreement_request (route, message)
+   if not route or message ~= self.agreement_message_in then return end
 
-   -- Receive an authenticated key message if the protocol fsm permits
-   -- (accept_key -> initiator), reject the message and return otherwise or
-   -- if...
-   local ecode, inbound_sa, outbound_sa = route.initiator:receive_key(message)
+   -- Receive an authenticated key exchange agreement if the protocol fsm
+   -- permits (accept_agreement -> initiator), reject the message and return
+   -- otherwise or if...
+   local ecode, inbound_sa, outbound_sa =
+      route.initiator:receive_agreement(message)
    if ecode == Protocol.code.protocol then
       counter.add(self.shm.protocol_errors)
       return false
@@ -534,7 +548,7 @@ function KeyManager:handle_key_request (route, message)
       counter.add(self.shm.authentication_errors)
       return false
    elseif ecode == Protocol.code.parameter then
-      -- ...the message offered a bad public key.
+      -- ...or the proposed DH parameters are unsafe.
       counter.add(self.shm.public_key_errors)
       return false
    else assert(not ecode) end
@@ -643,14 +657,14 @@ function KeyManager:request (route, message)
 
    self.transport:new({
          spi = route.spi,
-         message_type = (message == self.nonce_message
-                            and Transport.message_type.nonce)
-                     or (message == self.key_message
-                            and Transport.message_type.key)
+         message_type = (message == self.knock_message
+                            and Transport.message_type.knock)
                      or (message == self.challenge_message
                             and Transport.message_type.challenge)
-                     or (message == self.nonce_key_message
-                            and Transport.message_type.nonce_key)
+                     or (message == self.proposal_message
+                            and Transport.message_type.proposal)
+                     or (message == self.agreement_message
+                            and Transport.message_type.agreement)
    })
 
    packet.append(request, self.transport:header(), Transport.header:sizeof())
@@ -683,14 +697,14 @@ function KeyManager:parse_request (request)
    local data = request.data + Transport.header:sizeof()
    local length = request.length - Transport.header:sizeof()
    local message =
-         (transport:message_type() == Transport.message_type.nonce
-             and self.nonce_message_in:new_from_mem(data, length))
-      or (transport:message_type() == Transport.message_type.key
-             and self.key_message_in:new_from_mem(data, length))
+         (transport:message_type() == Transport.message_type.knock
+             and self.knock_message_in:new_from_mem(data, length))
       or (transport:message_type() == Transport.message_type.challenge
              and self.challenge_message_in:new_from_mem(data, length))
-      or (transport:message_type() == Transport.message_type.nonce_key
-             and self.nonce_key_message_in:new_from_mem(data, length))
+      or (transport:message_type() == Transport.message_type.proposal
+             and self.proposal_message_in:new_from_mem(data, length))
+      or (transport:message_type() == Transport.message_type.agreement
+             and self.agreement_message_in:new_from_mem(data, length))
    if not message then
       counter.add(self.shm.protocol_errors)
       return
@@ -724,7 +738,7 @@ function KeyManager:commit_sa_db ()
    )
 end
 
--- Vita: simple key exchange (vita-ske, version 2b). See README.exchange
+-- Vita: simple key exchange (vita-ske, version 4). See README.exchange
 
 Message = subClass(header)
 function Message:new_from_mem (mem, size)
@@ -734,18 +748,22 @@ function Message:new_from_mem (mem, size)
 end
 
 Protocol = {
+   version = 0x0004,
+   -- protocol states: responder states are even and initiator states are odd
+   -- (this is important!)
    status = { responder = 0, initiator = 1,
-              offer_challenge = 2, accept_challenge = 3,
-              offer_key = 4, offer_nonce_key = 5, accept_key = 7 },
-   code = { protocol = 0, authentication = 1, parameter = 2, expired = 3},
-   spi_counter = 0,
+              offer_challenge = 2, accept_challenge = 3, offer_proposal = 5,
+              offer_agreement = 6, accept_agreement = 7 },
+   code = { protocol = 0, authentication = 1, parameter = 2, expired = 3,
+            version = 4 },
    preshared_key_bytes = 32,
-   public_key_bytes = crypto.curve25519_BYTES,
-   secret_key_bytes = crypto.curve25519_SCALARBYTES,
-   auth_code_bytes = crypto.blake2s_OUTBYTES,
-   nonce_bytes = 32,
-   spi_t = ffi.typeof("union { uint32_t u32; uint8_t bytes[4]; }"),
-   buffer_t = ffi.typeof("uint8_t[?]"),
+   spi_counter = 0,
+   -- payload can be up to 32 bytes (see noise_NNpsk0.HanshakeState.message_t)
+   payload_t = ffi.typeof[[
+      struct {
+         uint32_t spi;
+      } __attribute__((packed))
+   ]],
    key_t = ffi.typeof[[
       union {
          uint8_t bytes[20];
@@ -755,59 +773,63 @@ Protocol = {
          } __attribute__((packed)) slot;
       }
    ]],
-   nonce_message = subClass(Message),
+   prologue = subClass(header),
+   knock_message = subClass(Message),
    challenge_message = subClass(Message),
-   key_message = subClass(Message),
-   nonce_key_message = subClass(Message)
+   proposal_message = subClass(Message),
+   agreement_message = subClass(Message)
 }
 
-Protocol.nonce_message:init({
-      [1] = ffi.typeof([[
-            struct {
-               uint8_t nonce[]]..Protocol.nonce_bytes..[[];
-            } __attribute__((packed))
-      ]])
+Protocol.prologue:init({
+      [1] = ffi.typeof[[
+         struct {
+            uint32_t version, route_spi;
+            uint8_t aead[32], nonce[32];
+         } __attribute__((packed))
+      ]]
 })
 
-Protocol.challenge_message:init({
-      [1] = ffi.typeof([[
-            struct {
-               uint8_t nonce[]]..Protocol.nonce_bytes..[[];
-               uint8_t auth_code[]]..Protocol.auth_code_bytes..[[];
-            } __attribute__((packed))
-      ]])
-})
-
-Protocol.key_message:init({
-      [1] = ffi.typeof([[
-            struct {
-               uint8_t spi[]]..ffi.sizeof(Protocol.spi_t)..[[];
-               uint8_t public_key[]]..Protocol.public_key_bytes..[[];
-               uint8_t auth_code[]]..Protocol.auth_code_bytes..[[];
-            } __attribute__((packed))
-      ]])
-})
-
-Protocol.nonce_key_message:init({
-      [1] = ffi.typeof([[
-            struct {
-               uint8_t nonce[]]..Protocol.nonce_bytes..[[];
-               uint8_t spi[]]..ffi.sizeof(Protocol.spi_t)..[[];
-               uint8_t public_key[]]..Protocol.public_key_bytes..[[];
-               uint8_t auth_code[]]..Protocol.auth_code_bytes..[[];
-            } __attribute__((packed))
-      ]])
-})
-
--- Public API
-
-function Protocol.nonce_message:new (config)
-   local o = Protocol.nonce_message:superClass().new(self)
+function Protocol.prologue:new (config)
+   local o = Protocol.prologue:superClass().new(self)
+   o:version(config.version or Protocol.version)
+   o:route_spi(config.route_spi)
+   o:aead(config.aead)
    o:nonce(config.nonce)
    return o
 end
 
-function Protocol.nonce_message:nonce (nonce)
+function Protocol.prologue:version (version)
+   local h = self:header()
+   if version ~= nil then
+      h.version = lib.htonl(version)
+   end
+   return lib.ntohl(h.version)
+end
+
+function Protocol.prologue:route_spi (spi)
+   local h = self:header()
+   if spi ~= nil then
+      h.route_spi = lib.htonl(spi)
+   end
+   return lib.ntohl(h.route_spi)
+end
+
+function Protocol.prologue:aead (aead)
+   local h = self:header()
+   if aead ~= nil then
+      local len = (type(aead) == 'string' and #aead) or ffi.sizeof(aead)
+      assert(len <= ffi.sizeof(h.aead), "AEAD identifier overflow")
+      ffi.copy(h.aead, aead, len)
+   end
+   return h.aead
+end
+
+function Protocol.prologue:aead_eq (aead)
+   assert(ffi.sizeof(aead) == ffi.sizeof(self:aead()))
+   return crypto.bytes_equal(self:aead(), aead, ffi.sizeof(self:aead()))
+end
+
+function Protocol.prologue:nonce (nonce)
    local h = self:header()
    if nonce ~= nil then
       ffi.copy(h.nonce, nonce, ffi.sizeof(h.nonce))
@@ -815,184 +837,208 @@ function Protocol.nonce_message:nonce (nonce)
    return h.nonce
 end
 
+Protocol.knock_message:init({
+      [1] = ffi.typeof([[
+            struct {
+               uint32_t version;
+            } __attribute__((packed))
+      ]])
+})
+
+Protocol.challenge_message:init({
+      [1] = ffi.typeof([[
+            struct {
+               uint32_t version;
+               uint8_t aead[32], nonce[32];
+            } __attribute__((packed))
+      ]])
+})
+
+Protocol.proposal_message:init({
+      [1] = noise_NNpsk0.HandshakeState.message_t
+})
+
+Protocol.agreement_message:init({
+      [1] = noise_NNpsk0.HandshakeState.message_t
+})
+
+-- Public API
+
+function Protocol.knock_message:new ()
+   local o = Protocol.knock_message:superClass().new(self)
+   o:version(Protocol.version)
+   return o
+end
+
+Protocol.knock_message.version = Protocol.prologue.version
+
 function Protocol.challenge_message:new (config)
    local o = Protocol.challenge_message:superClass().new(self)
+   o:version(config.version or Protocol.version)
+   o:aead(config.aead)
    o:nonce(config.nonce)
-   o:auth_code(config.auth_code)
    return o
 end
 
-Protocol.challenge_message.nonce = Protocol.nonce_message.nonce
+Protocol.challenge_message.version = Protocol.prologue.version
+Protocol.challenge_message.aead = Protocol.prologue.aead
+Protocol.challenge_message.nonce = Protocol.prologue.nonce
 
-function Protocol.challenge_message:auth_code (auth_code)
-   local h = self:header()
-   if auth_code ~= nil then
-      ffi.copy(h.auth_code, auth_code, ffi.sizeof(h.auth_code))
-   end
-   return h.auth_code
-end
-
-function Protocol.key_message:new (config)
-   local o = Protocol.key_message:superClass().new(self)
+function Protocol.proposal_message:new (config)
+   local o = Protocol.proposal_message:superClass().new(self)
    o:spi(config.spi)
-   o:public_key(config.public_key)
-   o:auth_code(config.auth_code)
    return o
 end
 
-function Protocol.key_message:spi (spi)
+function Protocol.proposal_message:spi (spi)
    local h = self:header()
+   local payload = ffi.cast(ffi.typeof("$ *", Protocol.payload_t), h.payload)
    if spi ~= nil then
-      ffi.copy(h.spi, spi, ffi.sizeof(h.spi))
+      payload.spi = lib.htonl(spi)
    end
-   return h.spi
+   return lib.ntohl(payload.spi)
 end
 
-function Protocol.key_message:public_key (public_key)
-   local h = self:header()
-   if public_key ~= nil then
-      ffi.copy(h.public_key, public_key, ffi.sizeof(h.public_key))
-   end
-   return h.public_key
-end
-
-Protocol.key_message.auth_code = Protocol.challenge_message.auth_code
-
-function Protocol.nonce_key_message:new (config)
-   local o = Protocol.nonce_key_message:superClass().new(self)
-   o:nonce(config.nonce)
+function Protocol.agreement_message:new (config)
+   local o = Protocol.agreement_message:superClass().new(self)
    o:spi(config.spi)
-   o:public_key(config.public_key)
-   o:auth_code(config.auth_code)
    return o
 end
 
-Protocol.nonce_key_message.nonce = Protocol.nonce_message.nonce
-Protocol.nonce_key_message.spi = Protocol.key_message.spi
-Protocol.nonce_key_message.public_key = Protocol.key_message.public_key
-Protocol.nonce_key_message.auth_code = Protocol.challenge_message.auth_code
+Protocol.agreement_message.spi = Protocol.proposal_message.spi
 
-function Protocol:new (initial_status, r, key, timeout)
+function Protocol:new (initial_status, route_spi, key, timeout)
+   local status = assert(Protocol.status[initial_status],
+                         "Invalid status: "..initial_status)
+   local initiator = status % 2 ~= 0
+   local psk = ffi.new("uint8_t[?]", Protocol.preshared_key_bytes)
+   ffi.copy(psk, key, ffi.sizeof(psk))
    local o = {
-      status = assert(Protocol.status[initial_status]),
+      status = status,
       timeout = timeout,
       deadline = false,
-      k = ffi.new(Protocol.buffer_t, Protocol.preshared_key_bytes),
-      r = ffi.new(Protocol.spi_t),
-      n1 = ffi.new(Protocol.buffer_t, Protocol.nonce_bytes),
-      n2 = ffi.new(Protocol.buffer_t, Protocol.nonce_bytes),
-      spi1 = ffi.new(Protocol.spi_t),
-      spi2 = ffi.new(Protocol.spi_t),
-      s1 = ffi.new(Protocol.buffer_t, Protocol.secret_key_bytes),
-      p1 = ffi.new(Protocol.buffer_t, Protocol.public_key_bytes),
-      p2 = ffi.new(Protocol.buffer_t, Protocol.public_key_bytes),
-      h  = ffi.new(Protocol.buffer_t, Protocol.auth_code_bytes),
-      q  = ffi.new(Protocol.buffer_t, Protocol.secret_key_bytes),
-      e  = ffi.new(Protocol.key_t),
-      hmac_state = ffi.new(crypto.hmac_blake2s_state_t),
-      hash_state = ffi.new(crypto.blake2s_state_t)
+      spi = 0,
+      remote_spi = 0,
+      prologue = Protocol.prologue:new{
+         route_spi = route_spi,
+         aead = "aes-gcm-16-icv",
+      },
+      handshake = noise_NNpsk0.HandshakeState:new(psk, initiator),
+      rx = ffi.new(Protocol.key_t),
+      tx = ffi.new(Protocol.key_t)
    }
-   ffi.copy(o.k, key, ffi.sizeof(o.k))
-   o.r.u32 = lib.htonl(r)
    return setmetatable(o, {__index=Protocol}):reset()
 end
 
-function Protocol:initiate_exchange (nonce_message)
-   assert(nonce_message:class() == Protocol.nonce_message)
+function Protocol:initiate_exchange (knock_msg)
+   assert(knock_msg:class() == Protocol.knock_message)
    if self.status == Protocol.status.initiator then
       -- initiator -> accept_challenge
       self:set_deadline()
       self.status = Protocol.status.accept_challenge
-      return nil, self:send_nonce(nonce_message)
+      return nil, knock_msg:new{}
    else return Protocol.code.protocol end
 end
 
-function Protocol:receive_nonce (nonce_message)
-   assert(nonce_message:class() == Protocol.nonce_message)
+function Protocol:receive_knock (knock_msg)
+   assert(knock_msg:class() == Protocol.knock_message)
    if self.status == Protocol.status.responder then
       -- responder -> offer_challenge
-      self:intern_nonce(nonce_message)
       self.status = Protocol.status.offer_challenge
    else return Protocol.code.protocol end
 end
 
-function Protocol:offer_challenge (challenge_message)
-   assert(challenge_message:class() == Protocol.challenge_message)
+function Protocol:offer_challenge (challenge_msg)
+   assert(challenge_msg:class() == Protocol.challenge_message)
    if self.status == Protocol.status.offer_challenge then
       -- offer_challenge -> responder
       self.status = Protocol.status.responder
-      return nil, self:send_challenge(challenge_message)
+      return nil, challenge_msg:new{
+            aead = self.prologue:aead(),
+            nonce = self.prologue:nonce()
+      }
    else return Protocol.code.protocol end
 end
 
-function Protocol:receive_challenge (challenge_message)
-   assert(challenge_message:class() == Protocol.challenge_message)
+function Protocol:receive_challenge (challenge_msg)
+   assert(challenge_msg:class() == Protocol.challenge_message)
    if self.status == Protocol.status.accept_challenge then
-      -- accept_challenge -> offer_nonce_key
-      if self:intern_challenge_nonce(challenge_message) then
-         self.status = Protocol.status.offer_nonce_key
-      else return Protocol.code.authentication end
-   else return Protocol.code.protocol end
-end
-
-function Protocol:offer_key (key_message)
-   assert(key_message:class() == Protocol.key_message)
-   if self.status == Protocol.status.offer_key then
-      -- offer_key -> responder
-      local response = self:send_key(key_message)
-      self:reset()
-      self.status = Protocol.status.responder
-      return nil, response
-   else return Protocol.code.protocol end
-end
-
-function Protocol:receive_key (key_message)
-   assert(key_message:class() == Protocol.key_message)
-   if self.status == Protocol.status.accept_key then
-      -- accept_key -> initiator
-      if self:intern_key(key_message) then
-         local ok, inbound_sa, outbound_sa = self:derive_ephemeral_keys()
-         if ok then
-            self:reset()
-            self.status = Protocol.status.initiator
-            return nil, inbound_sa, outbound_sa
+      -- accept_challenge -> offer_proposal
+      if challenge_msg:version() == self.prologue:version() then
+         local aead = self.prologue:aead()
+         if self.prologue:aead_eq(challenge_msg:aead()) then
+            self.prologue:nonce(challenge_msg:nonce())
+            self.handshake:init(self.prologue:header())
+            self.status = Protocol.status.offer_proposal
          else return Protocol.code.parameter end
-      else return Protocol.code.authentication end
+      else return Protocol.code.version end
    else return Protocol.code.protocol end
 end
 
-function Protocol:offer_nonce_key (nonce_key_message)
-   assert(nonce_key_message:class() == Protocol.nonce_key_message)
-   if self.status == Protocol.status.offer_nonce_key then
-      -- offer_nonce_key -> accept_key
-      self.status = Protocol.status.accept_key
+function Protocol:offer_proposal (proposal_msg)
+   assert(proposal_msg:class() == Protocol.proposal_message)
+   if self.status == Protocol.status.offer_proposal then
+      -- offer_proposal -> accept_agreement
+      proposal_msg:spi(self.spi)
+      self.handshake:writeMessageA(proposal_msg:header())
+      self.status = Protocol.status.accept_agreement
       self:set_deadline()
-      return nil, self:send_key(self:send_nonce(nonce_key_message))
+      return nil, proposal_msg
    else return Protocol.code.protocol end
 end
 
-function Protocol:receive_nonce_key (nonce_key_message)
-   assert(nonce_key_message:class() == Protocol.nonce_key_message)
+function Protocol:receive_proposal (proposal_msg)
+   assert(proposal_msg:class() == Protocol.proposal_message)
    if self.status == Protocol.status.responder then
-      -- responder -> offer_key
-      self:intern_nonce(nonce_key_message)
-      if self:intern_key(nonce_key_message) then
-         local ok, inbound_sa, outbound_sa = self:derive_ephemeral_keys()
-         if ok then
-            self.status = Protocol.status.offer_key
-            return nil, inbound_sa, outbound_sa
+      -- responder -> offer_agreement
+      local valid, dh_ok = self.handshake:readMessageA(proposal_msg:header())
+      if valid then
+         if dh_ok then
+            self.remote_spi = proposal_msg:spi()
+            self.status = Protocol.status.offer_agreement
          else return Protocol.code.parameter end
       else return Protocol.code.authentication end
+   else return Protocol.code.protocol end
+end
+
+function Protocol:offer_agreement (agreement_msg)
+   assert(agreement_msg:class() == Protocol.agreement_message)
+   if self.status == Protocol.status.offer_agreement then
+      -- offer_agreement -> responder
+      agreement_msg:spi(self.spi)
+      self.handshake:writeMessageB(agreement_msg:header(), self.rx, self.tx)
+      local inbound_sa, outbound_sa = self:derive_ephemeral_keys()
+      self.status = Protocol.status.responder
+      self:reset()
+      return nil, agreement_msg, inbound_sa, outbound_sa
+   else return Protocol.code.protocol end
+end
+
+function Protocol:receive_agreement (agreement_msg)
+   assert(agreement_msg:class() == Protocol.agreement_message)
+   if self.status == Protocol.status.accept_agreement then
+      -- accept_agreement -> initiator
+      local valid, dh_ok =
+         self.handshake:readMessageB(agreement_msg:header(), self.rx, self.tx)
+      if dh_ok then
+         if valid then
+            self.remote_spi = agreement_msg:spi()
+            local inbound_sa, outbound_sa = self:derive_ephemeral_keys()
+            self.status = Protocol.status.initiator
+            self:reset()
+            return nil, inbound_sa, outbound_sa
+         else return Protocol.code.authentication end
+      else return Protocol.code.parameter end
    else return Protocol.code.protocol end
 end
 
 function Protocol:reset_if_expired ()
    if self.status == Protocol.status.accept_challenge
-   or self.status == Protocol.status.accept_key then
+   or self.status == Protocol.status.accept_agreement then
       if self.deadline and self.deadline() then
-         -- accept_challenge, accept_key -> initiator
-         self:reset('reuse_spi') -- renegotiate this SA and possibly update it
+         -- accept_challenge, accept_agreement -> initiator
          self.status = Protocol.status.initiator
+         self:reset('reuse_spi') -- renegotiate this SA and possibly update it
          return Protocol.code.expired
       end
    else return Protocol.code.protocol end
@@ -1000,98 +1046,16 @@ end
 
 -- Internal methods
 
-function Protocol:send_nonce (nonce_message)
-   nonce_message:nonce(self.n1)
-   return nonce_message
-end
-
-function Protocol:intern_nonce (nonce_message)
-   ffi.copy(self.n2, nonce_message:nonce(), ffi.sizeof(self.n2))
-end
-
-function Protocol:send_key (key_message)
-   local r, k, n1, n2, spi1, p1 =
-      self.r, self.k, self.n1, self.n2, self.spi1, self.p1
-   local state, h1 = self.hmac_state, self.h
-   crypto.hmac_blake2s_init(state, k, ffi.sizeof(k))
-   crypto.hmac_blake2s_update(state, r.bytes, ffi.sizeof(r))
-   crypto.hmac_blake2s_update(state, n1, ffi.sizeof(n1))
-   crypto.hmac_blake2s_update(state, n2, ffi.sizeof(n2))
-   crypto.hmac_blake2s_update(state, spi1.bytes, ffi.sizeof(spi1))
-   crypto.hmac_blake2s_update(state, p1, ffi.sizeof(p1))
-   crypto.hmac_blake2s_final(state, h1)
-   key_message:spi(spi1.bytes)
-   key_message:public_key(p1)
-   key_message:auth_code(h1)
-   return key_message
-end
-
-function Protocol:intern_key (m)
-   local r, k, n1, n2, spi2, p2 =
-      self.r, self.k, self.n1, self.n2, self.spi2, self.p2
-   local state, h2 = self.hmac_state, self.h
-   crypto.hmac_blake2s_init(state, k, ffi.sizeof(k))
-   crypto.hmac_blake2s_update(state, r.bytes, ffi.sizeof(r))
-   crypto.hmac_blake2s_update(state, n2, ffi.sizeof(n2))
-   crypto.hmac_blake2s_update(state, n1, ffi.sizeof(n1))
-   crypto.hmac_blake2s_update(state, m:spi(), ffi.sizeof(spi2))
-   crypto.hmac_blake2s_update(state, m:public_key(), ffi.sizeof(p2))
-   crypto.hmac_blake2s_final(state, h2)
-   if crypto.bytes_equal(h2, m:auth_code(), ffi.sizeof(h2)) then
-      ffi.copy(spi2.bytes, m:spi(), ffi.sizeof(spi2))
-      ffi.copy(p2, m:public_key(), ffi.sizeof(p2))
-      return true
-   end
-end
-
-function Protocol:intern_challenge_nonce (m)
-   local r, k, n1 = self.r, self.k, self.n1
-   local state, c = self.hmac_state, self.h
-   crypto.hmac_blake2s_init(state, k, ffi.sizeof(k))
-   crypto.hmac_blake2s_update(state, r.bytes, ffi.sizeof(r))
-   crypto.hmac_blake2s_update(state, m:nonce(), ffi.sizeof(m:nonce()))
-   crypto.hmac_blake2s_update(state, n1, ffi.sizeof(n1))
-   crypto.hmac_blake2s_final(state, c)
-   if crypto.bytes_equal(c, m:auth_code(), ffi.sizeof(c)) then
-      self:intern_nonce(m)
-      return true
-   end
-end
-
-function Protocol:send_challenge (challenge_message)
-   local r, k, n1, n2 = self.r, self.k, self.n1, self.n2
-   local state, c = self.hmac_state, self.h
-   crypto.hmac_blake2s_init(state, k, ffi.sizeof(k))
-   crypto.hmac_blake2s_update(state, r.bytes, ffi.sizeof(r))
-   crypto.hmac_blake2s_update(state, n1, ffi.sizeof(n1))
-   crypto.hmac_blake2s_update(state, n2, ffi.sizeof(n2))
-   crypto.hmac_blake2s_final(state, c)
-   challenge_message:auth_code(c)
-   return self:send_nonce(challenge_message)
-end
-
 function Protocol:derive_ephemeral_keys ()
-   if self:derive_shared_secret() then
-      local inbound = self:derive_key_material(self.spi1, self.p1, self.p2)
-      local outbound = self:derive_key_material(self.spi2, self.p2, self.p1)
-      return true, inbound, outbound
-   end
+   local inbound = self:derive_key_material(self.spi, self.rx)
+   local outbound = self:derive_key_material(self.remote_spi, self.tx)
+   return inbound, outbound
 end
 
-function Protocol:derive_shared_secret ()
-   return crypto.curve25519_scalarmult(self.q, self.s1, self.p2)
-end
-
-function Protocol:derive_key_material (spi, salt_a, salt_b)
-   local q, e, state = self.q, self.e, self.hash_state
-   crypto.blake2s_init(state, ffi.sizeof(e))
-   crypto.blake2s_update(state, q, ffi.sizeof(q))
-   crypto.blake2s_update(state, salt_a, ffi.sizeof(salt_a))
-   crypto.blake2s_update(state, salt_b, ffi.sizeof(salt_b))
-   crypto.blake2s_final(state, e.bytes, ffi.sizeof(e.bytes))
-   return { spi = lib.ntohl(spi.u32),
-            key = ffi.string(e.slot.key, ffi.sizeof(e.slot.key)),
-            salt = ffi.string(e.slot.salt, ffi.sizeof(e.slot.salt)) }
+function Protocol:derive_key_material (spi, keymat)
+   return { spi = spi,
+            key = ffi.string(keymat.slot.key, ffi.sizeof(keymat.slot.key)),
+            salt = ffi.string(keymat.slot.salt, ffi.sizeof(keymat.slot.salt)) }
 end
 
 function Protocol:set_deadline (deadline)
@@ -1101,39 +1065,32 @@ end
 
 function Protocol:reset (reuse_spi)
    self:set_deadline(false)
-   if not reuse_spi then self:next_spi() end
-   self:next_nonce()
-   self:next_dh_key()
    self:clear_external_inputs()
+   self.handshake:clear()
+   if not reuse_spi then self:next_spi() end
+   if self.status == Protocol.status.responder then
+      self:next_nonce()
+      self.handshake:init(self.prologue:header())
+   end
    return self
 end
 
 function Protocol:next_spi ()
-   self.spi1.u32 = lib.htonl(Protocol.spi_counter + 256)
+   self.spi = Protocol.spi_counter + 256
    Protocol.spi_counter = (Protocol.spi_counter + 1) % (2^16 - 1 - 256)
 end
 
 function Protocol:next_nonce ()
-   crypto.random_bytes(self.n1, ffi.sizeof(self.n1))
-end
-
-function Protocol:next_dh_key ()
-   crypto.random_bytes(self.s1, ffi.sizeof(self.s1))
-   crypto.curve25519_scalarmult_base(self.p1, self.s1)
+   local nonce = self.prologue:nonce()
+   crypto.random_bytes(nonce, ffi.sizeof(nonce))
 end
 
 function Protocol:clear_external_inputs ()
-   ffi.fill(self.n2, ffi.sizeof(self.n2))
-   ffi.fill(self.p2, ffi.sizeof(self.p2))
-   ffi.fill(self.e.bytes, ffi.sizeof(self.e.bytes))
+   self.remote_spi = 0
+   ffi.fill(self.prologue:nonce(), ffi.sizeof(self.prologue:nonce()))
+   ffi.fill(self.rx, ffi.sizeof(self.rx))
+   ffi.fill(self.tx, ffi.sizeof(self.tx))
 end
-
--- Assertions about the world                                              (-:
-
-assert(Protocol.preshared_key_bytes == 32)
-assert(Protocol.public_key_bytes == 32)
-assert(Protocol.auth_code_bytes == 32)
-assert(ffi.sizeof(Protocol.key_t) <= crypto.blake2s_OUTBYTES)
 
 -- Transport wrapper for vita-ske that encompasses an SPI to map requests to
 -- routes, and a message type to facilitate parsing.
@@ -1142,7 +1099,7 @@ assert(ffi.sizeof(Protocol.key_t) <= crypto.blake2s_OUTBYTES)
 -- requests through protocol filters.
 
 Transport = {
-   message_type = { nonce = 4, challenge = 8, key = 9, nonce_key = 10 },
+   message_type = {knock = 11, challenge = 12, proposal = 13, agreement = 14},
    header = subClass(header)
 }
 Transport.header:init({
@@ -1188,11 +1145,11 @@ function selftest ()
 
    local function can_not_except (p, ops)
       if not ops.initiate_exchange then
-         local e, m = p:initiate_exchange(Protocol.nonce_message:new{})
+         local e, m = p:initiate_exchange(Protocol.knock_message:new{})
          assert(e == Protocol.code.protocol and not m)
       end
-      if not ops.receive_nonce then
-         local e = p:receive_nonce(Protocol.nonce_message:new{})
+      if not ops.receive_knock then
+         local e = p:receive_knock(Protocol.knock_message:new{})
          assert(e == Protocol.code.protocol)
       end
       if not ops.offer_challenge then
@@ -1203,20 +1160,20 @@ function selftest ()
          local e = p:receive_challenge(Protocol.challenge_message:new{})
          assert(e == Protocol.code.protocol)
       end
-      if not ops.offer_key then
-         local e, m = p:offer_key(Protocol.key_message:new{})
+      if not ops.offer_proposal then
+         local e, m = p:offer_proposal(Protocol.proposal_message:new{})
          assert(e == Protocol.code.protocol and not m)
       end
-      if not ops.receive_key then
-         local e, rx, tx = p:receive_key(Protocol.key_message:new{})
-         assert(e == Protocol.code.protocol and not (rx or tx))
+      if not ops.receive_proposal then
+         local e = p:receive_proposal(Protocol.proposal_message:new{})
+         assert(e == Protocol.code.protocol)
       end
-      if not ops.offer_nonce_key then
-         local e, m = p:offer_nonce_key(Protocol.nonce_key_message:new{})
-         assert(e == Protocol.code.protocol and not m)
+      if not ops.offer_agreement then
+         local e, m, rx, tx = p:offer_agreement(Protocol.agreement_message:new{})
+         assert(e == Protocol.code.protocol and not m and not (rx or tx))
       end
-      if not ops.receive_nonce_key then
-         local e, rx, tx = p:receive_nonce_key(Protocol.nonce_key_message:new{})
+      if not ops.receive_agreement then
+         local e, rx, tx = p:receive_agreement(Protocol.agreement_message:new{})
          assert(e == Protocol.code.protocol and not (rx or tx))
       end
       if not ops.reset_if_expired then
@@ -1225,32 +1182,45 @@ function selftest ()
       end
    end
 
-   local key = ffi.new("uint8_t[20]");
+   local key = ffi.new("uint8_t[?]", Protocol.preshared_key_bytes);
    local A = Protocol:new('initiator', 1234, key, 2)
    local B = Protocol:new('responder', 1234, key, 2)
+   local n1 = ffi.new("uint8_t[32]")
+   ffi.copy(n1, B.prologue:nonce(), ffi.sizeof(n1))
 
    now = 0
 
    can_not_except(A, {initiate_exchange=true})
 
-   can_not_except(B, {receive_nonce=true, receive_nonce_key=true})
-   local e, rx, tx = B:receive_nonce_key(Protocol.nonce_key_message:new{})
-   assert(e == Protocol.code.authentication and not (rx or tx))
-   local C = Protocol:new('offer_nonce_key', 1234, key, 2)
-   ffi.copy(C.n2, B.n1, ffi.sizeof(C.n2))
-   ffi.fill(C.p1, ffi.sizeof(C.p1))
-   local _, nonce_key_c = C:offer_nonce_key(Protocol.nonce_key_message:new{})
-   local e, rx, tx = B:receive_nonce_key(nonce_key_c)
-   assert(e == Protocol.code.parameter and not (rx or tx))
+   can_not_except(B, {receive_knock=true, receive_proposal=true})
+   local e = B:receive_proposal(Protocol.proposal_message:new{})
+   assert(e == Protocol.code.authentication)
+   local C = Protocol:new('offer_proposal', 1234, key, 2)
+   C.prologue:nonce(B.prologue:nonce())
+   C.handshake:init(C.prologue:header())
+   ffi.fill(C.handshake.e.pk, ffi.sizeof(C.handshake.e.pk))
+   local _, proposal_c = C:offer_proposal(Protocol.proposal_message:new{})
+   local e = B:receive_proposal(proposal_c)
+   assert(e == Protocol.code.parameter)
 
    -- A: initiator -> accept_challenge
-   local e, nonce_a = A:initiate_exchange(Protocol.nonce_message:new{})
-   assert(not e and nonce_a)
+   local e, knock_a = A:initiate_exchange(Protocol.knock_message:new{})
+   assert(not e and knock_a)
 
    can_not_except(A, {receive_challenge=true, reset_if_expired=true})
+   local e = A:receive_challenge(Protocol.challenge_message:new{
+                                    version = 0, -- incompatible version
+                                    aead = "aes-gcm-16-icv"
+   })
+   assert(e == Protocol.code.version)
+   local e = A:receive_challenge(Protocol.challenge_message:new{
+                                    version = Protocol.version,
+                                    aead = "foobar" -- incompatible AEAD
+   })
+   assert(e == Protocol.code.parameter)
 
    -- B: responder -> offer_challenge
-   local e = B:receive_nonce(nonce_a)
+   local e = B:receive_knock(knock_a)
    assert(not e)
 
    can_not_except(B, {offer_challenge=true})
@@ -1259,40 +1229,38 @@ function selftest ()
    local e, challenge_b = B:offer_challenge(Protocol.challenge_message:new{})
    assert(not e and challenge_b)
 
-   -- A: accept_challenge -> offer_nonce_key
+   -- A: accept_challenge -> offer_proposal
    local e = A:receive_challenge(challenge_b)
    assert(not e)
 
-   can_not_except(A, {offer_nonce_key=true})
+   can_not_except(A, {offer_proposal=true})
 
-   -- A: offer_nonce_key -> accept_key
-   local e, nonce_key_a = A:offer_nonce_key(Protocol.nonce_key_message:new{})
-   assert(not e and nonce_key_a)
+   -- A: offer_proposal -> accept_agreement
+   local e, proposal_a = A:offer_proposal(Protocol.proposal_message:new{})
+   assert(not e and proposal_a)
 
-   can_not_except(A, {receive_key=true, reset_if_expired=true})
-   local e, rx, tx = A:receive_key(Protocol.key_message:new{})
+   can_not_except(A, {receive_agreement=true, reset_if_expired=true})
+   local bogus_agreement = Protocol.agreement_message:new{}
+   crypto.random_bytes(bogus_agreement:header().ne,
+                       ffi.sizeof(bogus_agreement:header().ne))
+   local e, rx, tx = A:receive_agreement(bogus_agreement)
    assert(e == Protocol.code.authentication and not (rx or tx))
-   local C = Protocol:new('offer_key', 1234, key, 2)
-   ffi.copy(C.n1, B.n1, ffi.sizeof(C.n1))
-   ffi.copy(C.n2, A.n1, ffi.sizeof(C.n2))
-   ffi.fill(C.p1, ffi.sizeof(C.p1))
-   ffi.copy(C.p2, A.p1, ffi.sizeof(C.p2))
-   local _, key_c = C:offer_key(Protocol.key_message:new{})
-   local e, rx, tx = A:receive_key(key_c)
+   local e, rx, tx = A:receive_agreement(Protocol.agreement_message:new{})
    assert(e == Protocol.code.parameter and not (rx or tx))
 
-   -- B: responder -> offer_key
-   local e, B_rx, B_tx = B:receive_nonce_key(nonce_key_a)
-   assert(not e and B_rx and B_tx)
+   -- B: responder -> offer_agreement
+   local e = B:receive_proposal(proposal_a)
+   assert(not e)
 
-   can_not_except(B, {offer_key=true})
+   can_not_except(B, {offer_agreement=true})
 
-   -- B: offer_key -> responder
-   local e, key_b = B:offer_key(Protocol.key_message:new{})
-   assert(not e and key_b)
+   -- B: offer_agreement -> responder
+   local e, agreement_b, B_rx, B_tx =
+      B:offer_agreement(Protocol.agreement_message:new{})
+   assert(not e and agreement_b and B_rx and B_tx)
 
-   -- A: accept_key -> initator
-   local e, A_rx, A_tx = A:receive_key(key_b)
+   -- A: accept_agreement -> initator
+   local e, A_rx, A_tx = A:receive_agreement(agreement_b)
    assert(not e and A_rx and A_tx)
 
    -- Ephemeral keys should match
@@ -1301,28 +1269,31 @@ function selftest ()
    assert(A_tx.key == B_rx.key)
    assert(A_tx.salt == B_rx.salt)
 
+   -- Ensure nonces cycle
+   assert(not crypto.bytes_equal(n1, B.prologue:nonce(), ffi.sizeof(n1)))
+
    -- Test negotiation expiry
    now = 10
 
    -- A: initiator -> accept_challenge
-   A:initiate_exchange(Protocol.nonce_message:new{})
+   A:initiate_exchange(Protocol.knock_message:new{})
    assert(not A:reset_if_expired())
 
    -- accept_challenge -> initiator
    now = 12.0123
    assert(A:reset_if_expired() == Protocol.code.expired)
 
-   --  A: accept_challenge -> offer_nonce_key -> accept_key
-   local _, nonce_a = A:initiate_exchange(Protocol.nonce_message:new{})
-   B:receive_nonce(nonce_a)
+   --  A: accept_challenge -> offer_proposal -> accept_agreement
+   local _, knock_a = A:initiate_exchange(Protocol.knock_message:new{})
+   B:receive_knock(knock_a)
    local _, challenge_b = B:offer_challenge(Protocol.challenge_message:new{})
    A:receive_challenge(challenge_b)
    now = 20
-   A:offer_nonce_key(Protocol.nonce_key_message:new{})
+   A:offer_proposal(Protocol.proposal_message:new{})
 
    assert(not A:reset_if_expired())
 
-   -- A: accept_key -> initiator
+   -- A: accept_agreement -> initiator
    now = 30
    assert(A:reset_if_expired() == Protocol.code.expired)
 

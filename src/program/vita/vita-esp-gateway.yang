@@ -650,14 +650,24 @@ module vita-esp-gateway {
         type yang:zero-based-counter64;
         description
           "Count of key exchange requests received that violated the protocol
-         (i.e., order of messages and message format).";
+           (i.e., order of messages and message format).";
+      }
+      leaf version-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of challenges received that specified an incompatible
+           version.";
+      }
+      leaf parameter-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of challenges received that proposed incompatible AEADs.";
       }
       leaf authentication-errors {
         type yang:zero-based-counter64;
         description
           "Count of key exchange requests received that failed to authenticate
-         (i.e., had an erroneous message authentication code, this may include
-         packets corrupted during transit.)";
+           (i.e., had an erroneous message authentication code.)";
       }
       leaf public-key-errors {
         type yang:zero-based-counter64;
