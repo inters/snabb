@@ -213,7 +213,7 @@ Returns the binary representation of IPv4 address denoted by *string*.
 
 Returns the string representation of *ip* address.
 
-— Function **ipv4:pton** *string*
+— Function **ipv4:pton_cidr** *string*
 
 Returns the binary representation of the IPv4 address prefix and prefix length
 encoded denoted by *string* of the form `<ipv4address>/<length>`.
