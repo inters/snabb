@@ -17,6 +17,7 @@ local basic_apps = require("apps.basic.basic_apps")
 local intel_mp = require("apps.intel_mp.intel_mp")
 local nd_light = require("apps.ipv6.nd_light").nd_light
 local Join = require("apps.basic.basic_apps").Join
+local crypto = require("program.vita.crypto")
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
@@ -163,6 +164,7 @@ function run (args)
       cpu = "c",
       busywait = "b",
       realtime = "r",
+      keygen = "K"
    }
 
    local opt = {}
@@ -172,6 +174,15 @@ function run (args)
    function opt.h () exit_usage(0) end
 
    function opt.H () print(confighelp) main.exit(0) end
+
+   local function keygen ()
+      local len = 32
+      local key = ffi.new("uint8_t[?]", len)
+      crypto.random_bytes(key, len)
+      return lib.hexdump(ffi.string(key, len))
+   end
+
+   function opt.K () print(keygen()) main.exit(0) end
 
    local cpuset
    function opt.c (arg) cpuset = CPUSet:new():add_from_string(arg) end
@@ -183,7 +194,7 @@ function run (args)
    function opt.b () busywait = true end
    function opt.r () realtime = true end
 
-   args = lib.dogetopt(args, opt, "hHn:c:br", long_opt)
+   args = lib.dogetopt(args, opt, "hHn:c:brK", long_opt)
 
    if #args > 0 then exit_usage(1) end
    run_vita{name=name, cpuset=cpuset, busywait=busywait, realtime=realtime}
