@@ -13,6 +13,7 @@ local PcapFilter = require("apps.packet_filter.pcap_filter").PcapFilter
 local get_monotonic_time = require("ffi").C.get_monotonic_time
 local ethernet= require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
+local ipv6 = require("lib.protocol.ipv6")
 local datagram = require("lib.protocol.datagram")
 local yang = require("lib.yang.yang")
 
@@ -127,17 +128,22 @@ end
 -- Run Vita in software benchmark mode.
 function run_softbench (pktsize, npackets, nroutes, cpuspec, use_v6)
    local testconf = {
-      private_interface4 = {
-         nexthop_ip4 = private_interface4_defaults.ip4.default
-      },
       packet_size = pktsize,
-      nroutes = nroutes,
+      nroutes = nroutes or defaults.nroutes.default,
       negotiation_ttl = nroutes,
       sa_ttl = 16
    }
-   if use_v6 then
+   if not use_v6 then
+      testconf.private_interface4 = {
+         nexthop_ip = private_interface4_defaults.ip.default
+      }
+   elseif use_v6 then
+      testconf.route_prefix = "ac10"
+      testconf.private_interface6 = {
+         nexthop_ip = private_interface6_defaults.ip.default
+      }
       testconf.public_interface6 = {
-         [public_interface6_defaults.nexthop_ip6.default] = {}
+         [public_interface6_defaults.nexthop_ip.default] = {}
       }
    end
 
@@ -156,7 +162,7 @@ function run_softbench (pktsize, npackets, nroutes, cpuspec, use_v6)
       config.link(c, "gauge.source -> join.source")
       config.link(c, private.output.." -> gauge.input")
 
-      config.app(c, "sieve", PcapFilter, {filter="arp"})
+      config.app(c, "sieve", PcapFilter, {filter="arp or icmp6"})
       config.link(c, "gauge.output -> sieve.input")
       config.link(c, "sieve.output -> join.arp")
 
@@ -198,6 +204,7 @@ end
 
 defaults = {
    private_interface4 = {},
+   private_interface6 = {},
    public_interface4 = {default={["172.16.0.10"]={queue=1}}},
    public_interface6 = {default={}},
    route_prefix = {default="172.16"},
@@ -209,21 +216,28 @@ defaults = {
 private_interface4_defaults = {
    pci = {default="00:00.0"},
    mac = {default="02:00:00:00:00:01"}, -- needed because used in sim. packets
-   ip4 = {default="172.16.0.10"},
-   nexthop_ip4 = {default="172.16.1.1"},
+   ip = {default="172.16.0.10"},
+   nexthop_ip = {default="172.16.1.1"},
+   nexthop_mac = {}
+}
+private_interface6_defaults = {
+   pci = {default="00:00.0"},
+   mac = {default="02:00:00:00:00:01"}, -- needed because used in sim. packets
+   ip = {default="ac10:0000::10"},
+   nexthop_ip = {default="ac10:0100::1"},
    nexthop_mac = {}
 }
 public_interface4_defaults = {
    pci = {default="00:00.0"},
    mac = {},
-   nexthop_ip4 = {default="172.16.0.10"},
+   nexthop_ip = {default="172.16.0.10"},
    nexthop_mac = {},
    queue = {default=1}
 }
 public_interface6_defaults = {
    pci = {default="00:00.0"},
    mac = {},
-   nexthop_ip6 = {default="172:16:0::10"},
+   nexthop_ip = {default="ac10:0000::10"},
    nexthop_mac = {},
    queue = {default=1}
 }
@@ -243,12 +257,14 @@ local function parse_gentestconf (conf)
    conf = lib.parse(conf, defaults)
    conf.private_interface4 = conf.private_interface4 and
       lib.parse(conf.private_interface4, private_interface4_defaults)
-   for ip4, interface in pairs(conf.public_interface4) do
-      conf.public_interface4[ip4] =
+   conf.private_interface6 = conf.private_interface6 and
+      lib.parse(conf.private_interface6, private_interface6_defaults)
+   for ip, interface in pairs(conf.public_interface4) do
+      conf.public_interface4[ip] =
          lib.parse(interface, public_interface4_defaults)
    end
-   for ip6, interface in pairs(conf.public_interface6) do
-      conf.public_interface6[ip6] =
+   for ip, interface in pairs(conf.public_interface6) do
+      conf.public_interface6[ip] =
          lib.parse(interface, public_interface6_defaults)
    end
    assert(conf.nroutes >= 0 and conf.nroutes <= 255,
@@ -257,16 +273,34 @@ local function parse_gentestconf (conf)
 end
 
 function gen_packet (conf, route, size)
-   local payload_size = size - ethernet:sizeof() - ipv4:sizeof()
-   assert(payload_size >= 0, "Negative payload_size :-(")
-   local d = datagram:new(packet.resize(packet.allocate(), payload_size))
-   d:push(ipv4:new{ src = ipv4:pton(conf.private_interface4.nexthop_ip4),
-                    dst = ipv4:pton(conf.route_prefix.."."..route.."."..math.random(254)),
-                    total_length = ipv4:sizeof() + payload_size,
-                    ttl = 64 })
-   d:push(ethernet:new{ dst = ethernet:pton(conf.private_interface4.mac),
-                        type = 0x0800 })
-   local p = d:packet()
+   local p
+   if conf.private_interface4 then
+      local payload_size = size - ethernet:sizeof() - ipv4:sizeof()
+      assert(payload_size >= 0, "Negative payload_size :-(")
+      local d = datagram:new(packet.resize(packet.allocate(), payload_size))
+      d:push(ipv4:new{ src = ipv4:pton(conf.private_interface4.nexthop_ip),
+                       dst = ipv4:pton(("%s.%s.%s"):format(
+                             conf.route_prefix, route, math.random(254))),
+                       total_length = ipv4:sizeof() + payload_size,
+                       ttl = 64 })
+      d:push(ethernet:new{ dst = ethernet:pton(conf.private_interface4.mac),
+                           type = 0x0800 })
+      p = d:packet()
+   elseif conf.private_interface6 then
+      local payload_size = size - ethernet:sizeof() - ipv6:sizeof()
+      assert(payload_size >= 0, "Negative payload_size :-(")
+      local d = datagram:new(packet.resize(packet.allocate(), payload_size))
+      d:push(ipv6:new{ src = ipv6:pton(conf.private_interface6.nexthop_ip),
+                       dst = ipv6:pton(("%s:%x00::%x"):format(
+                             conf.route_prefix, route, math.random(0xFFFE))),
+                       payload_length = payload_size,
+                       hop_limit = 64 })
+      d:push(ethernet:new{ dst = ethernet:pton(conf.private_interface6.mac),
+                           type = 0x86dd })
+      p = d:packet()
+   else
+      error("Need either private_interface4 or private_interface6")
+   end
    -- Pad to minimum Ethernet frame size (excluding four octet CRC)
    return packet.resize(p, math.max(60, p.length))
 end
@@ -292,29 +326,34 @@ function gen_configuration (conf)
    conf = parse_gentestconf(conf)
    local cfg = {
       private_interface4 = conf.private_interface4,
+      private_interface6 = conf.private_interface6,
       public_interface4 = conf.public_interface4,
       public_interface6 = conf.public_interface6,
       route4 = {},
-      route46 = {},
+      route6 = {},
       negotiation_ttl = conf.negotiation_ttl,
       sa_ttl = conf.sa_ttl
    }
    local function has (map) for k,v in pairs(map) do return true end end
    local routes =
       (cfg.private_interface4 and has(cfg.public_interface4) and cfg.route4) or
-      (cfg.private_interface4 and has(cfg.public_interface6) and cfg.route46)
+      (cfg.private_interface6 and has(cfg.public_interface6) and cfg.route6)
    for route = 1, conf.nroutes do
       local r = {
-         net_cidr4 = conf.route_prefix.."."..route..".0/24",
          gateway = {},
          preshared_key = ("%064x"):format(route),
          spi = 1000+route
       }
+      if routes == cfg.route4 then
+         r.net = ("%s.%s.0/24"):format(conf.route_prefix, route)
+      elseif routes == cfg.route6 then
+         r.net = ("%s:%x00::0/24"):format(conf.route_prefix, route)
+      end
       for _, interface in pairs(conf.public_interface4) do
-         r.gateway[interface.nexthop_ip4] = {queue=interface.queue}
+         r.gateway[interface.nexthop_ip] = {queue=interface.queue}
       end
       for _, interface in pairs(conf.public_interface6) do
-         r.gateway[interface.nexthop_ip6] = {queue=interface.queue}
+         r.gateway[interface.nexthop_ip] = {queue=interface.queue}
       end
       routes["test"..route] = r
    end

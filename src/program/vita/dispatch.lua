@@ -16,7 +16,8 @@ local events = timeline.load_events(engine.timeline(), ...)
 PrivateDispatch = {
    name = "PrivateDispatch",
    config = {
-      node_ip4 = {required=true}
+      node_ip4 = {},
+      node_ip6 = {}
    },
    shm = {
       rxerrors = {counter},
@@ -27,16 +28,27 @@ PrivateDispatch = {
 
 function PrivateDispatch:new (conf)
    local o = {
-      p_box = ffi.new("struct packet *[1]"),
-      ip4 = ipv4:new({}),
-      dispatch = pf_match.compile(([[match {
+      p_box = ffi.new("struct packet *[1]")
+   }
+   if conf.node_ip4 then
+      o.ip4 = ipv4:new({})
+      o.dispatch = pf_match.compile(([[match {
          ip dst host %s and icmp => icmp4
          ip dst host %s => protocol4_unreachable
          ip => forward4
          arp => arp
          otherwise => reject_ethertype
       }]]):format(conf.node_ip4, conf.node_ip4))
-   }
+   elseif conf.node_ip6 then
+      o.ip6 =  ipv6:new({})
+      o.dispatch = pf_match.compile(([[match {
+         ip6 and icmp6 and (ip6[40] = 135 or ip6[40] = 136) => nd
+         ip6 dst host %s and icmp6 => icmp6
+         ip6 dst host %s => protocol6_unreachable
+         ip6 => forward6
+         otherwise => reject_ethertype
+      }]]):format(conf.node_ip6, conf.node_ip6))
+   else error("Need either node_ip4 or node_ip6.") end
    return setmetatable(o, {__index=PrivateDispatch})
 end
 
@@ -57,9 +69,24 @@ function PrivateDispatch:forward4 ()
    end
 end
 
+function PrivateDispatch:forward6 ()
+   events.private_forward6_matched()
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+   assert(self.ip6:new_from_mem(p.data, p.length))
+   -- Strip datagram of any Ethernet frame padding before encapsulation.
+   local total_length = self.ip6:payload_length() + ipv6:sizeof()
+   local d = packet.resize(p, math.min(total_length, p.length))
+   link.transmit(self.output.forward6, d)
+end
+
 function PrivateDispatch:icmp4 ()
    local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
    link.transmit(self.output.icmp4, p)
+end
+
+function PrivateDispatch:icmp6 ()
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+   link.transmit(self.output.icmp6, p)
 end
 
 function PrivateDispatch:arp ()
@@ -67,9 +94,18 @@ function PrivateDispatch:arp ()
    link.transmit(self.output.arp, p)
 end
 
+function PrivateDispatch:nd ()
+   link.transmit(self.output.nd, self.p_box[0])
+end
+
 function PrivateDispatch:protocol4_unreachable ()
    local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
    link.transmit(self.output.protocol4_unreachable, p)
+end
+
+function PrivateDispatch:protocol6_unreachable ()
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+   link.transmit(self.output.protocol6_unreachable, p)
 end
 
 function PrivateDispatch:reject_ethertype ()
@@ -218,7 +254,8 @@ end
 InboundDispatch = {
    name = "InboundDispatch",
    config = {
-      node_ip4 = {required=true},
+      node_ip4 = {},
+      node_ip6 = {}
    },
    shm = {
       protocol_errors = {counter}
@@ -227,15 +264,25 @@ InboundDispatch = {
 
 function InboundDispatch:new (conf)
    local o = {
-      eth4 = ethernet:new{type=0x0800},
-      p_box = ffi.new("struct packet *[1]"),
-      dispatch = pf_match.compile(([[match {
+      p_box = ffi.new("struct packet *[1]")
+   }
+   if conf.node_ip4 then
+      o.eth = ethernet:new{type=0x0800}
+      o.dispatch = pf_match.compile(([[match {
          ip dst host %s and icmp => icmp4
          ip dst host %s => protocol4_unreachable
          ip => forward4
          otherwise => reject_protocol
       }]]):format(conf.node_ip4, conf.node_ip4))
-   }
+   elseif conf.node_ip6 then
+      o.eth = ethernet:new{type=0x86dd}
+      o.dispatch = pf_match.compile(([[match {
+         ip6 dst host %s and icmp6 => icmp6
+         ip6 dst host %s => protocol6_unreachable
+         ip6 => forward6
+         otherwise => reject_protocol
+      }]]):format(conf.node_ip6, conf.node_ip6))
+   else error("Need either node_ip4 or node_ip6.") end
    return setmetatable(o, {__index=InboundDispatch})
 end
 
@@ -244,14 +291,29 @@ function InboundDispatch:forward4 ()
    link.transmit(self.output.forward4, p)
 end
 
+function InboundDispatch:forward6 ()
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+   link.transmit(self.output.forward6, p)
+end
+
 function InboundDispatch:icmp4 ()
    local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
    link.transmit(self.output.icmp4, p)
 end
 
+function InboundDispatch:icmp6 ()
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+   link.transmit(self.output.icmp6, p)
+end
+
 function InboundDispatch:protocol4_unreachable ()
    local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
    link.transmit(self.output.protocol4_unreachable, p)
+end
+
+function InboundDispatch:protocol6_unreachable ()
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
+   link.transmit(self.output.protocol6_unreachable, p)
 end
 
 function InboundDispatch:reject_protocol ()
@@ -260,13 +322,13 @@ function InboundDispatch:reject_protocol ()
 end
 
 function InboundDispatch:push ()
-   local eth_hdr4 = self.eth4:header()
+   local eth_hdr = self.eth:header()
    for _, input in ipairs(self.input) do
       while not link.empty(input) do
          local p = link.receive(input)
          -- Prepend Ethernet pseudo header to please pf.match (we receive plain
-         -- IPv4 frames on the input port.)
-         p = packet.prepend(p, eth_hdr4, ethernet:sizeof())
+         -- IP frames on the input port.)
+         p = packet.prepend(p, eth_hdr, ethernet:sizeof())
          self.p_box[0] = p
          self:dispatch(p.data, p.length)
       end

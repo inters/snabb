@@ -12,7 +12,6 @@ local filter = require("apps.packet_filter.pcap_filter")
 local match = require("apps.test.match")
 local counter = require("core.counter")
 local shm = require("core.shm")
-local cltable = require("lib.cltable")
 local ffi = require("ffi")
 
 -- Synopsis:
@@ -31,14 +30,14 @@ local cfg = {
    data_plane = true,
    private_interface4 = {
       pci = "00:00.0",
-      ip4 = "192.168.10.1",
-      nexthop_ip4 = "192.168.0.1",
+      ip = "192.168.10.1",
+      nexthop_ip = "192.168.0.1",
       mac = "52:54:00:00:00:00"
    },
    public_interface4 = {
       ["203.0.113.1"] = {
          pci = "00:00.0",
-         nexthop_ip4 = "203.0.0.1",
+         nexthop_ip = "203.0.0.1",
          mac = "52:54:00:00:00:FF",
          queue = 1
       }
@@ -46,7 +45,7 @@ local cfg = {
    mtu = 500,
    route4 = {
       loopback = {
-         net_cidr4 = "192.168.10.0/24",
+         net = "192.168.10.0/24",
          gateway = { ["203.0.113.1"] = {queue=1} },
          preshared_key = string.rep("00", 32),
          spi = 1001

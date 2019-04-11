@@ -9,12 +9,12 @@ module vita-gentest {
   }
   choice router {
     list public-interface4 {
-      key ip4; unique queue;
       uses vita:interface; uses vita:interface4;
+      key ip; unique queue;
     }
     list public-interface6 {
-      key ip6; unique queue;
       uses vita:interface; uses vita:interface6;
+      key ip; unique queue;
     }
   }
 

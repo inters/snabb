@@ -8,79 +8,257 @@ module vita-esp-gateway {
   import ietf-inet-types { prefix inet; }
 
   // APPLICATION MODEL
+  description "
+  A Vita configuration defines a private network interface and one or more
+  public network interfaces for use by the gateway, a set of routes to other
+  Vita nodes, and the gateway’s MTU among other miscellaneous operational
+  parameters.
+
+  EXAMPLE
+
+    private-interface4 {
+      pci 0c:00.0;
+      ip 172.16.1.10;
+      nexthop-ip 172.16.1.1;
+    }
+
+    public-interface4 {
+      pci 0c:00.1;
+      ip 203.0.113.10;
+      nexthop-ip 172.16.1.1;
+    }
+
+    route4 {
+      id site2;
+      net 172.16.2.0/24;
+      gateway { ip 203.0.113.2; }
+      preshared-key 91440DA06376A668AC4959A840A125D75FB544E8AA25A08B813E49F0A4B2E270;
+      spi 1001;
+    }
+
+    route4 {
+      id site3;
+      net 172.16.3.0/24;
+      gateway { ip 203.0.113.3; }
+      preshared-key CF0BDD7A058BE55C12B7F2AA30D23FF01BDF8BE6571F2019ED7F7EBD3DA97B47;
+      spi 1223;
+    }
+
+    mtu 1280;
+
+    ";
+
+  choice gateway {
+    description "
+    Vita operates either in IPv4 more or in IPv6 mode.
+    ";
+    case v4 {
+      description "
+      To configure a IPv4 gateway, interfaces and routes must be declared with
+      private-interface4, public-interface4, and route4.
+      ";
+      container private-interface4 {
+        uses interface; uses interface4;
+        description "
+        A single private interface is operated in RSS mode to distribute
+        streams onto work queues.
+        ";
+      }
+      list public-interface4 {
+        uses interface; uses interface4; uses gateway;
+        key ip; unique queue;
+        description "
+        Outbound traffic is distributed onto work queues once it is received on
+        the private interface. Each work queue (typically one per CPU core) is
+        assigned a dedicated public interface on which to forward its traffic.
+
+        If more than one public interface is configured then each one needs to
+        have a unique queue identifier assigned. Multiple public interfaces can
+        operate on the same hardware interface in VMDq mode.
+        ";
+      }
+      list route4 {
+        uses route; uses route4;
+        key id; unique spi; unique preshared-key; unique net;
+        description "
+        A route specifies a logical tunnel between from one Vita node to
+        another.
+        ";
+        list gateway {
+          uses gateway; uses gateway4;
+          key ip; unique queue; min-elements 1;
+          description "
+          A route lists one or more destination gateways, typically one for
+          each work queue. The gateway IP address identifies a remote public
+          interface at the route’s destination.
+
+          For a given route, a work queue will tunnel packets to the gateway
+          associated to it via the queue identifier. If only one gateway is
+          configured then the queue identifier is optional and defaults to 1.
+          If there is no dedicated gateway configured for a work queue then
+          that work queue will fall back to use the gateway for queue 1 if
+          available.
+          ";
+        }
+      }
+    }
+    case v6 {
+      description "
+      To configure a IPv6 gateway, interfaces and routes must be declared with
+      private-interface6, public-interface6, and route6.
+      ";
+      container private-interface6 {
+        uses interface; uses interface6;
+        description "
+        Identical to private-interface4 (see above) except that it uses IPv6
+        addresses.
+        ";
+      }
+      list public-interface6 {
+        uses interface; uses interface6; uses gateway;
+        key ip; unique queue;
+        description "
+        Identical to public-interface4 (see above) except that it uses IPv6
+        addresses.
+        ";
+      }
+      list route6 {
+        key id; unique spi; unique preshared-key; unique net;
+        uses route; uses route6;
+        description "
+        Identical to route4 (see above) except that it uses IPv6 addresses and
+        network prefixes.
+        ";
+        list gateway {
+          uses gateway; uses gateway6;
+          key ip; unique queue; min-elements 1;
+        }
+      }
+    }
+  }
+
   grouping interface {
+    description "
+    Each interface is assigned a Linux PCI bus address, an IP address, and an
+    IP address of the next hop through which all packets leaving the interface
+    will be routed.
+
+    If the Ethernet (MAC) address of the interface is not explicitly specified,
+    it is automatically derived from its assigned IP address by prepending the
+    bytes 2a:bb: or 3a:bb: to its least significant 32 bits depending on
+    whether it is the private or public interface respectively.
+
+    If a next hop’s MAC address is given Vita will skip ARP or ND look-up and
+    address the next hop directly (this option is mainly intended for use in
+    testing environments.)
+    ";
     leaf pci { type pci-address; mandatory true; }
     leaf mac { type yang:mac-address; }
     leaf nexthop-mac { type yang:mac-address; }
   }
   grouping interface4 {
-    leaf ip4 { type inet:ipv4-address-no-zone; }
-    leaf nexthop-ip4 { type inet:ipv4-address-no-zone; }
+    leaf ip { type inet:ipv4-address-no-zone; }
+    leaf nexthop-ip { type inet:ipv4-address-no-zone; }
   }
   grouping interface6 {
-    leaf ip6 { type inet:ipv6-address-no-zone; }
-    leaf nexthop-ip6 { type inet:ipv6-address-no-zone; }
+    leaf ip { type inet:ipv6-address-no-zone; }
+    leaf nexthop-ip { type inet:ipv6-address-no-zone; }
   }
+
   grouping route {
+    description "
+    Each route is given a unique, human readable identifier subnet and gateways
+    are specified with an IP prefix in CIDR notation, and IP addresses
+    respectively. Packets that arrive on the private interface and which are
+    destined to a route’s specified IP subnetwork are tunneled to a destination
+    gateway of that route.
+
+    For authentication, each route is assigned a unique, pre-shared 256-bit
+    key, encoded as a hexadecimal string (two digits for each octet, most
+    significant digit first). Additionally, a unique Security Parameter Index
+    (SPI), which must be a positive integer equal or greater than 256, is
+    specified for tagging and associating key exchange protocol messages for a
+    given route. Like the pre-shared key, the SPI must be the same for both
+    ends of a route.
+
+    A suitable key could be obtained using the following command:
+
+      vita --keygen
+
+    ";
     leaf id { type id; mandatory true; }
     leaf spi { type spi; mandatory true; }
     leaf preshared-key { type key32; mandatory true; }
   }
   grouping route4 {
-    leaf net-cidr4 { type inet:ipv4-prefix; mandatory true; }
+    leaf net { type inet:ipv4-prefix; mandatory true; }
+  }
+  grouping route6 {
+    leaf net { type inet:ipv6-prefix; mandatory true; }
+  }
+
+  grouping gateway {
+    leaf queue { type queue; default 1;}
   }
   grouping gateway4 {
-    leaf ip4 { type inet:ipv4-address-no-zone; }
-    leaf queue { type queue; default 1;}
+    leaf ip { type inet:ipv4-address-no-zone; }
   }
   grouping gateway6 {
-    leaf ip6 { type inet:ipv6-address-no-zone; }
-    leaf queue { type queue; default 1;}
+    leaf ip { type inet:ipv6-address-no-zone; }
   }
 
-  container private-interface4 {
-    uses interface; uses interface4;
-  }
-  choice router {
-    case over-v4 {
-      list public-interface4 {
-        key ip4; unique queue;
-        uses interface; uses interface4;
-        leaf queue { type queue; default 1; }
-      }
-      list route4 {
-        key id; unique spi; unique preshared-key; unique net-cidr4;
-        uses route; uses route4;
-        list gateway {
-          key ip4; unique queue; min-elements 1;
-          uses gateway4;
-        }
-      }
-    }
-    case over-v6 {
-      list public-interface6 {
-        key ip6; unique queue;
-        uses interface; uses interface6;
-        leaf queue { type queue; default 1; }
-      }
-      list route46 {
-        key id; unique spi; unique preshared-key; unique net-cidr4;
-        uses route; uses route4;
-        list gateway {
-          key ip6; unique queue; min-elements 1;
-          uses gateway6;
-        }
-      }
-    }
+  leaf mtu {
+    type uint16 { range "0..8937"; }
+    description "
+    Optionally, the gateway’s MTU (excluding Ethernet overhead) can be
+    specified in bytes. The default and maximum permitted value is 8923. Since
+    Vita performs neither fragmentation nor reassembly it may be necessary to
+    adjust the next-hop MTU accordingly. Note that packets leaving the public
+    interface will have an added packet size overhead due to encapsulation (up
+    to 57 bytes for IPv4 and up to 77 bytes for IPv6.)
+    ";
   }
 
-  leaf mtu { type uint16 { range "0..8937"; } }
+  leaf negotiation-ttl {
+    description "
+    While the default configuration should be generally applicable, the
+    negotiation timeout for the authenticated key exchanges (AKE) can be
+    specified in seconds.
+    ";
+    type time-to-live;
+    default 5;
+  }
+  leaf sa-ttl {
+    type time-to-live;
+    default 600;
+    description "
+    The default lifetime of Security Associations (SA) is 10 minutes. Generally
+    speaking, lower 'sa-ttl' values are more secure since each renegotiation
+    implies a fresh set of session keys and hence a checkpoint with regard to
+    perfect forward secrecy (PFS).
+    ";
+  }
 
-  leaf negotiation-ttl { type time-to-live; }
-  leaf sa-ttl { type time-to-live; }
+  list sa-database {
+    key queue;
+    description "
+    Each work queue maintains a set outbound SAs (at most one per route) and a
+    set of inbound SAs (possibly multiple per route). Unless the 'data-plane'
+    toggle (see below) is set to true, the SA database is managed automatically
+    by the key manager, and requires no user configuration.
+    ";
+    leaf queue { type queue; }
+    list outbound-sa { key spi; unique route; uses sa; }
+    list inbound-sa { key spi; uses sa; }
+  }
 
-  // Negotiated by Key Manager or configured manually
   grouping sa {
+    description "
+    Each SA must name an existing route, an SPI equal or greater than 256, and
+    specify a 128-bit key and a 32-bit salt respectively, encoded as
+    hexadecimal strings (two digits for each octet, most significant digit
+    first).
+    ";
     leaf route { type id; mandatory true; } // Parent route identifier
     leaf spi { type spi; mandatory true; }
     leaf aead { type string; mandatory true; }
@@ -88,25 +266,55 @@ module vita-esp-gateway {
     leaf salt { type key4; mandatory true; }
   }
 
-  // Active outbound SAs (at most one per route) and inbound SAs (possibly
-  // multiple per route) per queue.
-  list sa-database {
-    key queue;
-    leaf queue { type queue; }
-    list outbound-sa { key "spi"; unique "route"; uses sa; }
-    list inbound-sa { key "spi"; uses sa; }
+  leaf data-plane {
+    type boolean;
+    description "
+    If true, disables the built-in key manager and AKE negotiations. In this
+    case the options 'negotiation-ttl', 'sa-ttl' as well as 'route.spi' and
+    'route.preshared-key are ignored, and the user is expected to configure
+    'sa-database' themselves.
+    ";
   }
 
-  // If true, disables KeyManager (route.spi, route.preshared-key,
-  // negotiation-ttl, and sa-ttl are ignored.)
-  leaf data-plane { type boolean; }
+  // TYPES 
+  typedef id { type string { pattern '[\w_]+'; } }
+  typedef pci-address {
+    type string {
+      pattern '([0-9a-fA-F]{4}:)?[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]';
+    }
+  }
+  typedef spi { type uint32 { range "256..max"; } }
+  typedef key32 { type string { pattern '([0-9a-fA-F]{2}\s*){32}'; } }
+  typedef key16 { type string { pattern '([0-9a-fA-F]{2}\s*){16}'; } }
+  typedef key4  { type string { pattern '([0-9a-fA-F]{2}\s*){4}'; } }
+  typedef time-to-live { type uint32 { range "1..max"; } }
+  typedef queue { type uint16 { range "1..max"; } }
 
   // APPLICATION STATE
   container gateway-state {
-    description "Gateway state counters for monitoring and troubleshooting.";
     config false;
+    description "
+    Vita exposes an extended set of gateway state counters for monitoring and
+    troubleshooting. You can query the state of a live instance using
+
+       snabb config get-state
+
+    (this is not configuration data, it can not be written.)
+    ";
 
     // Interface state
+    container private-interface {
+      uses interface-state;
+      description
+        "Private interface statistics.";
+    }
+
+    container public-interface {
+      uses interface-state;
+      description
+        "Public interface statistics.";
+    }
+
     grouping interface-state {
       leaf rxbytes {
         type yang:zero-based-counter64;
@@ -175,17 +383,19 @@ module vita-esp-gateway {
       }
     }
 
-    container private-interface {
-      description "Private interface statistics.";
-      uses interface-state;
-    }
-
-    container public-interface {
-      description "Public interface statistics.";
-      uses interface-state;
-    }
-
     // Next-hop state
+    container private-next-hop {
+      uses next-hop-state;
+      description
+        "Private next-hop events.";
+    }
+
+    container public-next-hop {
+      uses next-hop-state;
+      description
+        "Public next-hop events.";
+    }
+
     grouping next-hop-state {
       leaf arp-requests {
         type yang:zero-based-counter64;
@@ -214,20 +424,12 @@ module vita-esp-gateway {
       }
     }
 
-    container private-next-hop {
-      description "Private next-hop events.";
-      uses next-hop-state;
-    }
-
-    container public-next-hop {
-      description "Public next-hop events.";
-      uses next-hop-state;
-    }
-
     // Protocol dispatch state
     container private-dispatch {
-      description "Protocol dispatch errors for packets received on the
-                   private interface.";
+      description
+        "Protocol dispatch errors for packets received on the private
+         interface.";
+
       leaf rxerrors {
         type yang:zero-based-counter64;
         description
@@ -248,8 +450,10 @@ module vita-esp-gateway {
     }
 
     container public-dispatch {
-      description "Protocol dispatch errors for packets received on the
-                   public interface.";
+      description
+        "Protocol dispatch errors for packets received on the
+         public interface.";
+
       leaf rxerrors {
         type yang:zero-based-counter64;
         description
@@ -275,8 +479,10 @@ module vita-esp-gateway {
     }
 
     container inbound-dispatch {
-      description "Protocol dispatch errors inbound packets that were
-                   successfully decapsulated.";
+      description
+        "Protocol dispatch errors inbound packets that were successfully
+         decapsulated.";
+
       leaf protocol-errors {
         type yang:zero-based-counter64;
         description
@@ -286,6 +492,18 @@ module vita-esp-gateway {
     }
 
     // TTL state
+    container outbound-ttl {
+      uses time-to-live-state;
+      description
+        "TTL errors for outbound packets.";
+    }
+
+    container inbound-ttl {
+      uses time-to-live-state;
+      description
+        "TTL errors for inbound packets.";
+    }
+
     grouping time-to-live-state {
       leaf protocol-errors {
         type yang:zero-based-counter64;
@@ -294,19 +512,11 @@ module vita-esp-gateway {
       }
     }
 
-    container outbound-ttl {
-      description "TTL errors for outbound packets.";
-      uses time-to-live-state;
-    }
-
-    container inbound-ttl {
-      description "TTL errors for inbound packets.";
-      uses time-to-live-state;
-    }
-
     // Router state
     container private-router {
-      description "Routing errors for outbound packets (to be encapsulated.)";
+      description
+        "Routing errors for outbound packets (to be encapsulated.)";
+
       leaf rxerrors {
         type yang:zero-based-counter64;
         description
@@ -326,16 +536,53 @@ module vita-esp-gateway {
     }
 
     container public-router {
-      description "Routing errors for inbound packets (to be decapsulated.)";
+      description
+        "Routing errors for inbound packets (to be decapsulated.)";
+
       leaf route-errors {
         type yang:zero-based-counter64;
         description
-          "Count of packets that were dropped because their destination did not
-           match any configured route.";
+          "Count of inbound encapsulated packets that were dropped because
+           their SPI did not match any configured SA.";
       }
     }
 
     // ICMP state
+    container private-icmp4 {
+      uses icmp4-state;
+      description
+        "ICMPv4 events on the private interface.";
+    }
+    container private-icmp6 {
+      uses icmp6-state;
+      description
+        "ICMPv6 events on the private interface.";
+    }
+
+    container public-icmp4 {
+      uses icmp4-state;
+      description
+        "ICMPv4 events on the public interface.";
+    }
+    container public-icmp6 {
+      uses icmp6-state;
+      description
+        "ICMPv6 events on the public interface.";
+    }
+
+    container inbound-icmp4 {
+      uses icmp4-state;
+      description
+        "ICMPv4 events triggered by encapsulated messages on the public
+         interface.";
+    }
+    container inbound-icmp6 {
+      uses icmp6-state;
+      description
+        "ICMPv6 events triggered by encapsulated messages on the public
+         interface.";
+    }
+
     grouping icmp4-state {
       leaf rxerrors {
         type yang:zero-based-counter64;
@@ -586,31 +833,13 @@ module vita-esp-gateway {
       }
     }
 
-    container private-icmp4 {
-      description "ICMPv4 events on the private interface.";
-      uses icmp4-state;
-    }
-
-    container public-icmp4 {
-      description "ICMPv4 events on the public interface.";
-      uses icmp4-state;
-    }
-
-    container public-icmp6 {
-      description "ICMPv6 events on the public interface.";
-      uses icmp6-state;
-    }
-
-    container inbound-icmp4 {
-      description "ICMPv4 events triggered by encapsulated messages on the
-                   public interface.";
-      uses icmp4-state;
-    }
-
     // SA state
     list inbound-sa {
-      key "spi";
+      key spi;
       leaf spi { type spi; }
+      description
+        "Events for ephemeral inbound security associations (SA).";
+
       container sa-state {
         leaf rxerrors {
           type yang:zero-based-counter64;
@@ -634,7 +863,9 @@ module vita-esp-gateway {
 
     // KeyManager state
     container key-manager {
-      description "Authenticated key exchange and SA management events.";
+      description
+        "Authenticated key exchange and SA management events.";
+
       leaf rxerrors {
         type yang:zero-based-counter64;
         description
@@ -727,17 +958,4 @@ module vita-esp-gateway {
     }
   }
 
-  // TYPES 
-  typedef id { type string { pattern '[\w_]+'; } }
-  typedef pci-address {
-    type string {
-      pattern '([0-9a-fA-F]{4}:)?[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]';
-    }
-  }
-  typedef spi { type uint32 { range "256..max"; } }
-  typedef key32 { type string { pattern '([0-9a-fA-F]{2}\s*){32}'; } }
-  typedef key16 { type string { pattern '([0-9a-fA-F]{2}\s*){16}'; } }
-  typedef key4  { type string { pattern '([0-9a-fA-F]{2}\s*){4}'; } }
-  typedef time-to-live { type uint32 { range "1..max"; } }
-  typedef queue { type uint16 { range "1..max"; } }
 }
