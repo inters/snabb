@@ -100,6 +100,13 @@ function ipv6:ntop (n)
    return ffi.string(c_str)
 end
 
+function ipv6:pton_cidr (p)
+   local prefix, length = p:match("([^/]*)/([0-9]*)")
+   return
+      ipv6:pton(prefix),
+      assert(tonumber(length), "Invalid length "..length)
+end
+
 function ipv6:get()
    return self:ntop(self)
 end

@@ -303,6 +303,12 @@ Returns the binary representation of IPv6 address denoted by *string*.
 
 Returns the string representation of *ip* address.
 
+— Function **ipv6:pton_cidr** *string*
+
+Returns the binary representation of the IPv6 address prefix and prefix length
+encoded denoted by *string* of the form `<ipv6address>/<length>`.
+See [CIDR notation](https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing).
+
 — Function **ipv6:solicited_node_mcast** *ip*
 
 Returns the solicited-node multicast address from the given unicast
