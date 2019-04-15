@@ -96,10 +96,6 @@ Security Proof:
 
 Notes:
 
- • The AD is hashed to 16 bytes with blake2s before being supplied to
-   aes256-gcm. This is due to a limitation of the maximum AD length of our
-   aes-gcm implementation.
-
  • The vi value is transmitted solely for informational purposes and has no
    effect on the protocol. The responder MUST NOT consider it to, i.e.,
    downgrade vr or select an aead value.
