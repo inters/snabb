@@ -227,9 +227,16 @@ function KeyManager:new (conf)
 end
 
 function KeyManager:reconfig (conf)
-   if conf.node_ip4 then self.ip = self.ip4
-   elseif conf.node_ip6 then self.ip = self.ip6
-   else error("Need either node_ip4 or node_ip6.") end
+   local new_node_ipn
+   if conf.node_ip4 then
+      new_node_ipn = ipv4:pton(conf.node_ip4)
+      self.ip = self.ip4
+   elseif conf.node_ip6 then
+      new_node_ipn = ipv6:pton(conf.node_ip6)
+      self.ip = self.ip6
+   else
+      error("Need either node_ip4 or node_ip6.")
+   end
 
    self.audit = lib.logger_new({
          rate = 32,
@@ -261,22 +268,31 @@ function KeyManager:reconfig (conf)
    -- compute new set of routes
    local new_routes = {}
    for id, route in pairs(conf.routes) do
+      local new_gateway = self.ip:pton(route.gateway)
       local new_key = lib.hexundump(route.preshared_key,
                                     Protocol.preshared_key_bytes)
       local old_route = find_route(id)
       if old_route and route_match(old_route, new_key, route.spi) then
          -- keep old route
          table.insert(new_routes, old_route)
-         -- if negotation_ttl has changed, swap out old protocol fsm for a new
-         -- one with the adjusted timeout, effectively resetting the fsm
-         if conf.negotiation_ttl ~= self.negotiation_ttl then
+         -- if the node/gateway addresses or negotation_ttl has changed, swap
+         -- out old protocol fsm for a new one with the adjusted timeout,
+         -- effectively resetting the fsm
+         if conf.negotiation_ttl ~= self.negotiation_ttl or
+            not lib.equal(new_node_ipn, self.node_ipn) or
+            not lib.equal(new_gateway, route.gateway_ipn)
+         then
             self.audit:log("Protocol reset for '"..id.."' (reconfig)")
             old_route.initiator = Protocol:new('initiator',
                                                old_route.spi,
+                                               new_node_ipn,
+                                               new_gateway,
                                                old_route.preshared_key,
                                                conf.negotiation_ttl)
             old_route.responder = Protocol:new('responder',
                                                old_route.spi,
+                                               new_gateway,
+                                               new_node_ipn,
                                                old_route.preshared_key,
                                                conf.negotiation_ttl)
          end
@@ -284,16 +300,20 @@ function KeyManager:reconfig (conf)
          -- insert new new route
          local new_route = {
             id = id,
-            gateway_ipn = self.ip:pton(route.gateway),
+            gateway_ipn = new_gateway,
             preshared_key = new_key,
             spi = route.spi,
             inbound_sa = {}, outbound_sa = {}, outbound_sa_queue = {},
             responder = Protocol:new('responder',
                                      route.spi,
+                                     new_gateway,
+                                     new_node_ipn,
                                      new_key,
                                      conf.negotiation_ttl),
             initiator = Protocol:new('initiator',
                                      route.spi,
+                                     new_node_ipn,
+                                     new_gateway,
                                      new_key,
                                      conf.negotiation_ttl)
          }
@@ -309,7 +329,7 @@ function KeyManager:reconfig (conf)
    end
 
    -- switch to new configuration
-   self.node_ipn = self.ip:pton(conf.node_ip4 or conf.node_ip6)
+   self.node_ipn = new_node_ipn
    self.routes = new_routes
    self.sa_db_file = shm.root.."/"..shm.resolve(conf.sa_db_path)
    self.num_outbound_sa = conf.num_outbound_sa
@@ -737,7 +757,7 @@ function KeyManager:commit_sa_db ()
    )
 end
 
--- Vita: simple key exchange (vita-ske, version 4). See README.exchange
+-- Vita: simple key exchange (vita-ske, version 5). See README.exchange
 
 Message = subClass(header)
 function Message:new_from_mem (mem, size)
@@ -747,7 +767,7 @@ function Message:new_from_mem (mem, size)
 end
 
 Protocol = {
-   version = 0x0004,
+   version = 0x0005,
    -- protocol states: responder states are even and initiator states are odd
    -- (this is important!)
    status = { responder = 0, initiator = 1,
@@ -783,6 +803,7 @@ Protocol.prologue:init({
       [1] = ffi.typeof[[
          struct {
             uint32_t version, route_spi;
+            uint8_t initiator_address[16], responder_address[16];
             uint8_t aead[32], nonce[32];
          } __attribute__((packed))
       ]]
@@ -792,6 +813,8 @@ function Protocol.prologue:new (config)
    local o = Protocol.prologue:superClass().new(self)
    o:version(config.version or Protocol.version)
    o:route_spi(config.route_spi)
+   o:initiator_address(config.initiator_address)
+   o:responder_address(config.responder_address)
    o:aead(config.aead)
    o:nonce(config.nonce)
    return o
@@ -811,6 +834,24 @@ function Protocol.prologue:route_spi (spi)
       h.route_spi = lib.htonl(spi)
    end
    return lib.ntohl(h.route_spi)
+end
+
+function Protocol.prologue:initiator_address (address)
+   local h = self:header()
+   if address ~= nil then
+      ffi.copy(h.initiator_address, address,
+               math.min(ffi.sizeof(h.initiator_address), ffi.sizeof(address)))
+   end
+   return h.initiator_address
+end
+
+function Protocol.prologue:responder_address (address)
+   local h = self:header()
+   if address ~= nil then
+      ffi.copy(h.responder_address, address,
+               math.min(ffi.sizeof(h.responder_address), ffi.sizeof(address)))
+   end
+   return h.responder_address
 end
 
 function Protocol.prologue:aead (aead)
@@ -906,7 +947,7 @@ end
 
 Protocol.agreement_message.spi = Protocol.proposal_message.spi
 
-function Protocol:new (initial_status, route_spi, key, timeout)
+function Protocol:new (initial_status, route_spi, iaddr, raddr, key, timeout)
    local status = assert(Protocol.status[initial_status],
                          "Invalid status: "..initial_status)
    local initiator = status % 2 ~= 0
@@ -921,6 +962,8 @@ function Protocol:new (initial_status, route_spi, key, timeout)
       prologue = Protocol.prologue:new{
          route_spi = route_spi,
          aead = "aes-gcm-16-icv",
+         initiator_address = iaddr,
+         responder_address = raddr
       },
       handshake = noise_NNpsk0.HandshakeState:new(psk, initiator),
       rx = ffi.new(Protocol.key_t),

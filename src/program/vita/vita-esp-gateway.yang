@@ -98,6 +98,11 @@ module vita-esp-gateway {
           If there is no dedicated gateway configured for a work queue then
           that work queue will fall back to use the gateway for queue 1 if
           available.
+
+          Note that for a given route there can only be a single pair of
+          gateways operating at any given time, and authenticated key exchange
+          (AKE) will fail unless the configurations at each end define a
+          matching gateway pair.
           ";
         }
       }
