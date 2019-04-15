@@ -1225,8 +1225,9 @@ function selftest ()
    end
 
    local key = ffi.new("uint8_t[?]", Protocol.preshared_key_bytes);
-   local A = Protocol:new('initiator', 1234, key, 2)
-   local B = Protocol:new('responder', 1234, key, 2)
+   local iaddr, raddr = ipv4:pton("192.168.0.1"), ipv6:pton("ac::1")
+   local A = Protocol:new('initiator', 1234, iaddr, raddr, key, 2)
+   local B = Protocol:new('responder', 1234, iaddr, raddr, key, 2)
    local n1 = ffi.new("uint8_t[32]")
    ffi.copy(n1, B.prologue:nonce(), ffi.sizeof(n1))
 
@@ -1237,7 +1238,7 @@ function selftest ()
    can_not_except(B, {receive_knock=true, receive_proposal=true})
    local e = B:receive_proposal(Protocol.proposal_message:new{})
    assert(e == Protocol.code.authentication)
-   local C = Protocol:new('offer_proposal', 1234, key, 2)
+   local C = Protocol:new('offer_proposal', 1234, iaddr, raddr, key, 2)
    C.prologue:nonce(B.prologue:nonce())
    C.handshake:init(C.prologue:header())
    ffi.fill(C.handshake.e.pk, ffi.sizeof(C.handshake.e.pk))
@@ -1313,6 +1314,20 @@ function selftest ()
 
    -- Ensure nonces cycle
    assert(not crypto.bytes_equal(n1, B.prologue:nonce(), ffi.sizeof(n1)))
+
+   -- Ensure initiator and responder addresses are included in prologue
+   local C = Protocol:new('offer_proposal', 1234, iaddr, iaddr, key, 2)
+   C.prologue:nonce(B.prologue:nonce())
+   C.handshake:init(C.prologue:header())
+   local _, proposal_c = C:offer_proposal(Protocol.proposal_message:new{})
+   local e = B:receive_proposal(proposal_c)
+   assert(e == Protocol.code.authentication)
+   local C = Protocol:new('offer_proposal', 1234, raddr, raddr, key, 2)
+   C.prologue:nonce(B.prologue:nonce())
+   C.handshake:init(C.prologue:header())
+   local _, proposal_c = C:offer_proposal(Protocol.proposal_message:new{})
+   local e = B:receive_proposal(proposal_c)
+   assert(e == Protocol.code.authentication)
 
    -- Test negotiation expiry
    now = 10
