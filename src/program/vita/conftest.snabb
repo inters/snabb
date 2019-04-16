@@ -33,15 +33,15 @@ local conf = vita_test.gen_configuration({nroutes=1})
 conf.route4.test1.preshared_key = string.rep("FF", 32)
 test_conf(conf)
 
-print("Change route gw_ip4...")
+print("Change route gateway...")
 conf.route4.test1.gateway = {["172.17.1.10"]={queue=1}}
 test_conf(conf)
 
-print("Change public_ip4 and route net_cidr4...")
+print("Change public_interface4/ip and route4 net...")
 conf.public_interface4 =
    { ["172.16.0.11"] = conf.public_interface4["172.16.0.10"] }
-conf.public_interface4["172.16.0.11"].nexthop_ip4 = "172.16.0.11"
-conf.route4.test1.net_cidr4 = "172.16.0.0/16"
+conf.public_interface4["172.16.0.11"].nexthop_ip = "172.16.0.11"
+conf.route4.test1.net = "172.16.0.0/16"
 test_conf(conf)
 
 print("Change route id...")

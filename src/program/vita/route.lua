@@ -5,18 +5,20 @@ module(...,package.seeall)
 local counter = require("core.counter")
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
+local ipv6 = require("lib.protocol.ipv6")
 local esp = require("lib.protocol.esp")
 local poptrie = require("lib.poptrie")
 local ffi = require("ffi")
 
 local events = timeline.load_events(engine.timeline(), ...)
 
--- route := { net_cidr4=(CIDR4), gw_ip4=(IPv4), preshared_key=(KEY) }
+-- route := { net=(CIDR), gateway=(IP), ... }
 
 PrivateRouter = {
    name = "PrivateRouter",
    config = {
-      routes = {required=true},
+      route4 = {},
+      route6 = {},
       mtu = {required=true}
    },
    shm = {
@@ -31,18 +33,26 @@ function PrivateRouter:new (conf)
       ports = {},
       routes = {},
       mtu = conf.mtu,
-      ip4 = ipv4:new({}),
-      routing_table4 = poptrie.new{direct_pointing=true, s=24}
+      routing_table = poptrie.new{direct_pointing=true, s=24}
    }
-   for id, route in pairs(conf.routes) do
+   if conf.route4 then
+      o.ip = ipv4:new{}
+      o.route = self.route4
+   elseif conf.route6 then
+      o.ip = ipv6:new{}
+      o.route = self.route6
+   else
+      error("Need either route4 or route6.")
+   end
+   for id, route in pairs(conf.route4 or conf.route6) do
       local index = #o.ports+1
       assert(ffi.cast("uint16_t", index) == index, "index overflow")
-      assert(route.net_cidr4, "Missing net_cidr4")
-      local prefix, length = ipv4:pton_cidr(route.net_cidr4)
-      o.routing_table4:add(ffi.cast("uint32_t *", prefix)[0], length, index)
+      assert(route.net, "Missing net")
+      local prefix, length = o.ip:pton_cidr(route.net)
+      o.routing_table:add(prefix, length, index)
       o.ports[index] = id
    end
-   o.routing_table4:build()
+   o.routing_table:build()
    return setmetatable(o, {__index = PrivateRouter})
 end
 
@@ -53,34 +63,59 @@ function PrivateRouter:link ()
 end
 
 function PrivateRouter:find_route4 (dst)
-   local address = ffi.cast("uint32_t *", dst)[0]
-   return self.routes[self.routing_table4:lookup64(address)]
+   return self.routes[self.routing_table:lookup32(dst)]
 end
 
-function PrivateRouter:route (p)
-   assert(self.ip4:new_from_mem(p.data, p.length))
-   events.private_route4_start()
-   local route = self:find_route4(self.ip4:dst())
+function PrivateRouter:route4 (p)
+   assert(self.ip:new_from_mem(p.data, p.length))
+   events.private_route_start()
+   local route = self:find_route4(self.ip:dst())
    if route then
-      events.private_route4_lookup_success()
+      events.private_route_lookup_success()
       if p.length <= self.mtu then
          link.transmit(route, p)
       else
          counter.add(self.shm.rxerrors)
          counter.add(self.shm.mtu_errors)
-         if bit.band(self.ip4:flags(), 2) == 2 then -- Don’t fragment bit set?
+         if bit.band(self.ip:flags(), 2) == 2 then -- Don’t fragment bit set?
             link.transmit(self.output.fragmentation_needed, p)
          else
             packet.free(p)
          end
       end
    else
-      events.private_route4_lookup_failure()
+      events.private_route_lookup_failure()
       packet.free(p)
       counter.add(self.shm.rxerrors)
       counter.add(self.shm.route_errors)
    end
-   events.private_route4_end()
+   events.private_route_end()
+end
+
+function PrivateRouter:find_route6 (dst)
+   return self.routes[self.routing_table:lookup128(dst)]
+end
+
+function PrivateRouter:route6 (p)
+   assert(self.ip:new_from_mem(p.data, p.length))
+   events.private_route_start()
+   local route = self:find_route6(self.ip:dst())
+   if route then
+      events.private_route_lookup_success()
+      if p.length <= self.mtu then
+         link.transmit(route, p)
+      else
+         counter.add(self.shm.rxerrors)
+         counter.add(self.shm.mtu_errors)
+         link.transmit(self.output.fragmentation_needed, p)
+      end
+   else
+      events.private_route_lookup_failure()
+      packet.free(p)
+      counter.add(self.shm.rxerrors)
+      counter.add(self.shm.route_errors)
+   end
+   events.private_route_end()
 end
 
 function PrivateRouter:push ()
@@ -107,7 +142,7 @@ PublicRouter = {
 
 function PublicRouter:new (conf)
    local o = {
-      routing_table4 = ffi.new("uint32_t[?]", 2^16),
+      routing_table = ffi.new("uint32_t[?]", 2^16),
       esp = esp:new({})
    }
    self.build_fib(o, conf)
@@ -122,12 +157,12 @@ end
 function PublicRouter:build_fib (conf)
    self.ports = {}
    self.routes = {}
-   ffi.fill(self.routing_table4, ffi.sizeof(self.routing_table4), 0)
+   ffi.fill(self.routing_table, ffi.sizeof(self.routing_table), 0)
    for spi, sa in pairs(conf.sa) do
       local index = #self.ports+1
       assert(spi < 2^16, "SPI overflow")
       assert(ffi.cast("uint32_t", index) == index, "index overflow")
-      self.routing_table4[spi] = index
+      self.routing_table[spi] = index
       self.ports[index] = sa.route.."_"..spi
    end
 end
@@ -138,26 +173,26 @@ function PublicRouter:link ()
    end
 end
 
-function PublicRouter:find_route4 (spi)
-   return self.routes[self.routing_table4[spi]]
+function PublicRouter:find_route (spi)
+   return self.routes[self.routing_table[spi]]
 end
 
 function PublicRouter:push ()
    local input = self.input.input
 
    while not link.empty(input) do
-      events.public_route4_start()
+      events.public_route_start()
       local p = link.receive(input)
       assert(self.esp:new_from_mem(p.data, p.length))
-      local route = self:find_route4(self.esp:spi())
+      local route = self:find_route(self.esp:spi())
       if route then
-         events.public_route4_lookup_success()
+         events.public_route_lookup_success()
          link.transmit(route, p)
       else
-         events.public_route4_lookup_failure()
+         events.public_route_lookup_failure()
          packet.free(p)
          counter.add(self.shm.route_errors)
       end
-      events.public_route4_end()
+      events.public_route_end()
    end
 end

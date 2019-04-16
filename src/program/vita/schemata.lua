@@ -71,12 +71,16 @@ function compute_state_reader (schema_name)
          InboundDispatch = "inbound-dispatch",
          OutboundTTL = "outbound-ttl",
          InboundTTL = "inbound-ttl",
+         OutboundHopLimit = "outbound-ttl",
+         InboundHopLimit = "inbound-ttl",
          PrivateRouter = "private-router",
          PublicRouter = "public-router",
          PrivateICMP4 = "private-icmp4",
+         PrivateICMP6 = "private-icmp6",
          PublicICMP4 = "public-icmp4",
          PublicICMP6 = "public-icmp6",
          InboundICMP4 = "inbound-icmp4",
+         InboundICMP6 = "inbound-icmp6",
          KeyManager = "key-manager"
       }
       for app, member in pairs(app_state) do
@@ -113,7 +117,9 @@ function process_states (states)
        "private_next_hop", "public_next_hop",
        "private_dispatch", "public_dispatch", "inbound_dispatch",
        "outbound_ttl", "inbound_ttl", "private_router", "public_router",
-       "private_icmp4", "public_icmp4", "inbound_icmp4", "key_manager"}
+       "private_icmp4", "public_icmp4", "inbound_icmp4",
+       "private_icmp6", "public_icmp6", "inbound_icmp6",
+       "key_manager"}
    for _, container in ipairs(containers) do
       local acc = {}
       for _, state in ipairs(states) do

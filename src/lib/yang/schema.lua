@@ -836,7 +836,7 @@ function resolve(schema, features)
       -- Mark "key" children of lists as being mandatory.
       if node.kind == 'list' and node.key then
          for k in node.key:split(' +') do
-            local leaf = assert(node.body[k])
+            local leaf = assert(node.body[k], 'no member for key: '..k)
             leaf.mandatory = true
          end
       end

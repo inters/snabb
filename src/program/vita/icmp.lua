@@ -516,7 +516,7 @@ function ICMP6:send_msg (msgtype, code, p, opt)
    local payload = ffi.cast(ICMP6.payload_ptr_t, msg.data)
    -- Set fields, copy packet excerpt.
    if opt.nexthop_mtu then
-      payload.fragmentation_needed.nexthop_mtu = lib.htonl(opt.nexthop_mtu)
+      payload.packet_too_big.nexthop_mtu = lib.htonl(opt.nexthop_mtu)
    end
    if opt.pointer then
       payload.parameter_problem.pointer = lib.htonl(opt.pointer)

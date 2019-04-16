@@ -15,19 +15,27 @@ Usage:
                              latency.
   -r, --realtime
                              Use real-time scheduling.
+  -K, --keygen
+                             Generate and print a random 32 byte key in
+                             hexadecimal notation.
 
 Run Vita, configurable via `snabb config'. Refer to “--config-help” for a
 description of the documentation schema.
 
 Note that Vita needs super-user privileges to run as it needs unrestricted
 access to hardware devices via DMA and system resources like hugepages. Vita
-also requires a CPU that support AES-NI and AVX-2. It is also required to boot
-Linux with the kernel parameter iommu=off for Snabb device drivers to function.
+also requires a CPU that support AES-NI and AVX-2. For now, it is required to
+boot Linux with the kernel parameter iommu=off for Snabb device drivers to
+function.
 
-Vita will fork into five processes which individually handle key management,
-routing on the private port, routing on the public port, encapsulation, and
-decapsulation. The resulting processes can be bound to specific CPU cores using
+Vita will fork into multiple processes depending on how many work queues are
+configured. The data-plane processes can be bound to specific CPU cores using
 the “--cpu” option.
 
-Example:
+Examples:
   vita --name my-vita --cpus 0,1,2,3,4
+  snabb config set my-vita < vita.conf
+  snabb config add my-vita /route4[id=site1]/gateway { ip 7.7.7.7; queue 2; }
+  snabb config add my-vita /public-interface4 <<EOF
+  { pci 00:00.0; ip 3.3.3.3; nexthop-ip 2.2.2.2; queue 2; }
+  EOF
