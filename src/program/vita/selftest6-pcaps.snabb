@@ -4,7 +4,6 @@
 
 local pcap = require("lib.pcap.pcap")
 local ethernet = require("lib.protocol.ethernet")
-local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
 local icmp = require("lib.protocol.icmp.header")
 local esp = require("lib.ipsec.esp")
@@ -31,36 +30,14 @@ function PcapLog:write (p)
    pcap.write_record(self.file, p.data, p.length)
 end
 
+local private = PcapLog:new("program/vita/selftest6-private-in.pcap")
 local public = PcapLog:new("program/vita/selftest6-public-in.pcap")
 
-local private_src = ipv4:pton("192.168.0.1")
-local private_dst = ipv4:pton("192.168.10.1")
+local private_src = ipv6:pton("c0a8:0::1")
+local private_dst = ipv6:pton("c0a8:0a00::1")
 local public_src = ipv6:pton("203:0:0::1")
 local public_dst = ipv6:pton("203:0:113::1")
-local remote_dst = ipv4:pton("192.168.10.2")
-
-function icmp4 (conf)
-   local payload = conf.payload or packet.from_string("0000Hello, World!")
-   local length = conf.payload_length or payload.length
-   local msg = datagram:new(payload)
-   local icm = icmp:new(conf.type, conf.code)
-   icm:checksum(msg:payload(), conf.payload_length or payload.length)
-   icm:header().checksum = conf.icmp_checksum or icm:header().checksum
-   msg:push(icm)
-   local ip4 = ipv4:new{
-      flags = conf.flags,
-      frag_off = conf.frag_off,
-      total_length = ipv4:sizeof() + icmp:sizeof() + length,
-      ttl = conf.ttl or 64,
-      protocol = conf.protocol or 1,
-      src = conf.src,
-      dst = conf.dst
-   }
-   ip4:header().checksum = conf.ipv4_checksum or ip4:header().checksum
-   msg:push(ip4)
-   msg:push(ethernet:new{type=0x0800})
-   return msg:packet()
-end
+local remote_dst = ipv6:pton("c0a8:0a00::2")
 
 function icmp6 (conf)
    local payload = conf.payload or packet.from_string("0000Hello, World!")
@@ -121,35 +98,40 @@ function encap6 (payload, conf)
 end
 
 -- Echo request
+private:write(icmp6{
+                type = 128,
+                src = private_src,
+                dst = private_dst
+})
 public:write(icmp6{
                 type = 128,
                 src = public_src,
                 dst = public_dst
 })
 -- Broken echo request (too short)
-public:write(icmp6{
+private:write(icmp6{
                 type = 128,
-                src = public_src,
-                dst = public_dst,
+                src = private_src,
+                dst = private_dst,
                 payload_length = 10000
 })
 -- Broken echo request (too long)
-public:write(icmp6{
+private:write(icmp6{
                 type = 128,
-                src = public_src,
-                dst = public_dst,
+                src = private_src,
+                dst = private_dst,
                 payload_length = 4
 })
 -- Echo reply
-public:write(icmp6{
+private:write(icmp6{
                 type = 129,
-                src = public_src,
-                dst = public_dst
+                src = private_src,
+                dst = private_dst
 })
 -- Encapsulated echo request
 public:write(encap6(
-                icmp4{
-                   type = 8,
+                icmp6{
+                   type = 128,
                    src = remote_dst,
                    dst = private_dst
                 },
@@ -159,6 +141,12 @@ public:write(encap6(
                 }
 ))
 -- Unreachable protocol (private/public/inbound)
+private:write(icmp6{
+                protocol = 42,
+                src = private_src,
+                dst = private_dst,
+                payload = packet.from_string(("x"):rep(2000))
+})
 public:write(icmp6{
                 protocol = 42,
                 src = public_src,
@@ -166,7 +154,7 @@ public:write(icmp6{
                 payload = packet.from_string(("x"):rep(2000))
 })
 public:write(encap6(
-                icmp4{
+                icmp6{
                    protocol = 42,
                    src = remote_dst,
                    dst = private_dst
@@ -176,10 +164,22 @@ public:write(encap6(
                    dst = public_dst
                 }
 ))
+-- PMTUD
+private:write(icmp6{
+                 payload = packet.resize(packet.allocate(), 8000),
+                 src = private_src,
+                 dst = remote_dst
+})
 -- TTL expired (private/inbound)
+private:write(icmp6{
+                 type = 128,
+                 src = private_src,
+                 dst = remote_dst,
+                 ttl = 0
+})
 public:write(encap6(
-                icmp4{
-                   type = 8,
+                icmp6{
+                   type = 128,
                    src = remote_dst,
                    dst = remote_dst,
                    ttl = 0
@@ -191,8 +191,8 @@ public:write(encap6(
 ))
 -- Bogus SPI
 public:write(encap6(
-                icmp4{
-                   type = 8,
+                icmp6{
+                   type = 128,
                    src = remote_dst,
                    dst = private_dst
                 },
@@ -204,8 +204,8 @@ public:write(encap6(
 ))
 -- Bogus SeqNo
 public:write(encap6(
-                icmp4{
-                   type = 8,
+                icmp6{
+                   type = 128,
                    src = remote_dst,
                    dst = private_dst
                 },
@@ -217,8 +217,8 @@ public:write(encap6(
 ))
 -- Bogus NextHeader
 public:write(encap6(
-                icmp4{
-                   type = 8,
+                icmp6{
+                   type = 128,
                    src = remote_dst,
                    dst = private_dst
                 },
@@ -229,10 +229,10 @@ public:write(encap6(
                 }
 ))
 -- Bogus checksums
-public:write(icmp6{
+private:write(icmp6{
                 type = 128,
-                src = public_src,
-                dst = public_dst,
+                src = private_src,
+                dst = private_dst,
                 icmp_checksum = 42
 })
 -- Various ICMPv6 messages
@@ -245,12 +245,12 @@ for _, msgtype in ipairs({
       {type=100, codes={0}}
 }) do
    for _, code in ipairs(msgtype.codes) do
-      public:write(icmp6{
+      private:write(icmp6{
                       payload = packet.clone(payload),
                       type = msgtype.type,
                       code = code,
-                      src = public_src,
-                      dst = public_dst
+                      src = private_src,
+                      dst = private_dst
       })
    end
 end

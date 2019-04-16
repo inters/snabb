@@ -18,7 +18,7 @@ program/vita/genconf.snabb < program/vita/clitest.conf > $conf
 
 ./snabb config set $name / < $conf
 
-[ $(./snabb config get $name /public-interface4[ip4=172.16.0.10]/nexthop-ip4) \
+[ $(./snabb config get $name /public-interface4[ip=172.16.0.10]/nexthop-ip) \
       = 172.17.0.10 ]
 
 [ $(./snabb config get $name /route4[id=test1]/spi) = 1001 ]

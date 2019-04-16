@@ -17,6 +17,7 @@ local basic_apps = require("apps.basic.basic_apps")
 local intel_mp = require("apps.intel_mp.intel_mp")
 local nd_light = require("apps.ipv6.nd_light").nd_light
 local Join = require("apps.basic.basic_apps").Join
+local crypto = require("program.vita.crypto")
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
@@ -32,11 +33,12 @@ local confighelp = require("program.vita.README_config_inc")
 
 local confspec = {
    private_interface4 = {},
+   private_interface6 = {},
    public_interface4 = {default={}},
    public_interface6 = {default={}},
    mtu = {default=8923},
    route4 = {default={}},
-   route46 = {default={}},
+   route6 = {default={}},
    negotiation_ttl = {},
    sa_ttl = {},
    data_plane = {},
@@ -45,10 +47,8 @@ local confspec = {
 
 local ifspec = {
    pci = {required=true},
-   ip4 = {},
-   ip6 = {},
-   nexthop_ip4 = {},
-   nexthop_ip6 = {},
+   ip = {},
+   nexthop_ip = {},
    mac = {},
    nexthop_mac = {},
    queue = {}
@@ -69,10 +69,8 @@ local function derive_local_unicast_mac (prefix, ip)
 end
 
 local function parse_ifconf (conf, mac_prefix)
-   if not conf then return end
    conf = lib.parse(conf, ifspec)
-   conf.mac = conf.mac or
-      derive_local_unicast_mac(mac_prefix, conf.ip4 or conf.ip6)
+   conf.mac = conf.mac or derive_local_unicast_mac(mac_prefix, conf.ip)
    return conf
 end
 
@@ -83,55 +81,37 @@ local function parse_conf (conf, queue)
    conf = lib.parse(lib.deepcopy(conf), confspec)
    conf.queue = queue
    -- all queues share a single private interface
-   conf.private_interface4 = parse_ifconf(conf.private_interface4, {0x2a,0xbb})
+   if conf.private_interface4 then
+      conf.private_interface4 = parse_ifconf(conf.private_interface4, {0x2a,0xbb})
+   elseif conf.private_interface6 then
+      conf.private_interface6 = parse_ifconf(conf.private_interface6, {0x2a,0xbb})
+   end
    -- select the public interface for the queue from the public interface list
    -- (it is possible that no such interface is configured)
-   local public_interfaces4 = conf.public_interface4
-   conf.public_interface4 = nil
-   for ip4, interface in pairs(public_interfaces4) do
-      interface.ip4 = ip4
-      local interface = parse_ifconf(interface, {0x3a, 0xbb})
-      if interface.queue == conf.queue then
-         conf.public_interface4 = interface
-         break
+   local function select_public_interface (interfaces)
+      for ip, interface in pairs(interfaces) do
+         interface.ip = ip
+         local interface = parse_ifconf(interface, {0x3a, 0xbb})
+         if interface.queue == conf.queue then return interface end
       end
    end
-   local public_interfaces6 = conf.public_interface6
-   conf.public_interface6 = nil
-   for ip6, interface in pairs(public_interfaces6) do
-      interface.ip6 = ip6
-      local interface = parse_ifconf(interface, {0x3a, 0xbb})
-      if interface.queue == conf.queue then
-         conf.public_interface6 = interface
-         break
-      end
-   end
+   conf.public_interface4 = select_public_interface(conf.public_interface4)
+   conf.public_interface6 = select_public_interface(conf.public_interface6)
    -- for each route, select a single gateway ip to use for this queue
-   for id, route in pairs(conf.route4) do
-      local gateways = route.gateway
-      route.gateway = nil
-      for ip4, gateway in pairs(gateways) do
-         if gateway.queue == 1 then -- default to the first defined gateway
-            route.gw_ip4 = ip4
-         end
-         if gateway.queue == conf.queue then
-            route.gw_ip4 = ip4
-            break
-         end
+   local function select_gateway (gateways)
+      local default
+      for ip, gateway in pairs(gateways) do
+         if gateway.queue == conf.queue then return ip
+         -- default to the first defined gateway
+         elseif gateway.queue == 1 then default = ip end
       end
+      return default
    end
-   for id, route in pairs(conf.route46) do
-      local gateways = route.gateway
-      route.gateway = nil
-      for ip6, gateway in pairs(gateways) do
-         if gateway.queue == 1 then -- default to the first defined gateway
-            route.gw_ip6 = ip6
-         end
-         if gateway.queue == conf.queue then
-            route.gw_ip6 = ip6
-            break
-         end
-      end
+   for id, route in pairs(conf.route4) do
+      route.gateway = select_gateway(route.gateway)
+   end
+   for id, route in pairs(conf.route6) do
+      route.gateway = select_gateway(route.gateway)
    end
    -- select the SAs configured for this queue, default to empty SA lists
    conf.outbound_sa = {}
@@ -163,6 +143,7 @@ function run (args)
       cpu = "c",
       busywait = "b",
       realtime = "r",
+      keygen = "K"
    }
 
    local opt = {}
@@ -172,6 +153,15 @@ function run (args)
    function opt.h () exit_usage(0) end
 
    function opt.H () print(confighelp) main.exit(0) end
+
+   local function keygen ()
+      local len = 32
+      local key = ffi.new("uint8_t[?]", len)
+      crypto.random_bytes(key, len)
+      return lib.hexdump(ffi.string(key, len))
+   end
+
+   function opt.K () print(keygen()) main.exit(0) end
 
    local cpuset
    function opt.c (arg) cpuset = CPUSet:new():add_from_string(arg) end
@@ -183,7 +173,7 @@ function run (args)
    function opt.b () busywait = true end
    function opt.r () realtime = true end
 
-   args = lib.dogetopt(args, opt, "hHn:c:br", long_opt)
+   args = lib.dogetopt(args, opt, "hHn:c:brK", long_opt)
 
    if #args > 0 then exit_usage(1) end
    run_vita{name=name, cpuset=cpuset, busywait=busywait, realtime=realtime}
@@ -366,7 +356,7 @@ function configure_interfaces (conf, append)
       public = nil -- punlic interface receive/transmit
    }
 
-   local private_interface = conf.private_interface4
+   local private_interface = conf.private_interface4 or conf.private_interface6
    if private_interface and private_interface.pci ~= "00:00.0" then
       config.app(c, "PrivateNIC", intel_mp.Intel, {
                     pciaddr = private_interface.pci,
@@ -405,55 +395,101 @@ function configure_private_router (conf, append)
       inbound = {} -- inbound SA queues (decapsulated)
    }
 
-   local interface = conf.private_interface4
-   if not interface then return c, ports end
+   local routes
 
-   local routes = (conf.public_interface4 and conf.route4) or
-                  (conf.public_interface6 and conf.route46)
+   if conf.private_interface4 then
+      routes = conf.route4
+      config.app(c, "PrivateDispatch", dispatch.PrivateDispatch, {
+                    node_ip4 = conf.private_interface4.ip
+      })
+      config.app(c, "OutboundTTL", ttl.DecrementTTL)
+      config.app(c, "PrivateRouter", route.PrivateRouter, {
+                    route4 = routes,
+                    mtu = conf.mtu
+      })
+      config.app(c, "PrivateICMP4", icmp.ICMP4, {
+                    node_ip4 = conf.private_interface4.ip,
+                    nexthop_mtu = conf.mtu
+      })
+      config.app(c, "InboundDispatch", dispatch.InboundDispatch, {
+                    node_ip4 = conf.private_interface4.ip
+      })
+      config.app(c, "InboundTTL", ttl.DecrementTTL)
+      config.app(c, "InboundICMP4", icmp.ICMP4, {
+                    node_ip4 = conf.private_interface4.ip
+      })
+      config.app(c, "PrivateNextHop", nexthop.NextHop4, {
+                    node_mac = conf.private_interface4.mac,
+                    node_ip4 = conf.private_interface4.ip,
+                    nexthop_ip4 = conf.private_interface4.nexthop_ip,
+                    nexthop_mac = conf.private_interface4.nexthop_mac,
+                    synchronize = true
+      })
+      config.link(c, "PrivateDispatch.forward4 -> OutboundTTL.input")
+      config.link(c, "PrivateDispatch.icmp4 -> PrivateICMP4.input")
+      config.link(c, "PrivateDispatch.arp -> PrivateNextHop.arp")
+      config.link(c, "PrivateDispatch.protocol4_unreachable -> PrivateICMP4.protocol_unreachable")
+      config.link(c, "OutboundTTL.output -> PrivateRouter.input")
+      config.link(c, "OutboundTTL.time_exceeded -> PrivateICMP4.transit_ttl_exceeded")
+      config.link(c, "PrivateRouter.fragmentation_needed -> PrivateICMP4.fragmentation_needed")
+      config.link(c, "PrivateICMP4.output -> PrivateNextHop.icmp4")
+      config.link(c, "InboundDispatch.forward4 -> InboundTTL.input")
+      config.link(c, "InboundDispatch.icmp4 -> InboundICMP4.input")
+      config.link(c, "InboundDispatch.protocol4_unreachable -> InboundICMP4.protocol_unreachable")
+      config.link(c, "InboundTTL.output -> PrivateNextHop.forward")
+      config.link(c, "InboundTTL.time_exceeded -> InboundICMP4.transit_ttl_exceeded")
+      config.link(c, "InboundICMP4.output -> PrivateRouter.control")
+      ports.input = "PrivateDispatch.input"
+      ports.output = "PrivateNextHop.output"
 
-   config.app(c, "PrivateDispatch", dispatch.PrivateDispatch, {
-                 node_ip4 = interface.ip4
-   })
-   config.app(c, "OutboundTTL", ttl.DecrementTTL)
-   config.app(c, "PrivateRouter", route.PrivateRouter, {
-                 routes = routes,
-                 mtu = conf.mtu
-   })
-   config.app(c, "PrivateICMP4", icmp.ICMP4, {
-                 node_ip4 = interface.ip4,
-                 nexthop_mtu = conf.mtu
-   })
-   config.app(c, "InboundDispatch", dispatch.InboundDispatch, {
-                 node_ip4 = interface.ip4
-   })
-   config.app(c, "InboundTTL", ttl.DecrementTTL)
-   config.app(c, "InboundICMP4", icmp.ICMP4, {
-                 node_ip4 = interface.ip4
-   })
-   config.app(c, "PrivateNextHop", nexthop.NextHop4, {
-                 node_mac = interface.mac,
-                 node_ip4 = interface.ip4,
-                 nexthop_ip4 = interface.nexthop_ip4,
-                 nexthop_mac = interface.nexthop_mac,
-                 synchronize = true
-   })
-   config.link(c, "PrivateDispatch.forward4 -> OutboundTTL.input")
-   config.link(c, "PrivateDispatch.icmp4 -> PrivateICMP4.input")
-   config.link(c, "PrivateDispatch.arp -> PrivateNextHop.arp")
-   config.link(c, "PrivateDispatch.protocol4_unreachable -> PrivateICMP4.protocol_unreachable")
-   config.link(c, "OutboundTTL.output -> PrivateRouter.input")
-   config.link(c, "OutboundTTL.time_exceeded -> PrivateICMP4.transit_ttl_exceeded")
-   config.link(c, "PrivateRouter.fragmentation_needed -> PrivateICMP4.fragmentation_needed")
-   config.link(c, "PrivateICMP4.output -> PrivateNextHop.icmp4")
-   config.link(c, "InboundDispatch.forward4 -> InboundTTL.input")
-   config.link(c, "InboundDispatch.icmp4 -> InboundICMP4.input")
-   config.link(c, "InboundDispatch.protocol4_unreachable -> InboundICMP4.protocol_unreachable")
-   config.link(c, "InboundTTL.output -> PrivateNextHop.forward")
-   config.link(c, "InboundTTL.time_exceeded -> InboundICMP4.transit_ttl_exceeded")
-   config.link(c, "InboundICMP4.output -> PrivateRouter.control")
+   elseif conf.private_interface6 then
+      routes = conf.route6
+      config.app(c, "PrivateDispatch", dispatch.PrivateDispatch, {
+                    node_ip6 = conf.private_interface6.ip
+      })
+      config.app(c, "OutboundHopLimit", ttl.DecrementHopLimit)
+      config.app(c, "PrivateRouter", route.PrivateRouter, {
+                    route6 = routes,
+                    mtu = conf.mtu
+      })
+      config.app(c, "PrivateICMP6", icmp.ICMP6, {
+                    node_ip6 = conf.private_interface6.ip,
+                    nexthop_mtu = conf.mtu
+      })
+      config.app(c, "InboundDispatch", dispatch.InboundDispatch, {
+                    node_ip6 = conf.private_interface6.ip
+      })
+      config.app(c, "InboundHopLimit", ttl.DecrementHopLimit)
+      config.app(c, "InboundICMP6", icmp.ICMP6, {
+                    node_ip6 = conf.private_interface6.ip
+      })
+      config.app(c, "PrivateNextHop", Join)
+      config.app(c, "PrivateND", nd_light, {
+                    local_mac = conf.private_interface6.mac,
+                    local_ip = conf.private_interface6.ip,
+                    next_hop = conf.private_interface6.nexthop_ip,
+                    remote_mac = conf.private_interface6.nexthop_mac
+      })
+      config.link(c, "PrivateDispatch.forward6 -> OutboundHopLimit.input")
+      config.link(c, "PrivateDispatch.icmp6 -> PrivateICMP6.input")
+      config.link(c, "PrivateDispatch.nd -> PrivateND.south")
+      config.link(c, "PrivateDispatch.protocol6_unreachable -> PrivateICMP6.protocol_unreachable")
+      config.link(c, "OutboundHopLimit.output -> PrivateRouter.input")
+      config.link(c, "OutboundHopLimit.hop_limit_exceeded -> PrivateICMP6.transit_ttl_exceeded")
+      config.link(c, "PrivateRouter.fragmentation_needed -> PrivateICMP6.fragmentation_needed")
+      config.link(c, "PrivateICMP6.output -> PrivateNextHop.icmp6")
+      config.link(c, "InboundDispatch.forward6 -> InboundHopLimit.input")
+      config.link(c, "InboundDispatch.icmp6 -> InboundICMP6.input")
+      config.link(c, "InboundDispatch.protocol6_unreachable -> InboundICMP6.protocol_unreachable")
+      config.link(c, "InboundHopLimit.output -> PrivateNextHop.forward")
+      config.link(c, "InboundHopLimit.hop_limit_exceeded -> InboundICMP6.transit_ttl_exceeded")
+      config.link(c, "InboundICMP6.output -> PrivateRouter.control")
+      config.link(c, "PrivateNextHop.output -> PrivateND.north")
+      ports.input = "PrivateDispatch.input"
+      ports.output = "PrivateND.south"
 
-   ports.input = "PrivateDispatch.input"
-   ports.output = "PrivateNextHop.output"
+   -- No interface configured, can not configure private router.
+   else return c, ports end
 
    for id, route in pairs(routes) do
       ports.outbound[id] = "PrivateRouter."..id
@@ -479,28 +515,21 @@ function configure_public_router (conf, append)
       outbound = {} -- outbound SA queues (encapsulated)
    }
 
-   local interface = conf.public_interface4 or conf.public_interface6
-   if not interface then return c, ports end
-
-   local routes = (conf.public_interface4 and conf.route4) or
-                  (conf.public_interface6 and conf.route46)
-
-   config.app(c, "PublicRouter", route.PublicRouter, {
-                 sa = conf.inbound_sa
-   })
+   local routes
 
    if conf.public_interface4 then
+      routes = conf.route4
       config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
-                    node_ip4 = interface.ip4
+                    node_ip4 = conf.public_interface4.ip
       })
       config.app(c, "PublicICMP4", icmp.ICMP4, {
-                    node_ip4 = interface.ip4
+                    node_ip4 = conf.public_interface4.ip
       })
       config.app(c, "PublicNextHop", nexthop.NextHop4, {
-                    node_mac = interface.mac,
-                    node_ip4 = interface.ip4,
-                    nexthop_ip4 = interface.nexthop_ip4,
-                    nexthop_mac = interface.nexthop_mac
+                    node_mac = conf.public_interface4.mac,
+                    node_ip4 = conf.public_interface4.ip,
+                    nexthop_ip4 = conf.public_interface4.nexthop_ip,
+                    nexthop_mac = conf.public_interface4.nexthop_mac
       })
       config.link(c, "PublicDispatch.forward4 -> PublicRouter.input")
       config.link(c, "PublicDispatch.icmp4 -> PublicICMP4.input")
@@ -511,18 +540,19 @@ function configure_public_router (conf, append)
       ports.output = "PublicNextHop.output"
 
    elseif conf.public_interface6 then
+      routes = conf.route6
       config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
-                    node_ip6 = interface.ip6
+                    node_ip6 = conf.public_interface6.ip
       })
       config.app(c, "PublicICMP6", icmp.ICMP6, {
-                    node_ip6 = interface.ip6
+                    node_ip6 = conf.public_interface6.ip
       })
       config.app(c, "PublicNextHop", Join)
       config.app(c, "PublicND", nd_light, {
-                    local_mac = interface.mac,
-                    local_ip = interface.ip6,
-                    next_hop = interface.nexthop_ip6,
-                    remote_mac = interface.nexthop_mac
+                    local_mac = conf.public_interface6.mac,
+                    local_ip = conf.public_interface6.ip,
+                    next_hop = conf.public_interface6.nexthop_ip,
+                    remote_mac = conf.public_interface6.nexthop_mac
       })
       config.link(c, "PublicDispatch.forward6 -> PublicRouter.input")
       config.link(c, "PublicDispatch.icmp6 -> PublicICMP6.input")
@@ -532,19 +562,25 @@ function configure_public_router (conf, append)
       config.link(c, "PublicNextHop.output -> PublicND.north")
       ports.input = "PublicDispatch.input"
       ports.output = "PublicND.south"
-   end
+
+   -- No interface configured, can not configure public router.
+   else return c, ports end
+
+   config.app(c, "PublicRouter", route.PublicRouter, {
+                 sa = conf.inbound_sa
+   })
 
    ports.protocol_input = "PublicDispatch.protocol"
    ports.protocol_output = "PublicNextHop.protocol"
 
    for id, route in pairs(routes) do
       local Tunnel = "Tunnel_"..id
-      if route.gw_ip4 then
+      if conf.public_interface4 then
          config.app(c, Tunnel, tunnel.Tunnel4,
-                    {src=interface.ip4, dst=route.gw_ip4})
-      elseif route.gw_ip6 then
+                    {src=conf.public_interface4.ip, dst=route.gateway})
+      elseif conf.public_interface6 then
          config.app(c, Tunnel, tunnel.Tunnel6,
-                    {src=interface.ip6, dst=route.gw_ip6})
+                    {src=conf.public_interface6.ip, dst=route.gateway})
       end
       config.link(c, Tunnel..".output -> PublicNextHop."..id)
       ports.outbound[id] = Tunnel..".input"
@@ -566,16 +602,16 @@ function configure_exchange (conf, append)
       output = nil, -- key exchange output
    }
 
-   local interface = conf.public_interface4 or conf.public_interface6
-   if conf.data_plane or not interface then return c, ports end
-
-   local routes = (conf.public_interface4 and conf.route4) or
-                  (conf.public_interface6 and conf.route46)
+   if conf.data_plane or
+   not (conf.public_interface4 or conf.public_interface6) then
+      return c, ports
+   end
 
    config.app(c, "KeyManager", exchange.KeyManager, {
-                 node_ip4 = interface.ip4,
-                 node_ip6 = interface.ip6,
-                 routes = routes,
+                 node_ip4 = conf.public_interface4 and conf.public_interface4.ip,
+                 node_ip6 = conf.public_interface6 and conf.public_interface6.ip,
+                 routes = (conf.public_interface4 and conf.route4) or
+                          (conf.public_interface6 and conf.route6),
                  sa_db_path = sa_db_path.."/"..conf.queue,
                  negotiation_ttl = conf.negotiation_ttl,
                  sa_ttl = conf.sa_ttl
