@@ -1,4 +1,4 @@
-VITA: SIMPLE KEY EXCHANGE (vita-ske, version 4)
+VITA: SIMPLE KEY EXCHANGE (vita-ske, version 5)
 
  A simple key negotiation protocol based on Noise NNpsk0 (authenticated via
  pre-shared symmetric keys) that provides authentication, perfect forward
@@ -39,9 +39,10 @@ Description:
  Two parties participate in the protocol: an initiator and a responder.
 
  Let vi and vr be four byte version identifiers choosen by the initiator and
- the responder respectively. Let aead be a 32 byte identifer for an AEAD
- algorithm chosen by the responder. Let n be a 32 byte random nonce chosen by
- the responder.
+ the responder respectively. Let iaddr and raddr be the expected network
+ addresses of the initiator and the responder. Let aead be a 32 byte identifer
+ for an AEAD algorithm chosen by the responder. Let n be a 32 byte random nonce
+ chosen by the responder.
 
  ----
 
@@ -51,8 +52,8 @@ Description:
   → vr ‖ aead ‖ n
 
  Ensure vr and aead are acceptable. Initialize NNpsk0 with k, and
- prologue = vr ‖ r ‖ aead ‖ n. Let rxspi be a SPI choosen by us. Let txspi be a
- SPI choosen by the responder.
+ prologue = vr ‖ r ‖ iaddr ‖ raddr ‖ aead ‖ n. Let rxspi be a SPI choosen by
+ us. Let txspi be a SPI choosen by the responder.
 
   ← psk, e (rxspi)
   → e, ee (txspi)
@@ -66,7 +67,7 @@ Description:
  ----
 
  The responder behaves as follows: Initialize NNpsk0 with k, and
- prologue = vr ‖ r ‖ aead ‖ n.
+ prologue = vr ‖ r ‖ iaddr ‖ raddr ‖ aead ‖ n.
 
   → vi
   ← vr ‖ aead ‖ n
@@ -96,13 +97,14 @@ Security Proof:
 
 Notes:
 
- • The AD is hashed to 16 bytes with blake2s before being supplied to
-   aes256-gcm. This is due to a limitation of the maximum AD length of our
-   aes-gcm implementation.
-
  • The vi value is transmitted solely for informational purposes and has no
    effect on the protocol. The responder MUST NOT consider it to, i.e.,
    downgrade vr or select an aead value.
+
+ • The iaddr and raddr values are chosen by each party without mutual
+   coordination. Their purpose is to encode intent into the exchange so that
+   a node that implements the protocol can not be tricked into completing an
+   exchange with another (authorized) peer or itself unless intended.
 
 References:
 
