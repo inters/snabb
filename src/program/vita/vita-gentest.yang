@@ -4,17 +4,24 @@ module vita-gentest {
 
   import vita-esp-gateway { prefix vita; }
 
-  container private-interface4 {
-    uses vita:interface; uses vita:interface4;
-  }
-  choice router {
-    list public-interface4 {
-      uses vita:interface; uses vita:interface4;
-      key ip; unique queue;
+  choice gateway {
+    case v4 {
+      container private-interface4 {
+        uses vita:interface; uses vita:interface4;
+      }
+      list public-interface4 {
+        uses vita:interface; uses vita:interface4; uses vita:gateway;
+        key ip; unique queue;
+      }
     }
-    list public-interface6 {
-      uses vita:interface; uses vita:interface6;
-      key ip; unique queue;
+    case v6 {
+      container private-interface6 {
+        uses vita:interface; uses vita:interface6;
+      }
+      list public-interface6 {
+        uses vita:interface; uses vita:interface6; uses vita:gateway;
+        key ip; unique queue;
+      }
     }
   }
 
