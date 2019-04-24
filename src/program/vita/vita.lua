@@ -21,6 +21,7 @@ local crypto = require("program.vita.crypto")
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
+local murmur = require("lib.hash.murmur")
 local numa = require("lib.numa")
 local yang = require("lib.yang.yang")
 local ptree = require("lib.ptree.ptree")
@@ -58,12 +59,18 @@ local function derive_local_unicast_mac (prefix, ip)
    local mac = ffi.new("uint8_t[?]", 6)
    mac[0] = prefix[1]
    mac[1] = prefix[2]
-   local n, offset = ipv4:pton(ip), 0
-   if not n then n, offset = ipv6:pton(ip), 12 end
-   ffi.copy(mac+2, ffi.cast("uint8_t *", n) + offset, 4)
+   local ip4 = ipv4:pton(ip)
+   if ip4 then
+      ffi.copy(mac+2, ip4, 4)
+   else
+      local ip6 = ipv6:pton(ip)
+      -- hash IPv6 address to obtain hopefully unique MAC suffix...
+      local murmur32 = murmur.MurmurHash3_x86_32:new()
+      ffi.copy(mac+2, murmur32:hash(ip6, ffi.sizeof(ip6)), 4)
+   end
    -- First bit = 0 indicates unicast, second bit = 1 means locally
    -- administered.
-   assert(bit.band(bit.bor(prefix[1], 0x02), 0xFE) == prefix[1],
+   assert(bit.band(bit.bor(mac[0], 0x02), 0xFE) == mac[0],
           "Non-unicast or non-local MAC address: "..ethernet:ntop(mac))
    return ethernet:ntop(mac)
 end
