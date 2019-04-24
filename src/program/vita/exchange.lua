@@ -206,6 +206,9 @@ function KeyManager:new (conf)
       ip = nil,
       ip4 = ipv4:new({}),
       ip6 = ipv6:new({}),
+      ip_in = nil,
+      ip4_in = ipv4:new({}),
+      ip6_in = ipv6:new({}),
       transport = Transport.header:new({}),
       transport_in = Transport.header:new({}),
       knock_message = Protocol.knock_message:new({}),
@@ -227,8 +230,8 @@ function KeyManager:new (conf)
 end
 
 function KeyManager:reconfig (conf)
-   if conf.node_ip4 then self.ip = self.ip4
-   elseif conf.node_ip6 then self.ip = self.ip6
+   if conf.node_ip4 then self.ip, self.ip_in = self.ip4, self.ip4_in
+   elseif conf.node_ip6 then self.ip, self.ip_in = self.ip6, self.ip6_in
    else error("Need either node_ip4 or node_ip6.") end
 
    self.audit = lib.logger_new({
@@ -416,15 +419,17 @@ function KeyManager:negotiate (route)
 end
 
 function KeyManager:handle_negotiation (request)
-   local route, message = self:parse_request(request)
+   local ip, route, message = self:parse_request(request)
 
    if not (self:handle_knock_request(route, message)
            or self:handle_challenge_request(route, message)
            or self:handle_proposal_request(route, message)
            or self:handle_agreement_request(route, message)) then
       counter.add(self.shm.rxerrors)
-      self.audit:log(("Rejected invalid negotiation request for '%s'")
-            :format(route or "<unknown>"))
+      self.audit:log(
+         ("Rejected invalid negotiation request for route '%s' from %s")
+            :format(route or "<unknown>", ip:ntop(ip:src()))
+      )
    end
 end
 
@@ -674,11 +679,23 @@ function KeyManager:request (route, message)
 end
 
 function KeyManager:parse_request (request)
-   local transport =
-      self.transport_in:new_from_mem(request.data, request.length)
-   if not transport then
+   local ip = self.ip_in:new_from_mem(request.data, request.length)
+   if not ip then
       counter.add(self.shm.protocol_errors)
       return
+   end
+   local data = request.data + ip:sizeof()
+   local length
+   if self.ip:class() == ipv4 then
+      length = math.min(request.length, ip:total_length()) - ip:sizeof()
+   elseif self.ip:class() == ipv6 then
+      length = math.min(request.length - ip:sizeof(), ip:payload_length())
+   else error("BUG") end
+
+   local transport = self.transport_in:new_from_mem(data, length)
+   if not transport then
+      counter.add(self.shm.protocol_errors)
+      return ip
    end
 
    local route = nil
@@ -690,11 +707,11 @@ function KeyManager:parse_request (request)
    end
    if not route then
       counter.add(self.shm.route_errors)
-      return
+      return ip
    end
 
-   local data = request.data + Transport.header:sizeof()
-   local length = request.length - Transport.header:sizeof()
+   local data = data + Transport.header:sizeof()
+   local length = length - Transport.header:sizeof()
    local message =
          (transport:message_type() == Transport.message_type.knock
              and self.knock_message_in:new_from_mem(data, length))
@@ -706,10 +723,10 @@ function KeyManager:parse_request (request)
              and self.agreement_message_in:new_from_mem(data, length))
    if not message then
       counter.add(self.shm.protocol_errors)
-      return
+      return ip, route
    end
 
-   return route, message
+   return ip, route, message
 end
 
 -- sa_db := { outbound_sa={<spi>=(SA), ...}, inbound_sa={<spi>=(SA), ...} }
