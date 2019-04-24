@@ -15,8 +15,6 @@ local icmp = require("program.vita.icmp")
       schemata = require("program.vita.schemata")
 local basic_apps = require("apps.basic.basic_apps")
 local intel_mp = require("apps.intel_mp.intel_mp")
-local nd_light = require("apps.ipv6.nd_light").nd_light
-local Join = require("apps.basic.basic_apps").Join
 local crypto = require("program.vita.crypto")
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
@@ -446,8 +444,6 @@ function configure_private_router (conf, append)
       config.link(c, "InboundTTL.output -> PrivateNextHop.forward")
       config.link(c, "InboundTTL.time_exceeded -> InboundICMP4.transit_ttl_exceeded")
       config.link(c, "InboundICMP4.output -> PrivateRouter.control")
-      ports.input = "PrivateDispatch.input"
-      ports.output = "PrivateNextHop.output"
 
    elseif conf.private_interface6 then
       routes = conf.route6
@@ -470,16 +466,16 @@ function configure_private_router (conf, append)
       config.app(c, "InboundICMP6", icmp.ICMP6, {
                     node_ip6 = conf.private_interface6.ip
       })
-      config.app(c, "PrivateNextHop", Join)
-      config.app(c, "PrivateND", nd_light, {
-                    local_mac = conf.private_interface6.mac,
-                    local_ip = conf.private_interface6.ip,
-                    next_hop = conf.private_interface6.nexthop_ip,
-                    remote_mac = conf.private_interface6.nexthop_mac
+      config.app(c, "PrivateNextHop", nexthop.NextHop6, {
+                    node_mac = conf.private_interface6.mac,
+                    node_ip6 = conf.private_interface6.ip,
+                    nexthop_ip6 = conf.private_interface6.nexthop_ip,
+                    nexthop_mac = conf.private_interface6.nexthop_mac,
+                    synchronize = true
       })
       config.link(c, "PrivateDispatch.forward6 -> OutboundHopLimit.input")
       config.link(c, "PrivateDispatch.icmp6 -> PrivateICMP6.input")
-      config.link(c, "PrivateDispatch.nd -> PrivateND.south")
+      config.link(c, "PrivateDispatch.nd -> PrivateNextHop.nd")
       config.link(c, "PrivateDispatch.protocol6_unreachable -> PrivateICMP6.protocol_unreachable")
       config.link(c, "OutboundHopLimit.output -> PrivateRouter.input")
       config.link(c, "OutboundHopLimit.hop_limit_exceeded -> PrivateICMP6.transit_ttl_exceeded")
@@ -491,12 +487,12 @@ function configure_private_router (conf, append)
       config.link(c, "InboundHopLimit.output -> PrivateNextHop.forward")
       config.link(c, "InboundHopLimit.hop_limit_exceeded -> InboundICMP6.transit_ttl_exceeded")
       config.link(c, "InboundICMP6.output -> PrivateRouter.control")
-      config.link(c, "PrivateNextHop.output -> PrivateND.north")
-      ports.input = "PrivateDispatch.input"
-      ports.output = "PrivateND.south"
 
    -- No interface configured, can not configure private router.
    else return c, ports end
+
+   ports.input = "PrivateDispatch.input"
+   ports.output = "PrivateNextHop.output"
 
    for id, route in pairs(routes) do
       ports.outbound[id] = "PrivateRouter."..id
@@ -543,8 +539,6 @@ function configure_public_router (conf, append)
       config.link(c, "PublicDispatch.arp -> PublicNextHop.arp")
       config.link(c, "PublicDispatch.protocol4_unreachable -> PublicICMP4.protocol_unreachable")
       config.link(c, "PublicICMP4.output -> PublicNextHop.icmp4")
-      ports.input = "PublicDispatch.input"
-      ports.output = "PublicNextHop.output"
 
    elseif conf.public_interface6 then
       routes = conf.route6
@@ -554,24 +548,23 @@ function configure_public_router (conf, append)
       config.app(c, "PublicICMP6", icmp.ICMP6, {
                     node_ip6 = conf.public_interface6.ip
       })
-      config.app(c, "PublicNextHop", Join)
-      config.app(c, "PublicND", nd_light, {
-                    local_mac = conf.public_interface6.mac,
-                    local_ip = conf.public_interface6.ip,
-                    next_hop = conf.public_interface6.nexthop_ip,
-                    remote_mac = conf.public_interface6.nexthop_mac
+      config.app(c, "PublicNextHop", nexthop.NextHop6, {
+                    node_mac = conf.public_interface6.mac,
+                    node_ip6 = conf.public_interface6.ip,
+                    nexthop_ip6 = conf.public_interface6.nexthop_ip,
+                    nexthop_mac = conf.public_interface6.nexthop_mac
       })
       config.link(c, "PublicDispatch.forward6 -> PublicRouter.input")
       config.link(c, "PublicDispatch.icmp6 -> PublicICMP6.input")
-      config.link(c, "PublicDispatch.nd -> PublicND.south")
+      config.link(c, "PublicDispatch.nd -> PublicNextHop.nd")
       config.link(c, "PublicDispatch.protocol6_unreachable -> PublicICMP6.protocol_unreachable")
       config.link(c, "PublicICMP6.output -> PublicNextHop.icmp6")
-      config.link(c, "PublicNextHop.output -> PublicND.north")
-      ports.input = "PublicDispatch.input"
-      ports.output = "PublicND.south"
 
    -- No interface configured, can not configure public router.
    else return c, ports end
+
+   ports.input = "PublicDispatch.input"
+   ports.output = "PublicNextHop.output"
 
    config.app(c, "PublicRouter", route.PublicRouter, {
                  sa = conf.inbound_sa

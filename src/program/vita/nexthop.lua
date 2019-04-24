@@ -232,3 +232,271 @@ function NextHop4:sync_nexthop ()
       self.eth:dst(self.nexthop)
    end
 end
+
+
+local ipv6 = require("lib.protocol.ipv6")
+local icmp = require("lib.protocol.icmp.header")
+local ns = require("lib.protocol.icmp.nd.ns")
+local na = require("lib.protocol.icmp.nd.na")
+local tlv = require("lib.protocol.icmp.nd.options.tlv")
+
+-- NextHop6 forwards IPv6 packets to the next hop and resolves Ethernet
+-- addresses via a subset of IPv6 Neighbor Discovery, see
+-- https://tools.ietf.org/html/rfc4861
+
+NextHop6 = {
+   name = "NextHop6",
+   config = {
+      node_mac = {required=true},
+      node_ip6 = {required=true},
+      nexthop_ip6 = {required=true},
+      nexthop_mac = {},
+      synchronize = {default=false}
+   },
+   shm = {
+      ns_requests = {counter},
+      na_replies = {counter},
+      nd_errors = {counter},
+      addresses_added = {counter},
+      addresses_updated = {counter}
+   }
+}
+
+function NextHop6:new (conf)
+   local o = {}
+   o.node_mac = ethernet:pton(conf.node_mac)
+   o.node_ip6 = ipv6:pton(conf.node_ip6)
+   o.nexthop_ip6 = ipv6:pton(conf.nexthop_ip6)
+
+   -- Ethernet frame header (node → nexthop)
+   o.eth = ethernet:new{
+      src = o.node_mac
+   }
+
+   -- Neighbor solicitation message to emit
+   o.ns_request = {
+      p = packet.allocate()
+   }
+   local d = datagram:new(o.ns_request.p)
+   local source_lladdr = tlv:new(1, o.node_mac):tlv()
+   d:payload(source_lladdr, ffi.sizeof(source_lladdr))
+   d:push(ns:new(o.nexthop_ip6))
+   local icmp = icmp:new(135, 0)
+   local sol_node_mcast = ipv6:solicited_node_mcast(o.nexthop_ip6)
+   local ip = ipv6:new{
+      next_header = 58, -- ICMP6
+      hop_limit = 255,
+      src = o.node_ip6,
+      dst = sol_node_mcast
+   }
+   local payload = d:packet()
+   icmp:checksum(payload.data, payload.length, ip)
+   d:push(icmp)
+   ip:payload_length(d:packet().length)
+   d:push(ip)
+   d:push(ethernet:new{
+             src = conf.local_mac,
+             dst = ethernet:ipv6_mcast(sol_node_mcast),
+             type = 0x86dd -- IPv6
+   })
+   o.ns_request.p = d:packet()
+
+   -- Neighbor advertisement message template
+   o.na_reply = {
+      p = packet.allocate(),
+      -- Leave IPv6 dst address unspecified. It will be set to the source of
+      -- the incoming solicitation.
+      ip = ipv6:new{
+         next_header = 58, -- ICMP6
+         hop_limit = 255,
+         src = conf.node_ip6
+      },
+      -- Leave Ethernet dst address unspecified.
+      eth = ethernet:new{
+         src = conf.node_mac,
+         type = 0x86dd -- IPv6
+      }
+   }
+   local d = datagram:new(o.na_reply.p)
+   local target_lladdr = tlv:new(2, o.node_mac):tlv()
+   d:payload(target_lladdr, ffi.sizeof(target_lladdr))
+   d:push(na:new(o.node_ip6, nil, 1, nil))
+   local icmp = icmp:new(136, 0)
+   local payload = d:packet()
+   icmp:checksum(payload.data, payload.length, o.na_reply.ip)
+   d:push(icmp)
+   o.na_reply.ip:payload_length(d:packet().length)
+   d:push(o.na_reply.ip)
+   d:push(o.na_reply.eth)
+   o.na_reply.p = d:packet()
+   o.na_reply.ip:new_from_mem(d:packet().data+ethernet:sizeof(), ipv6:sizeof())
+   o.na_reply.eth:new_from_mem(d:packet().data, ethernet:sizeof())
+
+   -- Headers to parse
+   o.eth_in = ethernet:new{}
+   o.ip_in = ipv6:new{}
+   o.icmp_in = icmp:new()
+   o.ns_in = ns:new()
+   o.na_in = na:new()
+
+   -- Initially, we don’t know the hardware address of our next hop
+   o.connected = false
+   o.connect_interval = lib.throttle(5)
+
+   -- ...unless its supplied
+   if conf.nexthop_mac then
+      o.eth:dst(ethernet:pton(conf.nexthop_mac))
+      o.connected = true
+   end
+
+   -- We can get our next hop by synchronizing with other NextHop6 instances
+   o.sync_interval = lib.throttle(1)
+
+   return setmetatable(o, {__index = NextHop6})
+end
+
+function NextHop6:stop ()
+   packet.free(self.ns_request.p)
+   packet.free(self.na_reply.p)
+end
+
+function NextHop6:link ()
+   -- We receive `nd' messages on the `nd' port, and traffic to be forwarded
+   -- on all other input ports.
+   self.forward = {}
+   for _, link in ipairs(self.input) do
+      if link ~= self.input.nd then
+         table.insert(self.forward, link)
+      end
+   end
+end
+
+function NextHop6:push ()
+   local output = self.output.output
+
+   if self.connected then
+      -- Forward packets to next hop
+      for _, input in ipairs(self.forward) do
+         while not link.empty(input) do
+            local p = link.receive(input)
+            link.transmit(output, self:encapsulate(p, 0x86dd))
+         end
+      end
+
+   elseif self.connect_interval() then
+      -- Send periodic neighbot solicitation requests if not connected
+      link.transmit(output, self.ns_request.p)
+      counter.add(self.shm.ns_requests)
+   end
+
+   -- Handle incoming ND solicitations and advertisements
+   local nd_input = self.input.nd
+   while not link.empty(nd_input) do
+      local p = link.receive(nd_input)
+      local reply = self:handle_nd(p)
+      if reply then
+         link.transmit(output, reply)
+         counter.add(self.shm.na_replies)
+      else
+         packet.free(p)
+      end
+   end
+
+   -- Synchronize next hop
+   if self.synchronize and self.sync_interval() then
+      self:sync_nexthop()
+   end
+end
+
+NextHop6.encapsulate = NextHop4.encapsulate
+
+-- Send periodic unsolicited NA? Only connect to
+-- solicited NA? Update via NA/NS once we got a solicited NA? Send unsolicited
+-- NA on start?
+function NextHop6:handle_nd (p)
+   local data, length = p.data, p.length
+
+   local eth = assert(self.eth_in:new_from_mem(data, length))
+   data, length = data + eth:sizeof(), length - eth:sizeof()
+
+   local ip = assert(self.ip_in:new_from_mem(data, length))
+   data, length = data + ip:sizeof(), length - ip:sizeof()
+
+   if ip:hop_limit() ~= 255 then
+      -- Mitigate off-link spoofing as per RFC4861
+      counter.add(self.shm.nd_errors)
+      return
+   end
+
+   local icmp = assert(self.icmp_in:new_from_mem(data, length))
+   data, length = data + icmp:sizeof(), length - icmp:sizeof()
+
+   if not icmp:checksum_check(data, length, ip) then
+      counter.add(self.shm.nd_errors)
+      return
+   end
+   if icmp:code() ~= 0 then
+      counter.add(self.shm.nd_errors)
+      return
+   end
+
+   local function add_or_update_nexthop (lladdr)
+      self.eth:dst(lladdr)
+      if self.synchronize then self:share_nexthop() end
+      if self.connected then counter.add(self.shm.addresses_updated)
+      else counter.add(self.shm.addresses_added) end
+      self.connected = true
+   end
+
+   -- Incoming neighbor solicitation
+   if icmp:type() == 135 then
+      local ns = self.ns_in:new_from_mem(data, length)
+      if not ns then
+         counter.add(self.shm.nd_errors)
+         return
+      end
+      -- If the sender is our target nexthop, try to add or update its address
+      -- using the “Source Link-Layer Address” option, if present.
+      if ip:src_eq(self.nexthop_ip6) then
+         data, length = data + ns:sizeof(), length - ns:sizeof()
+         for _, tlv in ipairs(ns:options(data, length)) do
+            if tlv:type() == 1 then -- Source Link-Layer Address
+               add_or_update_nexthop(tlv:option():addr())
+               break
+            end
+         end
+      end
+      -- If we are the target of the solicitation, reply with an advertisement.
+      if ns:target_eq(self.node_ip6) then
+         self.na_reply.eth:dst(eth:src())
+         self.na_reply.ip:dst(ip:src())
+         return packet.clone(self.na_reply.p)
+      end
+
+   -- Incoming neighbor advertisement
+   elseif icmp:type() == 136 then
+      local na = self.na_in:new_from_mem(data, length)
+      if not na then         
+         counter.add(self.shm.nd_errors)
+         return
+      end
+      -- If the advertisement’s target our nexthop, try to add or update its
+      -- address using the “Target Link-Layer Address” option, if present.
+      if na:target_eq(self.nexthop_ip6) then
+         data, length = data + na:sizeof(), length - na:sizeof()
+         for _, tlv in ipairs(na:options(data, length)) do
+            if tlv:type() == 2 then -- Target Link-Layer Address
+               add_or_update_nexthop(tlv:option():addr())
+               break
+            end
+         end
+      end
+
+   else
+      counter.add(self.shm.nd_errors)
+   end
+end
+
+NextHop6.shared_nexthop_path = NextHop4.shared_nexthop_path
+NextHop6.share_nexthop = NextHop4.share_nexthop
+NextHop6.sync_nexthop = NextHop4.sync_nexthop

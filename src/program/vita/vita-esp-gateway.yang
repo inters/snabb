@@ -412,6 +412,21 @@ module vita-esp-gateway {
         description
           "Count of declined ARP requests.";
       }
+      leaf ns-requests {
+        type yang:zero-based-counter64;
+        description
+          "Count IPv6 Neighbor Solicitations sent.";
+      }
+      leaf na-replies {
+        type yang:zero-based-counter64;
+        description
+          "Count IPv6 Neighbor Advertisements sent.";
+      }
+      leaf nd-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of declined or invalid ND solicitations/advertisements.";
+      }
       leaf adresses-added {
         type yang:zero-based-counter64;
         description

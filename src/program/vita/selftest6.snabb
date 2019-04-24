@@ -33,14 +33,12 @@ local cfg = {
       ip = "c0a8:0a00::1",
       nexthop_ip = "c0a8:0::1",
       mac = "52:54:00:00:00:00",
-      nexthop_mac = "52:54:00:00:00:00",
    },
    public_interface6 = {
       ["203:0:113::1"] = {
          pci = "00:00.0",
          nexthop_ip = "203::1",
-         mac = "52:54:00:00:00:00",
-         nexthop_mac = "52:54:00:00:00:00",
+         mac = "52:54:00:00:00:FF",
          queue = 1
       }
    },
@@ -79,21 +77,37 @@ local cfg = {
 -- Configure Vita queue (without KeyManager.)
 local c, private, public = vita.configure_vita_queue(cfg, 1, 'free')
 
+-- Add ND resolvers.
+config.app(c, "private_nd", nd_light, {
+              local_mac = "52:54:00:00:00:01",
+              local_ip = "c0a8:0::1",
+              next_hop = "c0a8:0a00::1"
+})
+config.app(c, "public_nd", nd_light, {
+              local_mac = "52:54:00:00:00:FE",
+              local_ip = "203::1",
+              next_hop = "203:0:113::1"
+})
+config.link(c, "private_nd.south -> "..private.input)
+config.link(c, private.output.." -> private_nd.south")
+config.link(c, "public_nd.south -> "..public.input)
+config.link(c, public.output.." -> public_nd.south")
+
 -- Loopback ESP traffic.
 config.app(c, "public_out", basic_apps.Tee)
 config.app(c, "join", basic_apps.Join)
 config.app(c, "filter", filter.PcapFilter, {filter="ip6 proto esp"})
-config.link(c, public.output.." -> public_out.input")
+config.link(c, "public_nd.north -> public_out.input")
 config.link(c, "public_out.loopback -> filter.input")
 config.link(c, "filter.output -> join.loopback")
-config.link(c, "join.output -> "..public.input)
+config.link(c, "join.output -> public_nd.north")
 
 -- Add PCAP sources and sinks.
 config.app(c, "private_pcap_in", pcap.PcapReader,
            "program/vita/selftest6-private-in.pcap")
 config.app(c, "public_pcap_in", pcap.PcapReader,
            "program/vita/selftest6-public-in.pcap")
-config.link(c, "private_pcap_in.output -> "..private.input)
+config.link(c, "private_pcap_in.output -> private_nd.north")
 config.link(c, "public_pcap_in.output -> join.input")
 if regenerate_pcaps then
    -- Regenerate reference outputs.
@@ -101,7 +115,7 @@ if regenerate_pcaps then
               "program/vita/selftest6-private-out.pcap")
    config.app(c, "public_pcap_out", pcap.PcapWriter,
               "program/vita/selftest6-public-out.pcap")
-   config.link(c, private.output.." -> private_pcap_out.input")
+   config.link(c, "private_nd.north -> private_pcap_out.input")
    config.link(c, "public_out.output -> public_pcap_out.input")
 else
    -- Match reference outputs.
@@ -111,7 +125,7 @@ else
               "program/vita/selftest6-public-out.pcap")
    config.app(c, "match_private", match.Match, {})
    config.link(c, "private_pcap_out.output -> match_private.comparator")
-   config.link(c, private.output.." -> match_private.rx")
+   config.link(c, "private_nd.north -> match_private.rx")
    config.app(c, "match_public", match.Match, {})
    config.link(c, "public_pcap_out.output -> match_public.comparator")
    config.link(c, "public_out.output -> match_public.rx")
