@@ -40,6 +40,20 @@ local cond = require("lib.fibers.cond")
 
 local call_with_output_string = mem.call_with_output_string
 
+local pcall = pcall
+
+local debug = false
+if debug then
+   local STP = require("lib.lua.StackTracePlus")
+   pcall = function (f, ...)
+      local args = {...}
+      return xpcall(
+         function () return f(unpack(args)) end,
+         function (err) return err.."\n"..STP.stacktrace() end
+      )
+   end
+end
+
 local Manager = {}
 
 local log_levels = { DEBUG=1, INFO=2, WARN=3 }
