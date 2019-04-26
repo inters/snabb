@@ -208,7 +208,8 @@ module vita-esp-gateway {
   }
 
   leaf mtu {
-    type uint16 { range "0..8937"; }
+    type uint16 { range "0..8923"; }
+    default 8923;
     description "
     Optionally, the gateway’s MTU (excluding Ethernet overhead) can be
     specified in bytes. The default and maximum permitted value is 8923. Since

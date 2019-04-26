@@ -20,26 +20,29 @@ local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
 local murmur = require("lib.hash.murmur")
-local numa = require("lib.numa")
 local yang = require("lib.yang.yang")
 local ptree = require("lib.ptree.ptree")
 local CPUSet = require("lib.cpuset")
-local pci = require("lib.hardware.pci")
+local mem_stream = require("lib.stream.mem")
 local S = require("syscall")
 local ffi = require("ffi")
 local usage = require("program.vita.README_inc")
 local confighelp = require("program.vita.README_config_inc")
+
+local default_config = yang.load_config_for_schema_by_name(
+   'vita-esp-gateway', mem_stream.open_input_string ''
+)
 
 local confspec = {
    private_interface4 = {},
    private_interface6 = {},
    public_interface4 = {default={}},
    public_interface6 = {default={}},
-   mtu = {default=8923},
+   mtu = {default=default_config.mtu},
    route4 = {default={}},
    route6 = {default={}},
-   negotiation_ttl = {},
-   sa_ttl = {},
+   negotiation_ttl = {default=default_config.negotation_ttl},
+   sa_ttl = {default=default_config.sa_ttl},
    data_plane = {},
    sa_database = {default={}}
 }
@@ -221,7 +224,7 @@ function run_vita (opt)
       name = opt.name,
       schema_name = 'vita-esp-gateway',
       schema_support = schema_support,
-      initial_configuration = opt.initial_configuration or {},
+      initial_configuration = opt.initial_configuration or default_config,
       setup_fn = purify(opt.setup_fn or vita_workers),
       cpuset = opt.cpuset,
       worker_default_scheduling = {busywait=opt.busywait or false,
