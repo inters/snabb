@@ -21,6 +21,8 @@ local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
 local murmur = require("lib.hash.murmur")
 local yang = require("lib.yang.yang")
+local data = require("lib.yang.data")
+local cltable = require("lib.cltable")
 local ptree = require("lib.ptree.ptree")
 local CPUSet = require("lib.cpuset")
 local mem_stream = require("lib.stream.mem")
@@ -44,7 +46,8 @@ local confspec = {
    negotiation_ttl = {default=default_config.negotation_ttl},
    sa_ttl = {default=default_config.sa_ttl},
    data_plane = {},
-   sa_database = {default={}}
+   outbound_sa = {default=default_config.outbound_sa},
+   inbound_sa = {default=default_config.inbound_sa}
 }
 
 local ifspec = {
@@ -85,7 +88,7 @@ end
 -- This takes a Vita configuration (potentially defining multiple queues) and a
 -- queue id and returns the configuration for a single given queue by mutating
 -- a copy of the configuration.
-local function parse_conf (conf, queue)
+local function parse_queue_conf (conf, queue)
    conf = lib.parse(lib.deepcopy(conf), confspec)
    conf.queue = queue
    -- all queues share a single private interface
@@ -122,24 +125,48 @@ local function parse_conf (conf, queue)
       route.gateway = select_gateway(route.gateway)
    end
    -- select the SAs configured for this queue, default to empty SA lists
-   conf.outbound_sa = {}
-   conf.inbound_sa = {}
-   local sa_database = conf.sa_database
-   conf.sa_database = nil
-   for queue, sa_db in pairs(sa_database) do
-      if queue == conf.queue then
-         conf.outbound_sa = sa_db.outbound_sa
-         conf.inbound_sa = sa_db.inbound_sa
-         break
+   local function select_sa (sa)
+      local selected = {}
+      for key, sa in cltable.pairs(sa) do
+         if key.queue == conf.queue then
+            selected[key.spi] = sa
+            sa.queue = key.queue
+         end
       end
+      return selected
    end
+   conf.outbound_sa = select_sa(conf.outbound_sa)
+   conf.inbound_sa = select_sa(conf.inbound_sa)
    return conf
 end
+
+-- The SA database is maintained as one file per work queue, named after the
+-- queue identifier. Each work queue maintains its own respective SPI space,
+-- and atomically updates its SA database as a configuration in the format
+-- described by the vita-ephemeral-keys YANG schema (see
+-- vita-ephemeral-keys.yang).
+--
+-- The Vita supervisor periodically merges these SA database “shards” into the
+-- vita-esp-gateway schema, quere each SA is keyed by SPI and queue identifier.
 
 local sa_db_path = "group/sa_db"
 
 function init_sa_db ()
    shm.mkdir(shm.resolve(sa_db_path))
+end
+
+function queue_sa_db (queue)
+   return ("%s/queue%d"):format(sa_db_path, queue)
+end
+
+function iterate_sa_db ()
+   local files = shm.children(sa_db_path)
+   local sa_db = {}
+   for _, name in ipairs(files) do
+      local queue = name:match("^queue(%d+)$")
+      if queue then sa_db[tonumber(queue)] = sa_db_path.."/"..name end
+   end
+   return pairs(sa_db)
 end
 
 -- Vita command-line interface (CLI)
@@ -232,22 +259,15 @@ function run_vita (opt)
       worker_jit_flush = false
    }
 
-   local function absolute_sa_db_path (queue)
-      return shm.root.."/"..shm.resolve(sa_db_path)
-   end
-
    -- Listen for SA database changes.
    local sa_db_last_modified = {}
    local function sa_db_needs_reload ()
       local modified = false
-      for _, queue in ipairs(shm.children(sa_db_path)) do
-         queue = tonumber(queue)
-         if queue then -- ignore temp files
-            local stat = S.stat(absolute_sa_db_path().."/"..queue)
-            if stat and stat.st_mtime ~= sa_db_last_modified[queue] then
-               sa_db_last_modified[queue] = stat.st_mtime
-               modified = true
-            end
+      for queue, db in iterate_sa_db() do
+         local stat = S.stat(shm.path(db))
+         if stat and stat.st_mtime ~= sa_db_last_modified[queue] then
+            sa_db_last_modified[queue] = stat.st_mtime
+            modified = true
          end
       end
       return modified
@@ -255,24 +275,38 @@ function run_vita (opt)
 
    -- Load current SA database.
    local function load_sa_db ()
-      local sa_db = {}
-      for _, queue in ipairs(shm.children(sa_db_path)) do
-         queue = tonumber(queue)
-         if queue then -- ignore temp files
-            sa_db[queue] = yang.load_configuration(
-               absolute_sa_db_path().."/"..queue,
-               {schema_name='vita-ephemeral-keys'}
-            )
+      local data_gmr =
+         data.data_grammar_from_schema(schemata['esp-gateway'], true)
+      local outbound_key =
+         data.typeof(data_gmr.members['outbound-sa'].key_ctype)
+      local inbound_key =
+         data.typeof(data_gmr.members['inbound-sa'].key_ctype)
+      local outbound_sa = cltable.new{key_type=outbound_key}
+      local inbound_sa = cltable.new{key_type=inbound_key}
+      for queue, db in iterate_sa_db() do
+         local success, db = pcall(yang.load_configuration,
+            shm.path(db), {schema_name='vita-ephemeral-keys'}
+         )
+         if succcess then
+            for spi, sa in pairs(db.outbound_sa) do
+               outbound_sa[outbound_key{spi=spi, queue=queue}] = sa
+            end
+            for spi, sa in pairs(db.inbound_sa) do
+               inbound_sa[inbound_key{spi=spi, queue=queue}] = sa
+            end
+         else
+            supervisor:warn("Failed to read SA DB for queue %d", queue)
          end
       end
-      return sa_db
+      return {outbound_sa=outbound_sa, inbound_sa=inbound_sa}
    end
 
    -- This is how we imperatively incorporate the SA database into the
    -- configuration proper. NB: see schema_support and the use of purify above.
    local function merge_sa_db (sa_db)
       return function (current_config)
-         current_config.sa_database = sa_db
+         current_config.outbound_sa = sa_db.outbound_sa
+         current_config.inbound_sa = sa_db.inbound_sa
          return current_config
       end
    end
@@ -309,7 +343,7 @@ function vita_workers (conf)
 end
 
 function configure_vita_queue (conf, queue, free_links)
-   conf = parse_conf(conf, queue)
+   conf = parse_queue_conf(conf, queue)
 
    local c = config.new()
    local _, key_manager = configure_exchange(conf, c)
@@ -348,7 +382,7 @@ function configure_vita_queue (conf, queue, free_links)
       link(outbound_sa.output[sa.route], public_router.outbound[sa.route])
    end
    for spi, sa in pairs(conf.inbound_sa) do
-      local id = sa.route.."_"..spi
+      local id = sa.route.."_"..sa.queue.."_"..spi
       link(public_router.inbound[id], inbound_sa.input[id])
       link(inbound_sa.output[id], private_router.inbound[id])
    end
@@ -502,7 +536,7 @@ function configure_private_router (conf, append)
    end
 
    for spi, sa in pairs(conf.inbound_sa) do
-      local id = sa.route.."_"..spi
+      local id = sa.route.."_"..sa.queue.."_"..spi
       ports.inbound[id] = "InboundDispatch."..id
    end
 
@@ -590,7 +624,7 @@ function configure_public_router (conf, append)
    end
 
    for spi, sa in pairs(conf.inbound_sa) do
-      local id = sa.route.."_"..spi
+      local id = sa.route.."_"..sa.queue.."_"..spi
       ports.inbound[id] = "PublicRouter."..id
    end
 
@@ -615,7 +649,7 @@ function configure_exchange (conf, append)
                  node_ip6 = conf.public_interface6 and conf.public_interface6.ip,
                  routes = (conf.public_interface4 and conf.route4) or
                           (conf.public_interface6 and conf.route6),
-                 sa_db_path = sa_db_path.."/"..conf.queue,
+                 sa_db_path = queue_sa_db(conf.queue),
                  negotiation_ttl = conf.negotiation_ttl,
                  sa_ttl = conf.sa_ttl
    })
@@ -655,7 +689,7 @@ function configure_inbound_sa (sa_db, append)
    local ports = { input={}, output={} } -- SA input/output pairs
 
    for spi, sa in pairs(sa_db.inbound_sa) do
-      local id = sa.route.."_"..spi
+      local id = sa.route.."_"..sa.queue.."_"..spi
       -- Configure inbound SA
       local InboundSA = "InboundSA_"..id
       config.app(c, InboundSA, tunnel.Decapsulate, {

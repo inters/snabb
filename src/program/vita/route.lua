@@ -130,6 +130,8 @@ function PrivateRouter:push ()
 end
 
 
+-- sa := { route=(ID), spi=(SPI), ... }
+
 PublicRouter = {
    name = "PublicRouter",
    config = {
@@ -163,7 +165,7 @@ function PublicRouter:build_fib (conf)
       assert(spi < 2^16, "SPI overflow")
       assert(ffi.cast("uint32_t", index) == index, "index overflow")
       self.routing_table[spi] = index
-      self.ports[index] = sa.route.."_"..spi
+      self.ports[index] = sa.route.."_"..sa.queue.."_"..spi
    end
 end
 

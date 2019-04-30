@@ -240,19 +240,33 @@ module vita-esp-gateway {
     ";
   }
 
-  list sa-database {
-    key queue;
+  // Outbound and inbound SAs are configured automatically unless the
+  // 'data-plane' toggle (see below) is set to true.
+  list outbound-sa {
+    uses sa; uses gateway;
+    key "spi queue"; unique "route queue";
     description "
-    Each work queue maintains a set outbound SAs (at most one per route) and a
-    set of inbound SAs (possibly multiple per route). Unless the 'data-plane'
-    toggle (see below) is set to true, the SA database is managed automatically
-    by the key manager, and requires no user configuration.
+    Active outbound SAs. Each work queue can have at most one outbound SA per
+    route. The queue identifier defaults to 1.
     ";
-    leaf queue { type queue; }
-    list outbound-sa { key spi; unique route; uses sa; }
-    list inbound-sa { key spi; uses sa; }
   }
-
+  list inbound-sa {
+    uses sa; uses gateway;
+    key "spi queue";
+    description "
+    Active inbound SAs. Each work queue can have multiple inbound SAs per
+    route. The queue identifier defaults to 1.
+    ";
+  }
+  leaf data-plane {
+    type boolean;
+    description "
+    If true, disables the built-in key manager and AKE negotiations. In this
+    mode the options 'negotiation-ttl', 'sa-ttl' as well as 'route.spi' and
+    'route.preshared-key are ignored, and the user is expected to configure
+    'outbound-sa' and 'inbound-sa' themselves.
+    ";
+  }
   grouping sa {
     description "
     Each SA must name an existing route, an SPI equal or greater than 256, and
@@ -265,16 +279,6 @@ module vita-esp-gateway {
     leaf aead { type string; mandatory true; }
     leaf key { type key16; mandatory true; }
     leaf salt { type key4; mandatory true; }
-  }
-
-  leaf data-plane {
-    type boolean;
-    description "
-    If true, disables the built-in key manager and AKE negotiations. In this
-    case the options 'negotiation-ttl', 'sa-ttl' as well as 'route.spi' and
-    'route.preshared-key are ignored, and the user is expected to configure
-    'sa-database' themselves.
-    ";
   }
 
   // TYPES 
@@ -851,7 +855,8 @@ module vita-esp-gateway {
 
     // SA state
     list inbound-sa {
-      key spi;
+      key "queue spi";
+      leaf queue { type queue; }
       leaf spi { type spi; }
       description
         "Events for ephemeral inbound security associations (SA).";

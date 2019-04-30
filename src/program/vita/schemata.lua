@@ -7,6 +7,7 @@ local counter = require("core.counter")
 local data = require("lib.yang.data")
 local state = require('lib.yang.state')
 local yang = require("lib.yang.yang")
+local cltable = require("lib.cltable")
 
 
 -- Load Vita’s native schemata
@@ -40,10 +41,9 @@ function compute_state_reader (schema_name)
    local schema = yang.load_schema_by_name(schema_name)
    local grammar = data.data_grammar_from_schema(schema, false)
 
-   local gateway_state_gmr =
-      grammar.members["gateway-state"]
-   local sa_state_gmr =
-      gateway_state_gmr.members["inbound-sa"].values["sa-state"]
+   local gateway_state_gmr = grammar.members["gateway-state"]
+   local inbound_sa_gmr = gateway_state_gmr.members["inbound-sa"]
+   local sa_state_gmr = inbound_sa_gmr.values["sa-state"]
 
    return function (pid, graph)
       local gateway_state = {}
@@ -93,15 +93,16 @@ function compute_state_reader (schema_name)
          gateway_state[id] = state.state_reader_from_grammar(grammar)(counters)
       end
 
-      gateway_state.inbound_sa = {}
+      local inbound_sa_key_t = data.typeof(inbound_sa_gmr.key_ctype)
+      gateway_state.inbound_sa = cltable.new{key_type=inbound_sa_key_t}
       for app, _ in pairs(graph.apps) do
-         local sa = app:match("^DSP_%w+_(%d+)$")
-         if sa then
-            local spi = tonumber(sa)
+         local queue, spi = app:match("^InboundSA_%w+_(%d+)_(%d+)$")
+         if queue and spi then
+            local queue, spi = tonumber(queue), tonumber(spi)
             local counters = open_counters("/"..pid.."/apps/"..app)
             local reader = state.state_reader_from_grammar(sa_state_gmr)
-            gateway_state.inbound_sa[spi] =
-               {spi=spi, sa_state=reader(counters)}
+            gateway_state.inbound_sa[inbound_sa_key_t{queue=queue, spi=spi}] =
+               {queue=queue, spi=spi, sa_state=reader(counters)}
          end
       end
 
@@ -133,10 +134,14 @@ function process_states (states)
    local lists =
       {"inbound_sa"}
    for _, list in ipairs(lists) do
-      local acc = {}
+      local acc
       for _, state in ipairs(states) do
-         for key, value in pairs(state[list]) do
-            acc[key] = value
+         if not acc then
+            acc = state[list]
+         else
+            for key, value in cltable.pairs(state[list]) do
+               acc[key] = value
+            end
          end
       end
       gateway_state[list] = acc
