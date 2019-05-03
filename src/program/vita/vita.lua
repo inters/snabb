@@ -287,7 +287,7 @@ function run_vita (opt)
          local success, db = pcall(yang.load_configuration,
             shm.path(db), {schema_name='vita-ephemeral-keys'}
          )
-         if succcess then
+         if success then
             for spi, sa in pairs(db.outbound_sa) do
                outbound_sa[outbound_key{spi=spi, queue=queue}] = sa
             end
