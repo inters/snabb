@@ -6,6 +6,7 @@ local counter = require("core.counter")
 local esp = require("lib.ipsec.esp")
 local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
+local lib = require("core.lib")
 
 -- sa := { spi=(SPI), aead=(STRING), key=(KEY), salt=(SALT),
 --         [ window_size=(INT),
@@ -15,6 +16,12 @@ local ipv6 = require("lib.protocol.ipv6")
 -- https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
 local NextHeaderIPv4 = 4
 local NextHeaderIPv6 = 41
+
+-- Try to process packets in burst sized batches to armortize spinning up the
+-- AVX units and loading the caches with AES-GCM contexts, but add no more than
+-- 5ms of latency when throughput is low.
+local burst = engine.pull_npackets
+local throttle = 0.005
 
 Encapsulate = {
    name = "Encapsulate",
@@ -27,13 +34,17 @@ Encapsulate = {
 }
 
 function Encapsulate:new (sa)
-   return setmetatable({sa = esp.encrypt:new(sa)}, {__index = Encapsulate})
+   local o = {
+      sa = esp.encrypt:new(sa),
+      throttle = lib.throttle(throttle)
+   }
+   return setmetatable(o, {__index = Encapsulate})
 end
 
 function Encapsulate:push ()
    local output, sa = self.output.output, self.sa
    local input4, input6 = self.input.input4, self.input.input6
-   if input4 then
+   if input4 and (link.nreadable(input4) >= burst or self.throttle()) then
       while not link.empty(input4) do
          link.transmit(
             output,
@@ -72,12 +83,17 @@ Decapsulate = {
 }
 
 function Decapsulate:new (sa)
-   return setmetatable({sa = esp.decrypt:new(sa)}, {__index = Decapsulate})
+   local o = {
+      sa = esp.decrypt:new(sa),
+      throttle = lib.throttle(throttle)
+   }
+   return setmetatable(o, {__index = Decapsulate})
 end
 
 function Decapsulate:push ()
    local input, sa = self.input.input, self.sa
    local output4, output6 = self.output.output4, self.output.output6
+   if not (link.nreadable(input) >= burst or self.throttle()) then return end
    while not link.empty(input) do
       local p_enc = link.receive(input)
       local p, next_header = sa:decapsulate_tunnel(p_enc)
