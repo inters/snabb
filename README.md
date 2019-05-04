@@ -18,7 +18,8 @@ kernel network stack.
 - Be as fast as possible on generic x86 CPUs, handle 10 Gbps line rate at 60
   byte packets and more
 
-- Avoid vendor lock-in and mandatory, complex dependencies
+- Avoid vendor lock-in and mandatory, complex dependencies while embracing
+  network operator standards such as NETCONF/YANG
 
 - Keep it all simple, maintainable, and modular
 
@@ -31,11 +32,10 @@ kernel network stack.
 
 ## Features
 
-- ~3 Mpps (or ~5 Gbps of IMIX traffic) per core on a modern CPU
+- ~3 Mpps (or ~5 Gbps of IMIX traffic) per CPU core on modern commodity x86
+  hardware
 
 - Scales linearly with CPU cores using RSS and VMDQ
-
-- Runs on commodity x86 hardware
 
 - Implements IPsec for IPv4 and IPv6, specifically
   *IP Encapsulating Security Payload* (ESP) in tunnel mode
@@ -50,14 +50,14 @@ kernel network stack.
   [Noise](http://noiseprotocol.org/) (audit welcome, see
   [README.exchange](https://github.com/inters/vita/blob/master/src/program/vita/README.exchange))
 
-- Can act as a pure data-plane and consume SAs established by other means
+- Can act also as a pure data-plane and consume SAs established by other means
 
-- Dynamic reconfiguration via YANG RPCs (update routes while running)
+- Configuration and runtime state modelled by a native YANG schema. Supports,
+  dynamic reconfiguration via NETCONF RPCs (update routes while running)
 
-- Strong observability: access relevant statistics of a running Vita node
-
-- Full ICMP visibility (tunnel appears as two hops in `traceroute`, PMTUD
-  support, all inbound ICMP messages are logged)
+- Strong observability (access relevant statistics of a running Vita node via
+  NETCONF get-state RPCs) and full ICMP visibility (tunnel appears as two hops
+  in `traceroute`, PMTUD support, all inbound ICMP messages are logged)
 
 - Written in Lua—a simple, high-level programming language—and x86 assembly
 
