@@ -2,42 +2,71 @@
 
 🚧 🚧 🚧 🚧
 
-…is a high-performance L3 VPN gateway you can use to interconnect your
-networks. Vita acts as a tunnel between your local, private network and any
-number of remote Vita gateways. With it, nodes spread across your outposts can
-communicate with each other with confidentiality and authenticity ensured at
-the network layer.
+**Vita is a high-performance IPsec VPN gateway designed with medium and large
+network operators in mind.** It is written in a high-level language (Lua) and
+achieves high performance via networking in userspace, i.e. bypassing the
+kernel network stack.
 
-Vita is probably more efficient at encapsulating traffic than your application
-servers. You can free cycles for your application by offloading your packet
-encryption and authentication workload to Vita.
+## Project goals
 
-![a mesh of Vita gateways forms a VPN](vita-sketch.png)
+- Provide a low-cost, open source solution to network traffic encryption at
+  scale
+
+- Support stand-alone operation as well as SAs established by third-party
+  software such as StrongSwan
+
+- Be as fast as possible on generic x86 CPUs, handle 10 Gbps line rate at 60
+  byte packets and more
+
+- Avoid vendor lock-in and mandatory, complex dependencies while embracing
+  network operator standards such as NETCONF/YANG
+
+- Keep it all simple, maintainable, and modular
+
+- Use strong, modern cryptographic primitives and protocols
 
 ## WARNING:
 
-> Vita is in its early “tech-demo” stage of development. Not for production!
+> Vita is in its early “tech-demo” stage of development and not ready for
+> production yet!
 
 ## Features
 
-- ~2.5 Mpps (or ~5 Gbps of IMIX traffic) per core on a modern CPU
-- Runs on commodity hardware
+- ~3 Mpps (or ~5 Gbps of IMIX traffic) per CPU core on modern commodity x86
+  hardware
+
+- Scales linearly with CPU cores using RSS and VMDQ
+
 - Implements IPsec for IPv4 and IPv6, specifically
   *IP Encapsulating Security Payload* (ESP) in tunnel mode
+
 - Uses optimized AES-GCM 128-bit encryption based on a reference
   implementation by *Intel* for their AVX2 (generation-4) processors
-- Automated key exchange and rotation, with perfect forward secrecy (PFS)
-  (audit needed)
-- Can act as a pure data-plane and consume SAs established by other means
-- Dynamic reconfiguration via YANG RPCs (update routes while running)
-- Strong observability: access relevant statistics of a running Vita node
+
+- Automated key exchange (AKE) and rotation, with perfect forward secrecy (PFS)
+  and seamless, packet loss-free rekeying
+
+- Simple, minimal, and modern AKE protocol based on
+  [Noise](http://noiseprotocol.org/) (audit welcome, see
+  [README.exchange](https://github.com/inters/vita/blob/master/src/program/vita/README.exchange))
+
+- Can act also as a pure data-plane and consume SAs established by other means
+
+- Configuration and runtime state modelled by a native YANG schema. Supports,
+  dynamic reconfiguration via NETCONF RPCs (update routes while running)
+
+- Strong observability (access relevant statistics of a running Vita node via
+  NETCONF get-state RPCs) and full ICMP visibility (tunnel appears as two hops
+  in `traceroute`, PMTUD support, all inbound ICMP messages are logged)
+
+- Written in Lua—a simple, high-level programming language—and x86 assembly
 
 ## Documentation
 
 - [Usage](https://github.com/inters/vita/blob/master/src/program/vita/README)
   — manual page for Vita’s command line interface
-- [Configuration](https://github.com/inters/vita/blob/master/src/program/vita/README.config)
-  — detailed description of Vita’s configuration language
+- [Configuration](https://github.com/inters/vita/blob/master/src/program/vita/vita-esp-gateway.yang)
+  — detailed description of Vita’s configuration schema
 
 ## Getting started
 
@@ -74,6 +103,18 @@ End-to-end benchmarking procedures are documented in
 [vita-loadtest.md](https://github.com/inters/vita/tree/master/src/program/vita/vita-loadtest.md).
 
 ## Deployment
+
+Vita is a high-performance L3 VPN gateway you can use to interconnect your
+networks. Vita acts as a tunnel between your local, private network and any
+number of remote Vita gateways. With it, nodes spread across your outposts can
+communicate with each other with confidentiality and authenticity ensured at
+the network layer.
+
+Vita is probably more efficient at encapsulating traffic than your application
+servers. You can free cycles for your application by offloading your packet
+encryption and authentication workload to Vita.
+
+![a mesh of Vita gateways forms a VPN](vita-sketch.png)
 
 A Vita network can be as small as two nodes with a single route, and as large
 as you like. For each pair of Vita gateways, a separate secure tunnel (*route*)
