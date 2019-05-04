@@ -34,7 +34,7 @@ conf.route4.test1.preshared_key = string.rep("FF", 32)
 test_conf(conf)
 
 print("Change route gateway...")
-conf.route4.test1.gateway = {["172.17.1.10"]={queue=1}}
+conf.route4.test1.gateway = {["172.16.0.11"]={queue=1}}
 test_conf(conf)
 
 print("Change public_interface4/ip and route4 net...")
