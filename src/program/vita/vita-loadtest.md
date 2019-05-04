@@ -19,32 +19,32 @@ So lets get started by cloning Vita, building a test build, and switching to the
     $ make -j # builds a test build by default
     $ cd src
 
-We can start by running the the software-based benchmark test to get a baseline of what we can expect from this machine:
+We can start by running the the software-based, single-core benchmark test to get a baseline of what we can expect from this machine:
 
-    $ sudo program/vita/test.snabb IMIX 100e6 1 1,2,3,4,5
-                                   ^    ^     ^ ^
-                                   |    |     | \- CPU hdw. threads to bind to
-                                   |    |     \- # of routes to test with
+    $ sudo program/vita/test.snabb IMIX 10e6 1 2
+                                   ^    ^    ^ ^
+                                   |    |    | \- CPU core to use
+                                   |    |    \- # of routes to test with
                                    |    \- # of packets
                                    \- packet size
 
 That will print a bunch of output and then something like:
 
-    Jul 24 2018 15:25:00 SoftBench: Processed 100.0 million packets in 29.08 seconds
-    Jul 24 2018 15:25:00 SoftBench: 3.439 Mpps
-    Jul 24 2018 15:25:00 SoftBench: 34185635876 Bytes
-    Jul 24 2018 15:25:00 SoftBench: 9.652 Gbps (on GbE)
+    May 03 2019 23:03:47 SoftBench: Processed 10.0 million packets in 5.65 seconds
+    May 03 2019 23:03:47 SoftBench: 1.768 Mpps
+    May 03 2019 23:03:47 SoftBench: 3543404200 Bytes
+    May 03 2019 23:03:47 SoftBench: 5.140 Gbps (on GbE)
 
 And once more for 60 byte packets:
-    
-    $ sudo program/vita/test.snabb 60 100e6 1 1,2,3,4,5
-    ...
-    Jul 24 2018 15:24:15 SoftBench: Processed 100.0 million packets in 21.21 seconds
-    Jul 24 2018 15:24:15 SoftBench: 4.715 Mpps
-    Jul 24 2018 15:24:15 SoftBench: 6000004260 Bytes
-    Jul 24 2018 15:24:15 SoftBench: 2.603 Gbps (on GbE)
 
-The results suggest that setup should be able to handle 1 GbE line-rate at any packet size without breaking a sweat. So let’s confirm that with an end-to-end test using [snabb loadtest find-limit](https://github.com/inters/vita/tree/master/src/program/loadtest/find-limit).
+    $ sudo program/vita/test.snabb 60 10e6 1 2
+    ...
+    May 03 2019 23:06:00 SoftBench: Processed 10.0 million packets in 3.54 seconds
+    May 03 2019 23:06:00 SoftBench: 2.825 Mpps
+    May 03 2019 23:06:00 SoftBench: 600012000 Bytes
+    May 03 2019 23:06:00 SoftBench: 1.559 Gbps (on GbE)
+
+The results suggest that our setup should be able to handle 1 GbE line-rate at any packet size using only a single CPU core. So let’s confirm that with an end-to-end test using [snabb loadtest find-limit](https://github.com/inters/vita/tree/master/src/program/loadtest/find-limit).
 
 First of all, we start two Vita nodes, and assign them the names `node1` and `node2` respectively (these names are later used as handles for `snabb config`):
 
@@ -53,58 +53,58 @@ First of all, we start two Vita nodes, and assign them the names `node1` and `no
 
 `loadtest` takes Pcap records, replays the contained packets in a loop on its interfaces, and checks if the number of packets received match the number of packets it sent. So we need to configure our Vita nodes to form such a loop and generate Pcap records to use as test traffic accordingly. This is the configuration `node1.conf` for the first Vita node with a single route (do not start copying it yet, you will not have to write these by hand for testing purposes):
 
-    private-interface {
+    private-interface4 {
       pci 23:00.0;
-      ip4 172.16.0.10;
-      nexthop-ip4 172.16.0.1;
+      ip 172.16.0.10;
+      nexthop-ip 172.16.0.1;
       nexthop-mac 02:00:00:00:00:00;
     }
-    public-interface {
+    public-interface4 {
       pci 22:00.1;
-      ip4 172.16.0.10;
-      nexthop-ip4 172.17.0.10;
+      ip 172.16.0.10;
+      nexthop-ip 172.17.0.10;
     }
-    route {
+    route4 {
       id test1;
-      gw-ip4 172.17.0.10;
-      net-cidr4 "172.17.1.0/24";
-      preshared-key 0000000000000000000000000000000000000000000000000000000000000000;
+      net "172.17.1.0/24";
+      gateway { ip 172.17.0.10; }
       spi 1001;
+      preshared-key 0000000000000000000000000000000000000000000000000000000000000001;
     }
 
 Most of it should be fairly self explanatory: we assign the desired ports via their PCI bus addresses, and set the interface’s own addresses as well as the addresses of the next hops. In this case, the private and public interface addresses are the same, but they need not be. The next hop of the private interface (this would normally be your local router) will be `snabb loadtest`. Since `loadtest` does not speak ARP, we configure a fixed MAC destination address for this next hop. This will prevent Vita from attempting to look up the next hop’s MAC addresses via ARP, and instead use the preconfigured address. The next hop of the public interface (this would normally be your gateway to the Internet) is configured to be the other Vita node in the test setup. Finally, we define a single route to the subnet `172.17.1.0/24` via the second Vita node with a dummy key. For the other Vita node, `node2.conf` is symmetric:
 
     private-interface4 {
       pci 22:00.2;
-      ip4 172.17.0.10;
-      nexthop-ip4 172.17.0.1;
+      ip 172.17.0.10;
+      nexthop-ip 172.17.0.1;
       nexthop-mac 02:00:00:00:00:00;
     }
     public-interface4 {
       pci 23:00.1;
-      ip4 172.17.0.10;
-      nexthop-ip4 172.16.0.10;
+      ip 172.17.0.10;
+      nexthop-ip 172.16.0.10;
     }
     route4 {
       id test1;
-      gw-ip4 172.16.0.10;
-      net-cidr4 "172.16.1.0/24";
-      preshared-key 0000000000000000000000000000000000000000000000000000000000000000;
+      net "172.16.1.0/24";
+      gateway { ip 172.16.0.10; }
       spi 1001;
+      preshared-key 0000000000000000000000000000000000000000000000000000000000000001;
     }
 
 Because typing out configuration files for testing gets old fast, and we still need matching Pcap records, Vita comes with a utility that generates both of these from a meta-configuration file. For the first node we have `gentest-node1.conf`:
 
     private-interface4 {
       pci 23:00.0;
-      ip4 172.16.0.10;
-      nexthop-ip4 172.16.0.1;
+      ip 172.16.0.10;
+      nexthop-ip 172.16.0.1;
       nexthop-mac 02:00:00:00:00:00;
     }
     public-interface4 {
       pci 22:00.1;
-      ip4 172.16.0.10;
-      nexthop-ip4 172.17.0.10;
+      ip 172.16.0.10;
+      nexthop-ip 172.17.0.10;
     }
     route-prefix "172.17";
     nroutes 1;
@@ -114,14 +114,14 @@ Because typing out configuration files for testing gets old fast, and we still n
 
     private-interface4 {
       pci 22:00.2;
-      ip4 172.17.0.10;
-      nexthop-ip4 172.17.0.1;
+      ip 172.17.0.10;
+      nexthop-ip 172.17.0.1;
       nexthop-mac 02:00:00:00:00:00;
     }
     public-interface4 {
       pci 23:00.1;
-      ip4 172.17.0.10;
-      nexthop-ip4 172.16.0.10;
+      ip 172.17.0.10;
+      nexthop-ip 172.16.0.10;
     }
     route-prefix "172.16";
     nroutes 1;
@@ -188,3 +188,52 @@ There is also [snabb loadtest transient](https://github.com/inters/vita/tree/mas
     $ sudo ./snabb loadtest transient -b 1e9 --cpu 11 \
         node1-private-in.pcap node1 node2 22:00.0 \
         node2-private-in.pcap node2 node1 23:00.2
+
+## Using more CPU cores
+
+You can test using more CPU cores by adding more public interfaces to the configuration. Vita should scale linearly with added CPU cores, but do note that a Vita instance will use the CPU threads supplied to it via the `--cpu` argument, and that these might be HyperThreads that share a single physical core in which case performance does not increase linearly. For instance, a `gentest-node1.conf` using two cores could look like this:
+
+    private-interface4 {
+      pci 23:00.0;
+      ip 172.16.0.10;
+      nexthop-ip 172.16.0.1;
+      nexthop-mac 02:00:00:00:00:00;
+    }
+    public-interface4 {
+      pci 22:00.1;
+      ip 172.16.0.10;
+      nexthop-ip 172.17.0.10;
+    }
+    public-interface4 {
+      pci 22:00.1;
+      ip 172.16.0.11;
+      nexthop-ip 172.17.0.11;
+      queue 2;
+    }
+    route-prefix "172.17";
+    nroutes 4;
+    packet-size IMIX;
+
+The corresponding `gentest-node2.conf` would look like this:
+
+    private-interface4 {
+      pci 22:00.2;
+      ip 172.17.0.10;
+      nexthop-ip 172.17.0.1;
+      nexthop-mac 02:00:00:00:00:00;
+    }
+    public-interface4 {
+      pci 23:00.1;
+      ip 172.17.0.10;
+      nexthop-ip 172.16.0.10;
+      queue 1;
+    }
+    public-interface4 {
+      pci 23:00.1;
+      ip 172.17.0.11;
+      nexthop-ip 172.16.0.11;
+      queue 2;
+    }
+    route-prefix "172.16";
+    nroutes 4;
+    packet-size IMIX;

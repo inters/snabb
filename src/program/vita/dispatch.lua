@@ -158,7 +158,7 @@ function PublicDispatch:new (conf)
    elseif conf.node_ip6 then
       o.dispatch = pf_match.compile(([[match {
          ip6 proto esp => forward6
-         ip6 proto %d => protocol6
+         ip6 proto %d => protocol
          ip6 and icmp6 and (ip6[40] = 135 or ip6[40] = 136) => nd
          ip6 dst host %s and icmp6 => icmp6
          ip6 dst host %s => protocol6_unreachable
@@ -185,13 +185,7 @@ end
 
 function PublicDispatch:protocol ()
    if not self.output.protocol then self:reject_protocol(); return end
-   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof() + ipv4:sizeof())
-   link.transmit(self.output.protocol, p)
-end
-
-function PublicDispatch:protocol6 ()
-   if not self.output.protocol then self:reject_protocol(); return end
-   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof() + ipv6:sizeof())
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
    link.transmit(self.output.protocol, p)
 end
 

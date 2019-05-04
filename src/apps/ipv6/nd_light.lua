@@ -366,10 +366,15 @@ function nd_light:push ()
       return
    end
    while not link.empty(l_in) do
-      local p = packet.prepend(
-         link.receive(l_in), self._eth_header:header(), ethernet:sizeof()
-      )
-      link.transmit(l_out, p)
+      local p = cache.p
+      p[0] = link.receive(l_in)
+      if p[0].length >= self._eth_header:sizeof() then
+         self._eth_header:copy(p[0].data)
+         link.transmit(l_out, p[0])
+      else
+         packet.free(p[0])
+         counter.add(self.shm.txerrors)
+      end
    end
 end
 

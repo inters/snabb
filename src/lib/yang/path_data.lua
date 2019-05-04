@@ -330,7 +330,7 @@ local function adder_for_grammar(grammar, path)
          end
       elseif grammar.native_key or grammar.key_ctype then
          -- cltable or native-keyed table.
-         local pairs = grammar.key_ctype and cltable.pairs or pairs
+         local pairs = grammar.native_key and pairs or cltable.pairs
          return function(config, subconfig)
             local tab = getter(config)
             for k,_ in pairs(subconfig) do
@@ -538,7 +538,7 @@ function uniqueness_checker_from_grammar(grammar)
       for leaf in leaves:split(" +") do
          table.insert(unique_leaves, normalize_id(leaf))
       end
-      local pairs = grammar.key_ctype and cltable.pairs or pairs
+      local pairs = grammar.native_key and pairs or cltable.pairs
       return function (tab)
          -- Sad quadratic loop, again
          for k1, v1 in pairs(tab) do
@@ -586,7 +586,7 @@ function minmax_elements_checker_from_grammar(grammar)
    -- Generate checker for table (list, leaf-list)
    local function minmax_assertion(grammar, name)
       name = name or ""
-      local pairs = grammar.key_ctype and cltable.pairs or pairs
+      local pairs = grammar.native_key and pairs or cltable.pairs
       if not (grammar.min_elements or grammar.max_elements) then
          return function () end
       end
