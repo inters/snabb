@@ -11,12 +11,17 @@ kernel network stack.
 
 - Provide a low-cost, open source solution to network traffic encryption at
   scale
+
 - Support stand-alone operation as well as SAs established by third-party
   software such as StrongSwan
+
 - Be as fast as possible on generic x86 CPUs, handle 10 Gbps line rate at 60
   byte packets and more
-- Avoid vendor lock-in and complex mandatory dependencies
+
+- Avoid vendor lock-in and mandatory, complex dependencies
+
 - Keep it all simple, maintainable, and modular
+
 - Use strong, modern cryptographic primitives and protocols
 
 ## WARNING:
@@ -27,24 +32,41 @@ kernel network stack.
 ## Features
 
 - ~3 Mpps (or ~5 Gbps of IMIX traffic) per core on a modern CPU
-- Runs on commodity hardware
+
+- Scales linearly with CPU cores using RSS and VMDQ
+
+- Runs on commodity x86 hardware
+
 - Implements IPsec for IPv4 and IPv6, specifically
   *IP Encapsulating Security Payload* (ESP) in tunnel mode
+
 - Uses optimized AES-GCM 128-bit encryption based on a reference
   implementation by *Intel* for their AVX2 (generation-4) processors
-- Automated key exchange and rotation, with perfect forward secrecy (PFS)
-  (audit needed)
+
+- Automated key exchange (AKE) and rotation, with perfect forward secrecy (PFS)
+  and seamless, packet loss-free rekeying
+
+- Simple, minimal, and modern AKE protocol based on
+  [Noise](http://noiseprotocol.org/) (audit welcome, see
+  [README.exchange](https://github.com/inters/vita/blob/master/src/program/vita/README.exchange))
+
 - Can act as a pure data-plane and consume SAs established by other means
+
 - Dynamic reconfiguration via YANG RPCs (update routes while running)
+
 - Strong observability: access relevant statistics of a running Vita node
-- Written in Lua, a simple, high-level programming language and x86 assembly
+
+- Full ICMP visibility (tunnel appears as two hops in `traceroute`, PMTUD
+  support, all inbound ICMP messages are logged)
+
+- Written in Lua—a simple, high-level programming language—and x86 assembly
 
 ## Documentation
 
 - [Usage](https://github.com/inters/vita/blob/master/src/program/vita/README)
   — manual page for Vita’s command line interface
-- [Configuration](https://github.com/inters/vita/blob/master/src/program/vita/README.config)
-  — detailed description of Vita’s configuration language
+- [Configuration](https://github.com/inters/vita/blob/master/src/program/vita/vita-esp-gateway.yang)
+  — detailed description of Vita’s configuration schema
 
 ## Getting started
 
