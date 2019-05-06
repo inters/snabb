@@ -41,6 +41,7 @@ local confspec = {
    public_interface4 = {default={}},
    public_interface6 = {default={}},
    mtu = {default=default_config.mtu},
+   tfc = {},
    route4 = {default={}},
    route6 = {default={}},
    negotiation_ttl = {default=default_config.negotation_ttl},
@@ -674,7 +675,8 @@ function configure_outbound_sa (sa_db, append)
                     spi = spi,
                     aead = sa.aead,
                     key = sa.key,
-                    salt = sa.salt
+                    salt = sa.salt,
+                    tfc_mtu = sa_db.tfc and sa_db.mtu
       })
       ports.input[sa.route] = OutboundSA..".input4"
       ports.output[sa.route] = OutboundSA..".output"

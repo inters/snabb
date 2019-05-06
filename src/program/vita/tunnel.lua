@@ -22,32 +22,28 @@ Encapsulate = {
       spi = {required=true},
       aead = {required=true},
       key = {required=true},
-      salt = {required=true}
+      salt = {required=true},
+      tfc_mtu = {}
    }
 }
 
 function Encapsulate:new (sa)
-   return setmetatable({sa = esp.encrypt:new(sa)}, {__index = Encapsulate})
+   return setmetatable({sa = esp.encrypt:new(sa), tfc_mtu = sa.tfc_mtu},
+                       {__index = Encapsulate})
 end
 
 function Encapsulate:push ()
    local output, sa = self.output.output, self.sa
-   local input4, input6 = self.input.input4, self.input.input6
-   if input4 then
-      while not link.empty(input4) do
-         link.transmit(
-            output,
-            sa:encapsulate_tunnel(link.receive(input4), NextHeaderIPv4)
-         )
+   local nh = (self.input.input4 and NextHeaderIPv4) or
+              (self.input.input6 and NextHeaderIPv6)
+   local input = self.input.input4 or self.input.input6
+   while not link.empty(input) do
+      local p = link.receive(input)
+      if self.tfc_mtu then
+         -- Pad to MTU for Traffic Flow Confidientiality (TFC)
+         p = packet.resize(p, math.max(p.length, self.tfc_mtu))
       end
-   end
-   if input6 then
-      while not link.empty(input6) do
-         link.transmit(
-            output,
-            sa:encapsulate_tunnel(link.receive(input6), NextHeaderIPv6)
-         )
-      end
+      link.transmit(output, sa:encapsulate_tunnel(p, nh))
    end
 end
 

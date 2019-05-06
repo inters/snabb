@@ -174,8 +174,7 @@ else
       PublicRouter = {
          route_errors = 1,
       },
-      PrivateDispatch = {
-         rxerrors = 1,
+      OutboundTTL = {
          checksum_errors = 1
       },
       PublicDispatch = {
