@@ -289,6 +289,21 @@ private:write(icmp4{
                  dst = private_dst,
                  icmp_checksum = 42
 })
+-- Padded inbound packet
+public:write(encap4(
+                packet.resize(
+                   icmp4{
+                      type = 8,
+                      src = remote_dst,
+                      dst = ipv4:pton("192.168.10.10")
+                   },
+                   514),
+                {
+                   src = public_src,
+                   dst = public_dst,
+                   pad_to = 500
+                }
+))
 -- Various ICMP messages
 local payload = packet.from_string("....0123456789012345678901234567")
 for _, msgtype in ipairs({
