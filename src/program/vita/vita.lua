@@ -377,9 +377,15 @@ function configure_vita_queue (conf, queue, free_links)
       link(public_router.output, "PublicSink.tx")
    end
 
-   for _, sa in pairs(conf.outbound_sa) do
-      link(private_router.outbound[sa.route], outbound_sa.input[sa.route])
-      link(outbound_sa.output[sa.route], public_router.outbound[sa.route])
+   for route, port in pairs(private_router.outbound) do
+      if outbound_sa.input[route] then
+         link(port, outbound_sa.input[route])
+      end
+   end
+   for route, port in pairs(public_router.outbound) do
+      if outbound_sa.output[route] then
+         link(outbound_sa.output[route], port)
+      end
    end
    for spi, sa in pairs(conf.inbound_sa) do
       local id = sa.route.."_"..sa.queue.."_"..spi
