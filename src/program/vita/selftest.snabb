@@ -159,10 +159,12 @@ if regenerate_pcaps then
 else
    -- Assert application state is as expected.
    if #engine.app_table.match_private:errors() > 0 then
+      print("Private interface:")
       engine.app_table.match_private:report()
       main.exit(1)
    end
    if #engine.app_table.match_public:errors() > 0 then
+      print("Public interface:")
       engine.app_table.match_public:report()
       main.exit(1)
    end

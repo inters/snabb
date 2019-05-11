@@ -83,7 +83,7 @@ local sa_replay = esp.encrypt:new{
 function encap6 (payload, conf)
    payload = (conf.sa or sa):encapsulate_tunnel(
       packet.shiftleft(payload, ethernet:sizeof()),
-      conf.nh or 4
+      conf.nh or 41
    )
    local d = datagram:new(payload)
    d:push(ipv6:new{
