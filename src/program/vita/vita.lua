@@ -378,9 +378,15 @@ function configure_vita_queue (conf, queue, free_links)
       link(public_router.output, "PublicSink.tx")
    end
 
-   for _, sa in pairs(conf.outbound_sa) do
-      link(private_router.outbound[sa.route], outbound_sa.input[sa.route])
-      link(outbound_sa.output[sa.route], public_router.outbound[sa.route])
+   for route, port in pairs(private_router.outbound) do
+      if outbound_sa.input[route] then
+         link(port, outbound_sa.input[route])
+      end
+   end
+   for route, port in pairs(public_router.outbound) do
+      if outbound_sa.output[route] then
+         link(outbound_sa.output[route], port)
+      end
    end
    for spi, sa in pairs(conf.inbound_sa) do
       local id = sa.route.."_"..sa.queue.."_"..spi
@@ -664,33 +670,37 @@ end
 -- sa_db := { outbound_sa={<spi>=(SA), ...}, inbound_sa={<spi>=(SA), ...} }
 -- (see exchange)
 
-function configure_outbound_sa (sa_db, append)
+function configure_outbound_sa (conf, append)
    local c = append or config.new()
 
    local ports = { input={}, output={} } -- SA input/output pairs
 
-   for spi, sa in pairs(sa_db.outbound_sa) do
+   for spi, sa in pairs(conf.outbound_sa) do
       local OutboundSA = "OutboundSA_"..sa.route
       config.app(c, OutboundSA, tunnel.Encapsulate, {
                     spi = spi,
                     aead = sa.aead,
                     key = sa.key,
                     salt = sa.salt,
-                    tfc_mtu = sa_db.tfc and sa_db.mtu
+                    tfc_mtu = conf.tfc and conf.mtu
       })
-      ports.input[sa.route] = OutboundSA..".input4"
+      if conf.route4[sa.route] then
+         ports.input[sa.route] = OutboundSA..".input4"
+      elseif conf.route6[sa.route] then
+         ports.input[sa.route] = OutboundSA..".input6"
+      end
       ports.output[sa.route] = OutboundSA..".output"
    end
 
    return c, ports
 end
 
-function configure_inbound_sa (sa_db, append)
+function configure_inbound_sa (conf, append)
    local c = append or config.new()
 
    local ports = { input={}, output={} } -- SA input/output pairs
 
-   for spi, sa in pairs(sa_db.inbound_sa) do
+   for spi, sa in pairs(conf.inbound_sa) do
       local id = sa.route.."_"..sa.queue.."_"..spi
       -- Configure inbound SA
       local InboundSA = "InboundSA_"..id
@@ -702,7 +712,11 @@ function configure_inbound_sa (sa_db, append)
                     auditing = true
       })
       ports.input[id] = InboundSA..".input"
-      ports.output[id] = InboundSA..".output4"
+      if conf.route4[sa.route] then
+         ports.output[id] = InboundSA..".output4"
+      elseif conf.route6[sa.route] then
+         ports.output[id] = InboundSA..".output6"
+      end
    end
 
    return c, ports
