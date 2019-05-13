@@ -46,6 +46,7 @@ local cfg = yang.load_config_for_schema_by_name('vita-esp-gateway',
   }
 
   mtu 500;
+  tfc true;
 
   route4 {
     id loopback;
@@ -176,8 +177,7 @@ else
       PublicRouter = {
          route_errors = 1,
       },
-      PrivateDispatch = {
-         rxerrors = 1,
+      OutboundTTL = {
          checksum_errors = 1
       },
       PublicDispatch = {

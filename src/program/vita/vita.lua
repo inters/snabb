@@ -41,6 +41,7 @@ local confspec = {
    public_interface4 = {default={}},
    public_interface6 = {default={}},
    mtu = {default=default_config.mtu},
+   tfc = {},
    route4 = {default={}},
    route6 = {default={}},
    negotiation_ttl = {default=default_config.negotation_ttl},
@@ -680,7 +681,8 @@ function configure_outbound_sa (conf, append)
                     spi = spi,
                     aead = sa.aead,
                     key = sa.key,
-                    salt = sa.salt
+                    salt = sa.salt,
+                    tfc_mtu = conf.tfc and conf.mtu
       })
       if conf.route4[sa.route] then
          ports.input[sa.route] = OutboundSA..".input4"

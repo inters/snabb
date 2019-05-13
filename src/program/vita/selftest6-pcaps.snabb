@@ -235,6 +235,21 @@ private:write(icmp6{
                 dst = private_dst,
                 icmp_checksum = 42
 })
+-- Padded inbound packet
+public:write(encap6(
+                packet.resize(
+                   icmp6{
+                      type = 128,
+                      src = remote_dst,
+                      dst = ipv6:pton("c0a8:0a00::10")
+                   },
+                   514),
+                {
+                   src = public_src,
+                   dst = public_dst,
+                   pad_to = 500
+                }
+))
 -- Various ICMPv6 messages
 local payload = packet.from_string("....012345678901234567890123456789012345")
 for _, msgtype in ipairs({

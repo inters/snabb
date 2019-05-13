@@ -224,6 +224,14 @@ module vita-esp-gateway {
     to 57 bytes for IPv4 and up to 77 bytes for IPv6.)
     ";
   }
+  leaf tfc {
+    type boolean;
+    description "
+    If enabled, pad packets to the MTU to provide “Traffic Flow
+    Confidentiality” (TFC).
+    ";
+  }
+    
 
   leaf negotiation-ttl {
     description "
@@ -455,22 +463,11 @@ module vita-esp-gateway {
         "Protocol dispatch errors for packets received on the private
          interface.";
 
-      leaf rxerrors {
-        type yang:zero-based-counter64;
-        description
-          "Total number of unhandled packets.";
-      }
       leaf ethertype-errors {
         type yang:zero-based-counter64;
         description
           "Count of packets that were dropped because they had an unsupported
            Ethertype.";
-      }
-      leaf checksum-errors {
-        type yang:zero-based-counter64;
-        description
-          "Count of packets that were dropped because they had an invalid IP
-           checksum.";
       }
     }
 
@@ -534,6 +531,12 @@ module vita-esp-gateway {
         type yang:zero-based-counter64;
         description
           "Count of packets that were dropped because their TTL reached zero.";
+      }
+      leaf checksum-errors {
+        type yang:zero-based-counter64;
+        description
+          "Count of packets that were dropped because they had an invalid IP
+           checksum.";
       }
     }
 

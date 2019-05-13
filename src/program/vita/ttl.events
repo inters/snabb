@@ -1,0 +1,18 @@
+5,2|decrement_ttl_start:
+DecrementTTL started to process a packet.
+
+6,1|checksum_verification_succeeded:
+DecrementTTL verified a correct IP checksum.
+
+6,1|checksum_verification_failed:
+DecrementTTL rejected an invalid IP checksum.
+
+5,2|decrement_ttl_end:
+DecrementTTL has processed a packet.
+
+
+5,2|decrement_hop_limit_start:
+DecrementHopLimit started to process a packet.
+
+5,2|decrement_hop_limit_end:
+DecrementHopLimit has processed a packet.
