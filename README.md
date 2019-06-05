@@ -68,6 +68,27 @@ kernel network stack.
 - [Configuration](https://github.com/inters/vita/blob/master/src/program/vita/vita-esp-gateway.yang)
   — detailed description of Vita’s configuration schema
 
+### Articles
+
+- [Announcing Vita: a high-performance IPsec VPN endpoint that runs on commodity hardware](https://mr.gy/blog/vita.html)
+- [Notes on implementing IPsec ESP for Snabb](https://mr.gy/blog/snabb-esp.html)
+- [Ephemeral Key Exchange in Vita, part one](https://mr.gy/blog/ephemeral-key-exchange.html),
+  [part two](https://mr.gy/blog/ephemeral-key-exchange-2.html)
+- [A Glimpse into the Timeline: a Probabilistic Event Log for Snabb](https://mr.gy/blog/vita-timeline.html)
+  (this is about profiler tooling used in Vita)
+- [Implementing Poptrie in Lua and DynASM](https://mr.gy/blog/poptrie-dynasm.html)
+  (about the Poptrie implementation used for route lookups in Vita)
+
+### Presentations
+
+- [High-Performance Traffic Encryption on x86_64](https://ripe78.ripe.net/archives/video/65/)
+  at RIPE78, Reykjavík
+
+### Podcasts
+
+- [High-Speed IPsec with Snabb](https://blog.ipspace.net/2019/02/high-speed-ipsec-on-snabb-switch-on.html)
+   on Software Gone Wild
+
 ## Getting started
 
 Vita runs on any modern Linux/x86-64 distribution, but requires a compatible
