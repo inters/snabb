@@ -6,9 +6,12 @@ local counter = require("core.counter")
 local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
 
+local events = timeline.load_events(engine.timeline(), ...)
+
 DecrementTTL = {
    name = "DecrementTTL",
    shm = {
+      checksum_errors = {counter},
       protocol_errors = {counter}
    }
 }
@@ -22,17 +25,26 @@ function DecrementTTL:push ()
    local time_exceeded = self.output.time_exceeded
    for _, input in ipairs(self.input) do
       while not link.empty(input) do
+         events.decrement_ttl_start()
          local p = link.receive(input)
          local ip4 = self.ip4:new_from_mem(p.data, p.length)
-         if ip4 and ip4:ttl() > 0 then
+         if ip4 and not ip4:checksum_ok() then
+            events.checksum_verification_failed()
+            packet.free(p)
+            counter.add(self.shm.checksum_errors)
+         elseif ip4 and ip4:ttl() > 0 then
+            events.checksum_verification_succeeded()
             ip4:ttl_decrement()
-            link.transmit(output, p)
+            -- Strip IP frame from TFC or Ethernet padding
+            local len = math.min(p.length, ip4:total_length())
+            link.transmit(output, packet.resize(p, len))
          elseif ip4 then
             link.transmit(time_exceeded, p)
          else
             packet.free(p)
             counter.add(self.shm.protocol_errors)
          end
+         events.decrement_ttl_end()
       end
    end
 end
@@ -53,17 +65,21 @@ function DecrementHopLimit:push ()
    local hop_limit_exceeded = self.output.hop_limit_exceeded
    for _, input in ipairs(self.input) do
       while not link.empty(input) do
+         events.decrement_hop_limit_start()
          local p = link.receive(input)
          local ip6 = self.ip6:new_from_mem(p.data, p.length)
          if ip6 and ip6:hop_limit() > 0 then
             ip6:hop_limit(ip6:hop_limit() - 1)
-            link.transmit(output, p)
+            -- Strip IP frame from TFC or Ethernet padding
+            local len = math.min(p.length, ip6:payload_length() + ip6:sizeof())
+            link.transmit(output, packet.resize(p, len))
          elseif ip6 then
             link.transmit(hop_limit_exceeded, p)
          else
             packet.free(p)
             counter.add(self.shm.protocol_errors)
          end
+         events.decrement_hop_limit_end()
       end
    end
 end

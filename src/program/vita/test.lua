@@ -256,9 +256,9 @@ local function parse_gentestconf (conf)
    -- populate defaults
    conf = lib.parse(conf, defaults)
    conf.private_interface4 = conf.private_interface4 and
-      lib.parse(conf.private_interface4, private_interface4_defaults)
+      lib.parse(conf.private_interface4, private_interface4_defaults) or nil
    conf.private_interface6 = conf.private_interface6 and
-      lib.parse(conf.private_interface6, private_interface6_defaults)
+      lib.parse(conf.private_interface6, private_interface6_defaults) or nil
    for ip, interface in pairs(conf.public_interface4) do
       conf.public_interface4[ip] =
          lib.parse(interface, public_interface4_defaults)

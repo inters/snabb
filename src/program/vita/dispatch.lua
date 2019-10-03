@@ -11,8 +11,6 @@ local ipv6 = require("lib.protocol.ipv6")
 local pf_match = require("pf.match")
 local ffi = require("ffi")
 
-local events = timeline.load_events(engine.timeline(), ...)
-
 PrivateDispatch = {
    name = "PrivateDispatch",
    config = {
@@ -20,9 +18,7 @@ PrivateDispatch = {
       node_ip6 = {}
    },
    shm = {
-      rxerrors = {counter},
-      ethertype_errors = {counter},
-      checksum_errors = {counter}
+      ethertype_errors = {counter}
    }
 }
 
@@ -31,7 +27,6 @@ function PrivateDispatch:new (conf)
       p_box = ffi.new("struct packet *[1]")
    }
    if conf.node_ip4 then
-      o.ip4 = ipv4:new({})
       o.dispatch = pf_match.compile(([[match {
          ip dst host %s and icmp => icmp4
          ip dst host %s => protocol4_unreachable
@@ -40,7 +35,6 @@ function PrivateDispatch:new (conf)
          otherwise => reject_ethertype
       }]]):format(conf.node_ip4, conf.node_ip4))
    elseif conf.node_ip6 then
-      o.ip6 =  ipv6:new({})
       o.dispatch = pf_match.compile(([[match {
          ip6 and icmp6 and (ip6[40] = 135 or ip6[40] = 136) => nd
          ip6 dst host %s and icmp6 => icmp6
@@ -53,30 +47,13 @@ function PrivateDispatch:new (conf)
 end
 
 function PrivateDispatch:forward4 ()
-   events.private_forward4_matched()
    local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
-   assert(self.ip4:new_from_mem(p.data, p.length))
-   if self.ip4:checksum_ok() then
-      events.checksum_verification_succeeded()
-      -- Strip datagram of any Ethernet frame padding before encapsulation.
-      local d = packet.resize(p, math.min(self.ip4:total_length(), p.length))
-      link.transmit(self.output.forward4, d)
-   else
-      events.checksum_verification_failed()
-      packet.free(p)
-      counter.add(self.shm.rxerrors)
-      counter.add(self.shm.checksum_errors)
-   end
+   link.transmit(self.output.forward4, p)
 end
 
 function PrivateDispatch:forward6 ()
-   events.private_forward6_matched()
    local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
-   assert(self.ip6:new_from_mem(p.data, p.length))
-   -- Strip datagram of any Ethernet frame padding before encapsulation.
-   local total_length = self.ip6:payload_length() + ipv6:sizeof()
-   local d = packet.resize(p, math.min(total_length, p.length))
-   link.transmit(self.output.forward6, d)
+   link.transmit(self.output.forward6, p)
 end
 
 function PrivateDispatch:icmp4 ()
@@ -110,7 +87,6 @@ end
 
 function PrivateDispatch:reject_ethertype ()
    packet.free(self.p_box[0])
-   counter.add(self.shm.rxerrors)
    counter.add(self.shm.ethertype_errors)
 end
 
@@ -119,9 +95,7 @@ function PrivateDispatch:push ()
    while not link.empty(input) do
       local p = link.receive(input)
       self.p_box[0] = p
-      events.private_dispatch_start()
       self:dispatch(p.data, p.length)
-      events.private_dispatch_end()
    end
 end
 
@@ -158,7 +132,7 @@ function PublicDispatch:new (conf)
    elseif conf.node_ip6 then
       o.dispatch = pf_match.compile(([[match {
          ip6 proto esp => forward6
-         ip6 proto %d => protocol6
+         ip6 proto %d => protocol
          ip6 and icmp6 and (ip6[40] = 135 or ip6[40] = 136) => nd
          ip6 dst host %s and icmp6 => icmp6
          ip6 dst host %s => protocol6_unreachable
@@ -185,13 +159,7 @@ end
 
 function PublicDispatch:protocol ()
    if not self.output.protocol then self:reject_protocol(); return end
-   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof() + ipv4:sizeof())
-   link.transmit(self.output.protocol, p)
-end
-
-function PublicDispatch:protocol6 ()
-   if not self.output.protocol then self:reject_protocol(); return end
-   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof() + ipv6:sizeof())
+   local p = packet.shiftleft(self.p_box[0], ethernet:sizeof())
    link.transmit(self.output.protocol, p)
 end
 

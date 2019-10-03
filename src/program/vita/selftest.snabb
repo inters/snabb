@@ -3,6 +3,8 @@
 -- Use of this source code is governed by the GNU AGPL license; see COPYING.
 
 local vita = require("program.vita.vita")
+local yang = require("lib.yang.yang")
+local mem_stream = require("lib.stream.mem")
 local ARP = require("apps.ipv4.arp").ARP
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
@@ -26,53 +28,49 @@ local ffi = require("ffi")
 
 local regenerate_pcaps = main.parameters[1]
 
-local cfg = {
-   data_plane = true,
-   private_interface4 = {
-      pci = "00:00.0",
-      ip = "192.168.10.1",
-      nexthop_ip = "192.168.0.1",
-      mac = "52:54:00:00:00:00"
-   },
-   public_interface4 = {
-      ["203.0.113.1"] = {
-         pci = "00:00.0",
-         nexthop_ip = "203.0.0.1",
-         mac = "52:54:00:00:00:FF",
-         queue = 1
-      }
-   },
-   mtu = 500,
-   route4 = {
-      loopback = {
-         net = "192.168.10.0/24",
-         gateway = { ["203.0.113.1"] = {queue=1} },
-         preshared_key = string.rep("00", 32),
-         spi = 1001
-      }
-   },
-   sa_database = {
-      [1] = {
-         outbound_sa = {
-            [1001] = {
-               route = "loopback",
-               aead = "aes-gcm-16-icv",
-               key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
-               salt = "00 00 00 00"
-            }
-         },
-         inbound_sa =  {
-            [1001] = {
-               route = "loopback",
-               aead = "aes-gcm-16-icv",
-               key = "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
-               salt = "00 00 00 00",
-               auditing = true
-            }
-         }
-      }
-   }
-}
+local cfg = yang.load_config_for_schema_by_name('vita-esp-gateway',
+                                                mem_stream.open_input_string [[
+  data-plane true;
+
+  private-interface4 {
+    pci 00:00.0;
+    ip 192.168.10.1;
+    nexthop-ip 192.168.0.1;
+    mac 52:54:00:00:00:00;
+  }
+  public-interface4 {
+    pci 00:00.0;
+    ip 203.0.113.1;
+    nexthop-ip 203.0.0.1;
+    mac 52:54:00:00:00:FF;
+  }
+
+  mtu 500;
+  tfc true;
+
+  route4 {
+    id loopback;
+    net 192.168.10.0/24;
+    gateway { ip 203.0.113.1; }
+    preshared-key 0000000000000000000000000000000000000000000000000000000000000000;
+    spi 1001;
+  }
+
+  outbound-sa {
+    spi 1001;
+    route loopback;
+    aead aes-gcm-16-icv;
+    key "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00";
+    salt "00 00 00 00";
+  }
+  inbound-sa {
+    spi 1001;
+    route loopback;
+    aead aes-gcm-16-icv;
+    key "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00";
+    salt "00 00 00 00";
+  }
+]])
 
 -- Configure Vita queue (without KeyManager.)
 local c, private, public = vita.configure_vita_queue(cfg, 1, 'free')
@@ -162,10 +160,12 @@ if regenerate_pcaps then
 else
    -- Assert application state is as expected.
    if #engine.app_table.match_private:errors() > 0 then
+      print("Private interface:")
       engine.app_table.match_private:report()
       main.exit(1)
    end
    if #engine.app_table.match_public:errors() > 0 then
+      print("Public interface:")
       engine.app_table.match_public:report()
       main.exit(1)
    end
@@ -177,15 +177,14 @@ else
       PublicRouter = {
          route_errors = 1,
       },
-      PrivateDispatch = {
-         rxerrors = 1,
+      OutboundTTL = {
          checksum_errors = 1
       },
       PublicDispatch = {
          rxerrors = 2,
          fragment_errors = 2
       },
-      InboundSA_loopback_1001 = {
+      InboundSA_loopback_1_1001 = {
          rxerrors = 2,
          protocol_errors = 1,
          decrypt_errors = 1
