@@ -224,42 +224,6 @@ end
 function run_vita (opt)
    init_sa_db()
 
-   -- Schema support: because Vita configurations are generally shallow we
-   -- choose to reliably delegate all configuration transitions to core.app by
-   -- making sure that setup_fn receives a fresh configuration every time it is
-   -- called.
-   local schema_support = {
-      compute_config_actions = function(old_graph, new_graph)
-         local actions = engine.compute_config_actions(old_graph, new_graph)
-         table.insert(actions, {'commit', {}})
-         return actions
-      end,
-      update_mutable_objects_embedded_in_app_initargs = function () end,
-      compute_apps_to_restart_after_configuration_update = function () end,
-      compute_state_reader = schemata.support.compute_state_reader,
-      configuration_for_worker = schemata.support.configuration_for_worker,
-      process_states = schemata.support.process_states,
-      translators = {}
-   }
-   local function purify (setup_fn)
-      return function (new_conf)
-         return setup_fn(lib.deepcopy(new_conf))
-      end
-   end
-
-   -- Setup supervisor
-   local supervisor = ptree.new_manager{
-      name = opt.name,
-      schema_name = 'vita-esp-gateway',
-      schema_support = schema_support,
-      initial_configuration = opt.initial_configuration or default_config,
-      setup_fn = purify(opt.setup_fn or vita_workers),
-      cpuset = opt.cpuset,
-      worker_default_scheduling = {busywait=opt.busywait or false,
-                                   real_time=opt.realtime or false},
-      worker_jit_flush = false
-   }
-
    -- Listen for SA database changes.
    local sa_db_last_modified = {}
    local function sa_db_needs_reload ()
@@ -303,13 +267,84 @@ function run_vita (opt)
    end
 
    -- This is how we imperatively incorporate the SA database into the
-   -- configuration proper. NB: see schema_support and the use of purify above.
+   -- configuration proper. NB: see schema_support and the use of purify below.
    local function merge_sa_db (sa_db)
       return function (current_config)
          current_config.outbound_sa = sa_db.outbound_sa
          current_config.inbound_sa = sa_db.inbound_sa
          return current_config
       end
+   end
+
+   -- Schema support: because Vita configurations are generally shallow we
+   -- choose to reliably delegate all configuration transitions to core.app by
+   -- making sure that setup_fn receives a fresh configuration every time it is
+   -- called.
+   local schema_support = {
+      compute_config_actions = function(old_graph, new_graph)
+         local actions = engine.compute_config_actions(old_graph, new_graph)
+         table.insert(actions, {'commit', {}})
+         return actions
+      end,
+      update_mutable_objects_embedded_in_app_initargs = function () end,
+      compute_apps_to_restart_after_configuration_update = function () end,
+      compute_state_reader = schemata.support.compute_state_reader,
+      configuration_for_worker = schemata.support.configuration_for_worker,
+      process_states = schemata.support.process_states,
+      translators = {}
+   }
+   local function purify (setup_fn)
+      return function (new_conf)
+         return setup_fn(lib.deepcopy(new_conf))
+      end
+   end
+
+   -- Setup supervisor
+   local supervisor = ptree.new_manager{
+      name = opt.name,
+      schema_name = 'vita-esp-gateway',
+      schema_support = schema_support,
+      initial_configuration = opt.initial_configuration or default_config,
+      setup_fn = purify(opt.setup_fn or vita_workers),
+      cpuset = opt.cpuset,
+      worker_default_scheduling = {busywait=opt.busywait or false,
+                                   real_time=opt.realtime or false},
+      worker_jit_flush = false
+   }
+
+   -- Patch supervisor:update_configuration to handle managed SA database case.
+   supervisor.update_configuration_raw = supervisor.update_configuration
+   function supervisor:update_configuration (update_fn, verb, path, ...)
+      local function update (current_config, ...)
+         if path == '/' then
+            -- Attempt to set whole config.
+            local new_config = update_fn(current_config, ...)
+            if new_config.data_plane then
+               -- SA database is unmanaged, accept updates to it as they are.
+               return new_config
+            else
+               -- SA database is managed, ignore updates to it.
+               supervisor:warn("Rejected changes to auto-managed SA database"..
+                                  " (data-plane option is not set).")
+               return merge_sa_db(current_config)(new_config)
+            end
+         elseif path:match("^/outbound%-sa") or
+                path:match("^/inbound%-sa")
+         then
+            -- Attempt to update SA database.
+            if current_config.data_plane then
+               -- SA database is unmanaged, accept updates as they are.
+               return update_fn(current_config, ...)
+            else
+               -- SA database is managed, reject updates.
+               error("SA database is auto-managed"..
+                        " (data-plane option is not set).")
+            end
+         else
+            return update_fn(current_config, ...)
+         end
+      end
+      supervisor:update_configuration_raw(update, verb, path, ...)
    end
 
    -- Ensure I/O is line-buffered.
@@ -322,9 +357,12 @@ function run_vita (opt)
    -- Run the supervisor while keeping up to date with SA database changes.
    while true do
       supervisor:main(1)
-      if sa_db_needs_reload() then
+      if not supervisor.current_configuration.data_plane and
+         sa_db_needs_reload()
+      then
          supervisor:info("Reloading SA database: %s", sa_db_path)
-         supervisor:update_configuration(merge_sa_db(load_sa_db()), 'set', '/')
+         supervisor:update_configuration_raw(merge_sa_db(load_sa_db()), 'set', '/')
+         -- (bypass patched supervisor:update_configuration)
       end
    end
 end
@@ -390,8 +428,12 @@ function configure_vita_queue (conf, queue, free_links)
    end
    for spi, sa in pairs(conf.inbound_sa) do
       local id = sa.route.."_"..sa.queue.."_"..spi
-      link(public_router.inbound[id], inbound_sa.input[id])
-      link(inbound_sa.output[id], private_router.inbound[id])
+      if public_router.inbound[id] and inbound_sa.input[id] then
+         link(public_router.inbound[id], inbound_sa.input[id])
+      end
+      if inbound_sa.output[id] and private_router.inbound[id] then
+         link(inbound_sa.output[id], private_router.inbound[id])
+      end
    end
 
    return c, free_links and private_router, free_links and public_router
