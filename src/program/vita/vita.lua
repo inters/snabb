@@ -428,8 +428,12 @@ function configure_vita_queue (conf, queue, free_links)
    end
    for spi, sa in pairs(conf.inbound_sa) do
       local id = sa.route.."_"..sa.queue.."_"..spi
-      link(public_router.inbound[id], inbound_sa.input[id])
-      link(inbound_sa.output[id], private_router.inbound[id])
+      if public_router.inbound[id] and inbound_sa.input[id] then
+         link(public_router.inbound[id], inbound_sa.input[id])
+      end
+      if inbound_sa.output[id] and private_router.inbound[id] then
+         link(inbound_sa.output[id], private_router.inbound[id])
+      end
    end
 
    return c, free_links and private_router, free_links and public_router
