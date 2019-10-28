@@ -1688,7 +1688,7 @@ function Intel82599:set_vmdq_tx_pool ()
    -- enables packet Tx for this VF's pool
    self.r.PFVFTE[math.floor(self.poolnum/32)]:set(bits{VFTE=self.poolnum%32})
    -- enable TX loopback
-   self.r.PFVMTXSW[math.floor(self.poolnum/32)]:clr(bits{LLE=self.poolnum%32})
+   self.r.PFVMTXSW[math.floor(self.poolnum/32)]:set(bits{LLE=self.poolnum%32})
 end
 
 function Intel82599:set_mirror ()
