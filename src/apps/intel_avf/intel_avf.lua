@@ -11,7 +11,7 @@ local macaddress  = require("lib.macaddress")
 local pci         = require("lib.hardware.pci")
 local register    = require("lib.hardware.register")
 local tophysical  = core.memory.virtual_to_physical
-local band        = bit.band
+local band, lshift, rshift = bit.band, bit.lshift, bit.rshift
 local transmit, receive, empty = link.transmit, link.receive, link.empty
 local counter     = require("core.counter")
 
@@ -68,7 +68,7 @@ local rxdesc_t = ffi.typeof([[
          uint64_t status_err_type_len;
          uint64_t pad2;
          uint64_t pad3;
-      } __attribute__((packet)) write;
+      } __attribute__((packed)) write;
    }
 ]])
 local rxdesc_ptr_t = ffi.typeof("$ *", rxdesc_t)
@@ -398,9 +398,11 @@ function Intel_avf:push ()
    self:reclaim_txdesc()
    while not empty(li) and self.tx_desc_free > 0 do
       local p = receive(li)
+      -- NB: need to extend size for 4 byte CRC (not clear from the spec.)
+      local size = lshift(4ULL+p.length, SIZE_SHIFT)
       self.txdesc[ self.tx_next ].address = tophysical(p.data)
       self.txqueue[ self.tx_next ] = p
-      self.txdesc[ self.tx_next ].cmd_type_offset_bsz = RS_EOP + p.length * 2^SIZE_SHIFT
+      self.txdesc[ self.tx_next ].cmd_type_offset_bsz = RS_EOP + size
       self.tx_next = self:ringnext(self.tx_next)
       self.tx_desc_free = self.tx_desc_free - 1
    end
@@ -415,7 +417,7 @@ function Intel_avf:pull()
    local pkts = 0
    while band(self.rxdesc[self.rx_tail].write.status_err_type_len, 0x01) == 1 and pkts < engine.pull_npackets do
       local p = self.rxqueue[self.rx_tail]
-      p.length = bit.rshift(self.rxdesc[self.rx_tail].write.status_err_type_len, 38)
+      p.length = rshift(self.rxdesc[self.rx_tail].write.status_err_type_len, 38)
       transmit(lo, p)
 
       local np = packet.allocate()
@@ -669,7 +671,8 @@ function Intel_avf:new(conf)
    -- FIXME
    -- I haven't worked out why the sleep is required but without it
    -- self_mbox_set_version hangs indefinitely
-   C.sleep(1)
+   --C.sleep(1)
+   -- See elaboration in Intel_avf:stop()
 
    -- setup the nic for real
    self:mbox_setup()
@@ -688,9 +691,16 @@ function Intel_avf:new(conf)
 end
 
 function Intel_avf:stop()
+   -- From "Appendix A Virtual Channel Protocol":
+   -- VF sends this request to PF with no parameters PF does NOT respond! VF
+   -- driver must delay then poll VFGEN_RSTAT register until reset completion
+   -- is indicated. The admin queue must be reinitialized after this operation.
    self:mbox_send(self.mbox.opcodes['VIRTCHNL_OP_RESET_VF'], 0)
-   self.r.VF_ARQLEN(0)
-   self.r.VF_ATQLEN(0)
+   -- As per the above we (the VF driver) must "delay". Sadly, the spec does
+   -- (as of this time / to my knowledge) not give further clues as to how to
+   -- detect that the delay is sufficient. One second turned out to be not
+   -- enough in some cases, two seconds has always worked so far.
+   C.usleep(2e6)
    self:wait_for_vfgen_rstat()
 end
 
