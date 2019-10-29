@@ -14,8 +14,8 @@ local exchange = require("program.vita.exchange")
 local icmp = require("program.vita.icmp")
       schemata = require("program.vita.schemata")
 local basic_apps = require("apps.basic.basic_apps")
-local intel_mp = require("apps.intel_mp.intel_mp")
 local crypto = require("program.vita.crypto")
+local pci = require("lib.hardware.pci")
 local ethernet = require("lib.protocol.ethernet")
 local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
@@ -439,6 +439,33 @@ function configure_vita_queue (conf, queue, free_links)
    return c, free_links and private_router, free_links and public_router
 end
 
+local function io_driver (spec)
+   local info = pci.device_info(spec.pci)
+   local driver = require(info.driver)
+   local conf = {}
+   if info.driver == 'apps.intel_mp.intel_mp' then
+      if spec.mac then
+         conf.pciaddr = spec.pci
+         conf.macaddr = spec.mac
+         conf.vmdq = true
+      else
+         local max_q = driver.byPciID[tonumber(info.device)].max_q
+         assert(spec.queue <= driver.byPciID[device].max_q,
+                info.model.." only supports up to "..max_q.." queues.")
+         conf.pciaddr = spec.pci
+         conf.txq = spec.queue - 1
+         conf.rxq = spec.queue - 1
+      end
+   elseif info.driver == 'apps.intel_avf.intel_avf' then
+      assert(queue <= 1,
+             info.model.." only supports a single queue.")
+      conf.pciaddr = spec.pci
+   else
+      error("Unsupported device: "..info.model)
+   end
+   return driver.driver, conf
+end
+
 function configure_interfaces (conf, append)
    local c = append or config.new()
 
@@ -449,11 +476,8 @@ function configure_interfaces (conf, append)
 
    local private_interface = conf.private_interface4 or conf.private_interface6
    if private_interface and private_interface.pci ~= "00:00.0" then
-      config.app(c, "PrivateNIC", intel_mp.Intel, {
-                    pciaddr = private_interface.pci,
-                    rxq = conf.queue - 1,
-                    txq = conf.queue - 1
-      })
+      config.app(c, "PrivateNIC", io_driver{ pci = private_interface.pci,
+                                             queue = conf.queue })
       ports.private = {
          rx = "PrivateNIC.output",
          tx = "PrivateNIC.input"
@@ -462,11 +486,8 @@ function configure_interfaces (conf, append)
 
    local public_interface = conf.public_interface4 or conf.public_interface6
    if public_interface and public_interface.pci ~= "00:00.0" then
-      config.app(c, "PublicNIC", intel_mp.Intel, {
-                    pciaddr = public_interface.pci,
-                    macaddr = public_interface.mac,
-                    vmdq = true
-      })
+      config.app(c, "PublicNIC", io_driver{ pci = public_interface.pci,
+                                            mac = public_interface.mac })
       ports.public = {
          rx = "PublicNIC.output",
          tx = "PublicNIC.input"
