@@ -457,7 +457,7 @@ local function io_driver (spec)
          conf.rxq = spec.queue - 1
       end
    elseif info.driver == 'apps.intel_avf.intel_avf' then
-      assert(queue <= 1,
+      assert((not spec.queue) or spec.queue <= 1,
              info.model.." only supports a single queue.")
       conf.pciaddr = spec.pci
    else
@@ -471,7 +471,7 @@ function configure_interfaces (conf, append)
 
    local ports = {
       private = nil, -- private interface receive/transmit
-      public = nil -- punlic interface receive/transmit
+      public = nil -- public interface receive/transmit
    }
 
    local private_interface = conf.private_interface4 or conf.private_interface6
@@ -493,6 +493,11 @@ function configure_interfaces (conf, append)
          tx = "PublicNIC.input"
       }
    end
+
+   assert(private_interface.pci == "00:00.0" or
+             public_interface.pci == "00:00.0" or
+             private_interface.pci ~= public_interface.pci,
+          "Using the same PCI device for both interfaces is not supported.")
 
    return c, ports
 end
