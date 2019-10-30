@@ -450,7 +450,7 @@ local function io_driver (spec)
          conf.vmdq = true
       else
          local max_q = driver.byPciID[tonumber(info.device)].max_q
-         assert(spec.queue <= driver.byPciID[device].max_q,
+         assert(spec.queue <= max_q,
                 info.model.." only supports up to "..max_q.." queues.")
          conf.pciaddr = spec.pci
          conf.txq = spec.queue - 1
