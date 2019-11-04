@@ -6,13 +6,16 @@ local ffi = require("ffi")
 local ethernet = require("lib.protocol.ethernet")
 local datagram = require("lib.protocol.datagram")
 local transmit, receive = link.transmit, link.receive
+local lib = require("core.lib")
 
 Synth = {
    config = {
       sizes = {default={64}},
       src = {default='00:00:00:00:00:00'},
       dst = {default='00:00:00:00:00:00'},
-      packets = {}
+      packets = {},
+      random_payload = { default = false },
+      packet_id = { default = false },
    }
 }
 
@@ -25,7 +28,12 @@ function Synth:new (conf)
          local payload_size = size - ethernet:sizeof()
          assert(payload_size >= 0 and payload_size <= 1536,
                 "Invalid payload size: "..payload_size)
-         local data = ffi.new("char[?]", payload_size)
+         local data
+         if conf.random_payload then
+            data = lib.random_bytes(payload_size)
+         else
+            data = ffi.new("char[?]", payload_size)
+         end
          local dgram = datagram:new(packet.from_pointer(data, payload_size))
          local ether = ethernet:new({ src = ethernet:pton(conf.src),
                                       dst = ethernet:pton(conf.dst),
@@ -43,7 +51,13 @@ function Synth:pull ()
    for _, o in ipairs(self.output) do
       local cursor = self.cursor
       for _ = 1, burst do
-         transmit(o, packet.clone(packets[cursor]))
+         local c = packet.clone(packets[cursor])
+         if self.packet_id then
+            -- 14 == sizeof(dstmac srcmac type)
+            ffi.cast("uint32_t *", clone.data+14)[0] = lib.htonl(self.pktid)
+            self.pktid = self.pktid + 1
+         end
+         transmit(o, c)
          cursor = (cursor + 1) % npackets + 1
       end
    end

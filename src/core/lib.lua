@@ -102,7 +102,8 @@ end
 
 -- Return the name of the first file in `dir`.
 function firstfile (dir)
-   return readcmd("ls -1 "..dir.." 2>/dev/null", "*l")
+   local entries = syscall.util.dirtable(dir, 'nodots')
+   return entries and entries[1]
 end
 
 function firstline (filename) return readfile(filename, "*l") end

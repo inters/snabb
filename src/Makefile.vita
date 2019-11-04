@@ -8,7 +8,7 @@ INCLUDE = *.* core arch jit syscall pf \
           lib/poptrie* lib/interlink.* \
           lib/hardware lib/macaddress.* lib/numa.* lib/cpuset.* \
           lib/scheduling.* lib/timers \
-          apps/basic apps/interlink apps/intel_mp \
+          apps/basic apps/interlink apps/intel_mp apps/intel_avf \
           apps/ipv6/nd_light.lua lib/pcap \
           program/vita program/config program/ps program/pci_bind \
           program/top program/shm
