@@ -92,7 +92,8 @@ kernel network stack.
 ## Getting started
 
 Vita runs on any modern Linux/x86-64 distribution, but requires a compatible
-network interface card (currently *Intel* chipsets i210, i350, and 82599) as
+network interface card (currently *Intel* chipsets i210, i350, and 82599 or
+alternatively Intel AVF capable VFs e.g. from a X710 and XL710) as
 well as CPU support for
 [AES-NI](https://en.wikipedia.org/wiki/AES_instruction_set) and
 [AVX-2](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions#Advanced_Vector_Extensions_2).
