@@ -16,6 +16,7 @@ local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
 local datagram = require("lib.protocol.datagram")
 local yang = require("lib.yang.yang")
+local logger = require("lib.logger")
 
 
 -- Testing apps for Vita
@@ -31,7 +32,7 @@ GaugeThroughput = {
 
 function GaugeThroughput:new (conf)
    local self = setmetatable(conf, { __index = GaugeThroughput })
-   self.report = lib.logger_new({module=self.name})
+   self.report = logger.new({module=self.name})
    self.progress = lib.throttle(3)
    self.source = gen_packets(self.testconf)
    self.index = 1

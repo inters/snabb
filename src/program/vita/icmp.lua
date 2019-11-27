@@ -5,6 +5,7 @@ module(..., package.seeall)
 local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
 local icmp = require("lib.protocol.icmp.header")
+local logger = require("lib.logger")
 local counter = require("core.counter")
 local lib = require("core.lib")
 local ffi = require("ffi")
@@ -90,7 +91,7 @@ end
 
 function ICMP4:link ()
    if not self.logger then
-      self.logger = lib.logger_new({module = self.appname})
+      self.logger = logger.new({module = self.appname})
    end
    if self.input.fragmentation_needed and not self.nexthop_mtu_configured then
       self.logger:log(("WARNING, 'fragmentation_needed' link attached but nexthop_mtu not configured, defaulting to %d.")
@@ -374,7 +375,7 @@ end
 
 function ICMP6:link ()
    if not self.logger then
-      self.logger = lib.logger_new({module = self.appname})
+      self.logger = logger.new({module = self.appname})
    end
    -- input link aliases
    self.input.packet_too_big =
