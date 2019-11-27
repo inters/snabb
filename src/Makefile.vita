@@ -5,7 +5,7 @@ INCLUDE = *.* core arch jit syscall pf \
           lib/yang lib/stream.* lib/stream lib/buffer.* \
           lib/xsd_regexp.* lib/maxpc.* lib/ctable.* lib/cltable.* \
           lib/binary_search.* lib/multi_copy.* lib/hash \
-          lib/ptree lib/rrd.* lib/fibers \
+          lib/ptree lib/rrd.* lib/fibers lib/gauge.* \
           lib/poptrie* lib/interlink.* \
           lib/hardware lib/macaddress.* lib/numa.* lib/cpuset.* \
           lib/scheduling.* lib/timers \
