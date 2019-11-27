@@ -9,6 +9,7 @@ local counter      = require("core.counter")
 local histogram    = require('core.histogram')
 local lib          = require('core.lib')
 local timer        = require('core.timer')
+local memory_info  = require("lib.timers.memory_info")
 local alarms       = require("lib.yang.alarms")
 local channel      = require("lib.ptree.channel")
 local action_codec = require("lib.ptree.action_codec")
@@ -21,6 +22,7 @@ local Worker = {}
 local worker_config_spec = {
    duration = {},
    measure_latency = {default=true},
+   measure_memory = {default=true},
    no_report = {default=false},
    report = {default={showapps=true,showlinks=true}},
    Hz = {default=1000},
@@ -40,6 +42,10 @@ function new_worker (conf)
    ret.pending_actions = {}
 
    require("jit.opt").start('sizemcode=256', 'maxmcode=2048')
+
+   if conf.measure_memory then
+      timer.activate(memory_info.HeapSizeMonitor.new():timer())
+   end
 
    return ret
 end

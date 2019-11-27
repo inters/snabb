@@ -42,10 +42,23 @@ assert(cpuinfo, "failed to read /proc/cpuinfo for tsc check")
 local have_usable_rdtsc = (cpuinfo:match("constant_tsc") and
                               cpuinfo:match("nonstop_tsc"))
 
+local rdtsc_tps
+
 local time_sources = {
    rdtsc = {
       time_fn = rdtsc,
-      tps = have_usable_rdtsc and rdtsc_calibrate()
+      calibrate_fn = function ()
+         if not rdtsc_tps then
+            local start_ns = C.get_time_ns()
+            local start_ticks = rdtsc()
+            for _ = 1, calibration_interval do end
+            local end_ticks = rdtsc()
+            local end_ns = C.get_time_ns()
+            rdtsc_tps = tonumber(end_ticks - start_ticks)/tonumber(end_ns - start_ns)
+               * 1000000000 + 0ULL
+         end
+         return rdtsc_tps
+      end
    },
    system = {
       time_fn = C.get_time_ns,

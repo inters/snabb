@@ -136,12 +136,14 @@ EEC         0x10010 -               RW EEPROM/Flash Control Register
 EIMC        0x00888 -               RW Extended Interrupt Mask Clear
 ERRBC       0x04008 -               RC Error Byte Count
 FCCFG       0x03D00 -               RW Flow Control Configuration
+FCOERPDC    0x0241C -               RC Rx Packets Dropped Count
 FCTRL       0x05080 -               RW Filter Control
 HLREG0      0x04240 -               RW MAC Core Control 0
 ILLERRC     0x04004 -               RC Illegal Byte Error Count
 LINKS       0x042A4 -               RO Link Status Register
 MAXFRS      0x04268 -               RW Max Frame Size
 MFLCN       0x04294 -               RW MAC Flow Control Register
+MNGPDC      0x040B8 -               RO Management Packets Dropped Count
 MRQC        0x0EC80 -               RW Multiple Receive Queues Command Register
 MTQC        0x08120 -               RW Multiple Transmit Queues Command Register
 PFVTCTL     0x051B0 -               RW PF Virtual Control Register
@@ -319,7 +321,8 @@ Intel = {
       linkup_wait_recheck = {default=0.1},
       wait_for_link = {default=false},
       master_stats = {default=true},
-      run_stats = {default=false}
+      run_stats = {default=false},
+      mac_loopback = {default=false}
    },
 }
 Intel1g = setmetatable({}, {__index = Intel })
@@ -343,6 +346,43 @@ local vmdq_pools_t = ffi.typeof("struct { uint8_t pools[64]; }")
 -- mode = 0 for 32 pools/4 queues, 1 for 64 pools/2 queues
 local vmdq_queuing_mode_t = ffi.typeof("struct { uint8_t mode; }")
 
+local function shared_counter(srcdir, targetdir)
+   local mod = { type = "counter" }
+   local function dirsplit(name)
+      return name:match("^(.*)/([^/]+)$")
+   end
+   local function source(name)
+      if name:match('/') then
+         local head, tail = dirsplit(name)
+         return head..'/'..srcdir..'/'..tail
+      else
+         return srcdir..'/'..name
+      end
+   end
+   local function target(name)
+      if name:match('/') then
+         local head, tail = dirsplit(name)
+         return targetdir..'/'..tail
+      else
+         return targetdir..'/'..name
+      end
+   end
+   function mod.create(name)
+      shm.alias(source(name), target(name))
+      local status, c
+      local function read_shared_counter ()
+         if not c then status, c = pcall(counter.open, target(name)) end
+         if not status then return 0ULL end
+         return counter.read(c)
+      end
+      return read_shared_counter
+   end
+   function mod.delete(name)
+      S.unlink(shm.resolve(source(name)))
+   end
+   return mod
+end
+
 function Intel:new (conf)
    local self = {
       r = {},
@@ -354,7 +394,7 @@ function Intel:new (conf)
       mtu = conf.mtu,
       linkup_wait = conf.linkup_wait,
       linkup_wait_recheck = conf.linkup_wait_recheck,
-      wait_for_link = conf.wait_for_link,
+      wait_for_link = conf.wait_for_link and not conf.mac_loopback,
       vmdq = conf.vmdq,
       poolnum = conf.poolnum,
       macaddr = conf.macaddr,
@@ -369,7 +409,9 @@ function Intel:new (conf)
       -- processes
       shm_root = "/intel-mp/" .. pci.canonical(conf.pciaddr) .. "/",
       -- only used for main process, affects max pool number
-      vmdq_queuing_mode = conf.vmdq_queuing_mode
+      vmdq_queuing_mode = conf.vmdq_queuing_mode,
+      -- Enable Tx->Rx MAC Loopback for diagnostics/testing?
+      mac_loopback = conf.mac_loopback
    }
 
    local vendor = lib.firstline(self.path .. "/vendor")
@@ -382,40 +424,26 @@ function Intel:new (conf)
    self.max_q = byid.max_q
 
    -- Setup device access
-   self.base, self.fd = pci.map_pci_memory_unlocked(self.pciaddress, 0)
+   self.fd = pci.open_pci_resource_unlocked(self.pciaddress, 0)
    self.master = self.fd:flock("ex, nb")
-
    if self.master then
-      -- set shm to indicate whether the NIC is in VMDq mode
-      local vmdq_shm = shm.create(self.shm_root .. "vmdq_enabled",
-                                  vmdq_enabled_t)
-      vmdq_shm.enabled = self.vmdq
-      shm.unmap(vmdq_shm)
-      if self.vmdq then
-         -- create shared memory for tracking VMDq pools
-         local vmdq_shm = shm.create(self.shm_root .. "vmdq_pools",
-                                     vmdq_pools_t)
-         -- explicitly initialize to 0 since we can't rely on cleanup
-         for i=0, 63 do vmdq_shm.pools[i] = 0 end
-         shm.unmap(vmdq_shm)
-         -- set VMDq pooling method for all instances on this NIC
-         local mode_shm = shm.create(self.shm_root .. "vmdq_queuing_mode",
-                                     vmdq_queuing_mode_t)
-         if self.vmdq_queuing_mode == "rss-32-4" then
-            mode_shm.mode = 0
-         elseif self.vmdq_queuing_mode == "rss-64-2" then
-            mode_shm.mode = 1
-         else
-            error("Invalid VMDq queuing mode")
-         end
-         shm.unmap(mode_shm)
-      end
+      -- Master unbinds device, enables PCI bus master, and *then* memory maps
+      -- the device, loads registers, initializes it before sharing the lock.
+      pci.unbind_device_from_linux(self.pciaddress)
+      pci.set_bus_master(self.pciaddress, true)
+      self.base = pci.map_pci_memory(self.fd)
+      self:load_registers(byid.registers)
+      self:init()
+      self:init_vmdq()
+      self.fd:flock("sh")
+   else
+      -- Other processes wait for the shared lock before memory mapping the and
+      -- loading registers.
+      self.fd:flock("sh")
+      self.base = pci.map_pci_memory(self.fd)
+      self:load_registers(byid.registers)
    end
 
-   self:load_registers(byid.registers)
-
-   self:init()
-   self.fd:flock("sh")
    self:check_vmdq()
    -- this needs to happen before register loading for rxq/txq
    -- because it determines the queue numbers
@@ -430,54 +458,81 @@ function Intel:new (conf)
    self:set_txstats()
    self:set_tx_rate()
 
-   -- Initialize per app statistics
-   self.shm = {
-      mtu       = {counter, self.mtu},
-      rxcounter = {counter, self.rxcounter},
-      txcounter = {counter, self.txcounter},
-      txdrop    = {counter}
-   }
-
    -- Figure out if we are supposed to collect device statistics
    self.run_stats = conf.run_stats or (self.master and conf.master_stats)
-
-   -- Expose per-device statistics from master
    if self.run_stats then
       local frame = {
-         dtime     = {counter, C.get_unix_time()},
          -- Keep a copy of the mtu here to have all
          -- data available in a single shm frame
          mtu       = {counter, self.mtu},
+         type      = {counter, 0x1000}, -- ethernetCsmacd
+         macaddr   = {counter, self.r.RAL64[0]:bits(0,48)},
          speed     = {counter},
          status    = {counter, 2}, -- Link down
-         type      = {counter, 0x1000}, -- ethernetCsmacd
          promisc   = {counter},
-         macaddr   = {counter, self.r.RAL64[0]:bits(0,48)},
          rxbytes   = {counter},
          rxpackets = {counter},
          rxmcast   = {counter},
          rxbcast   = {counter},
          rxdrop    = {counter},
          rxerrors  = {counter},
+         rxdmapackets = {counter},
          txbytes   = {counter},
          txpackets = {counter},
          txmcast   = {counter},
          txbcast   = {counter},
          txdrop    = {counter},
          txerrors  = {counter},
-         rxdmapackets = {counter}
       }
       self:init_queue_stats(frame)
       self.stats = shm.create_frame(self.shm_root.."stats", frame)
       self.sync_timer = lib.throttle(0.01)
    end
 
-   -- Alias to the shared stats frame in each process's pci dir
-   -- The conditional checks if the symlink exists with lstat since
-   -- shm.exists requires the target exist, and the run_stats process
-   -- could go down and make the target cease to exist
-   if not S.lstat(shm.root.."/"..S.getpid().."/pci/"..self.pciaddress) then
-      shm.alias("pci/"..self.pciaddress, self.shm_root.."stats")
+   -- Expose per-device statistics from master
+   local shared_counter = shared_counter(
+      'pci/'..self.pciaddress, self.shm_root..'stats')
+   self.shm = {
+      dtime     = {counter, C.get_unix_time()},
+      -- Keep a copy of the mtu here to have all
+      -- data available in a single shm frame
+      mtu       = {counter, self.mtu},
+      type      = {counter, 0x1000}, -- ethernetCsmacd
+      macaddr   = {counter, self.r.RAL64[0]:bits(0,48)},
+      speed     = {shared_counter},
+      status    = {shared_counter},
+      promisc   = {shared_counter}
+   }
+   if self.rxq then
+      self.shm.rxcounter = {counter, self.rxcounter}
+      self.shm.rxbytes   = {shared_counter}
+      self.shm.rxpackets = {shared_counter}
+      self.shm.rxmcast   = {shared_counter}
+      self.shm.rxbcast   = {shared_counter}
+      self.shm.rxdrop    = {shared_counter}
+      self.shm.rxerrors  = {shared_counter}
+      self.shm.rxdmapackets = {shared_counter}
+      if self.rxcounter then
+         for _,k in pairs { 'drops', 'packets', 'bytes' } do
+            local name = "q" .. self.rxcounter .. "_rx" .. k
+            self.shm[name] = {shared_counter}
+         end
+      end
+   end
+   if self.txq then
+      self.shm.txcounter = {counter, self.txcounter}
+      self.shm.txbytes   = {shared_counter}
+      self.shm.txpackets = {shared_counter}
+      self.shm.txmcast   = {shared_counter}
+      self.shm.txbcast   = {shared_counter}
+      self.shm.txdrop    = {shared_counter}
+      self.shm.txerrors  = {shared_counter}
+      if self.txcounter then
+         for _,k in pairs { 'packets', 'bytes' } do
+            local name = "q" .. self.txcounter .. "_tx" .. k
+            self.shm[name] = {shared_counter}
+         end
+      end
    end
 
    alarms.add_to_inventory(
@@ -517,6 +572,36 @@ function Intel:wait_linkup (timeout)
       if self:link_status() then return true end
    end
    return false
+end
+
+-- Initialze SHM control structures tracking VMDq configuration.
+function Intel:init_vmdq ()
+   assert(self.master, "must be master")
+
+   -- set shm to indicate whether the NIC is in VMDq mode
+   local vmdq_shm = shm.create(self.shm_root .. "vmdq_enabled",
+                               vmdq_enabled_t)
+   vmdq_shm.enabled = self.vmdq
+   shm.unmap(vmdq_shm)
+   if self.vmdq then
+      -- create shared memory for tracking VMDq pools
+      local vmdq_shm = shm.create(self.shm_root .. "vmdq_pools",
+                                  vmdq_pools_t)
+      -- explicitly initialize to 0 since we can't rely on cleanup
+      for i=0, 63 do vmdq_shm.pools[i] = 0 end
+      shm.unmap(vmdq_shm)
+      -- set VMDq pooling method for all instances on this NIC
+      local mode_shm = shm.create(self.shm_root .. "vmdq_queuing_mode",
+                                  vmdq_queuing_mode_t)
+      if self.vmdq_queuing_mode == "rss-32-4" then
+         mode_shm.mode = 0
+      elseif self.vmdq_queuing_mode == "rss-64-2" then
+         mode_shm.mode = 1
+      else
+         error("Invalid VMDq queuing mode")
+      end
+      shm.unmap(mode_shm)
+   end
 end
 
 -- Implements various status checks related to VMDq configuration.
@@ -686,6 +771,8 @@ function Intel:init_rx_q ()
    end
    self:unlock_sw_sem()
 end
+
+txdesc_t = ffi.typeof("struct { uint64_t address, flags; }")
 function Intel:init_tx_q ()                               -- 4.5.10
    if not self.txq then return end
    assert((self.txq >=0) and (self.txq < self.max_q),
@@ -695,7 +782,6 @@ function Intel:init_tx_q ()                               -- 4.5.10
    self.txqueue = ffi.new("struct packet *[?]", self.ndesc)
 
    -- 7.2.2.3
-   local txdesc_t = ffi.typeof("struct { uint64_t address, flags; }")
    local txdesc_ring_t = ffi.typeof("$[$]", txdesc_t, self.ndesc)
    self.txdesc = ffi.cast(ffi.typeof("$&", txdesc_ring_t),
    memory.dma_alloc(ffi.sizeof(txdesc_ring_t)))
@@ -787,7 +873,7 @@ function Intel:push ()
    self.tdh = self.r.TDH()	-- possible race condition, 7.2.2.4, check DD
    --C.full_memory_barrier()
    while cursor ~= self.tdh do
-      if self.txqueue[cursor] then
+      if self.txqueue[cursor] ~= nil then -- Non-null pointer?
          packet.free(self.txqueue[cursor])
          self.txqueue[cursor] = nil
       end
@@ -1105,10 +1191,7 @@ function Intel1g:unlock_fw_sem()
    self.r.SWSM:clr(bits { SWESMBI = 1 })
 end
 function Intel1g:init ()
-   if not self.master then return end
-   pci.unbind_device_from_linux(self.pciaddress)
-   pci.set_bus_master(self.pciaddress, true)
-   pci.disable_bus_master_cleanup(self.pciaddress)
+   assert(self.master, "must be master")
 
    -- 4.5.3  Initialization Sequence
    self:disable_interrupts()
@@ -1144,6 +1227,12 @@ function Intel1g:init ()
    self.r.CTRL_EXT:clr( bits { PowerDown = 20 } )
    self.r.CTRL_EXT:set( bits { AutoSpeedDetect = 12, DriverLoaded = 28 })
    self.r.RLPML(self.mtu + 4) -- mtu + crc
+
+   -- Tx->Rx MAC Loopback?
+   if self.mac_loopback then
+      error("NYI: mac_loopback mode")
+   end
+
    self:unlock_sw_sem()
    if self.wait_for_link then self:wait_linkup() end
 end
@@ -1194,24 +1283,22 @@ end
 
 function Intel1g:get_rxstats ()
    assert(self.rxq, "cannot retrieve rxstats without rxq")
-   local frame = shm.open_frame("pci/"..self.pciaddress)
-   local rxc   = self.rxq
+   local rxc = self.rxq
    return {
       counter_id = rxc,
-      packets = counter.read(frame["q"..rxc.."_rxpackets"]),
-      dropped = counter.read(frame["q"..rxc.."_rxdrops"]),
-      bytes = counter.read(frame["q"..rxc.."_rxbytes"])
+      packets = self.shm["q"..rxc.."_rxpackets"](),
+      dropped = self.shm["q"..rxc.."_rxdrops"](),
+      bytes = self.shm["q"..rxc.."_rxbytes"]()
    }
 end
 
 function Intel1g:get_txstats ()
    assert(self.txq, "cannot retrieve rxstats without txq")
-   local frame = shm.open_frame("pci/"..self.pciaddress)
-   local txc   = self.txq
+   local txc = self.txq
    return {
       counter_id = txc,
-      packets = counter.read(frame["q"..txc.."_txpackets"]),
-      bytes = counter.read(frame["q"..txc.."_txbytes"])
+      packets = self.shm["q"..txc.."_txpackets"](),
+      bytes = self.shm["q"..txc.."_txbytes"]()
    }
 end
 
@@ -1450,7 +1537,11 @@ function Intel82599:promisc ()
    return band(self.r.FCTRL(), lshift(1, 9)) ~= 0ULL
 end
 function Intel82599:rxbytes  () return self.r.GORC64()   end
-function Intel82599:rxdrop   () return self.r.QPRDC[0]() end
+function Intel82599:rxdrop   ()
+   local rxdrop = self.r.MNGPDC() + self.r.FCOERPDC()
+   for i=0,15 do rxdrop = rxdrop + self.r.QPRDC[i]() end
+   return rxdrop
+end
 function Intel82599:rxerrors ()
    return self.r.CRCERRS() + self.r.ILLERRC() + self.r.ERRBC() +
       self.r.RUC() + self.r.RFC() + self.r.ROC() + self.r.RJC()
@@ -1483,10 +1574,7 @@ function Intel82599:init_queue_stats (frame)
 end
 
 function Intel82599:init ()
-   if not self.master then return end
-   pci.unbind_device_from_linux(self.pciaddress)
-   pci.set_bus_master(self.pciaddress, true)
-   pci.disable_bus_master_cleanup(self.pciaddress)
+   assert(self.master, "must be master")
 
    -- The 82599 devices sometimes just don't come up, especially when
    -- there is traffic already on the link.  If 2s have passed and the
@@ -1585,6 +1673,14 @@ function Intel82599:init ()
 
    if self.vmdq then
       self:vmdq_enable()
+   end
+
+   -- Diagnostics—Intel 82599 10 GbE Controller
+   -- 14.1 Link Loopback Operations
+   -- Tx->Rx MAC Loopback?
+   if self.mac_loopback then
+      self.r.AUTOC(bits { FLU = 0, LMS0 = 13, Restart_AN = 12  })
+      self.r.HLREG0:set(bits { LPBK = 15 })
    end
 
    self:unlock_sw_sem()
@@ -1878,24 +1974,22 @@ end
 -- is in control of the counter registers (and clears them on read)
 function Intel82599:get_rxstats ()
    assert(self.rxcounter and self.rxq, "cannot retrieve rxstats")
-   local frame = shm.open_frame("pci/"..self.pciaddress)
-   local rxc   = self.rxcounter
+   local rxc = self.rxcounter
    return {
       counter_id = rxc,
-      packets = counter.read(frame["q"..rxc.."_rxpackets"]),
-      dropped = counter.read(frame["q"..rxc.."_rxdrops"]),
-      bytes = counter.read(frame["q"..rxc.."_rxbytes"])
+      packets = self.shm["q"..rxc.."_rxpackets"](),
+      dropped = self.shm["q"..rxc.."_rxdrops"](),
+      bytes = self.shm["q"..rxc.."_rxbytes"]()
    }
 end
 
 function Intel82599:get_txstats ()
    assert(self.txcounter and self.txq, "cannot retrieve txstats")
-   local frame = shm.open_frame("pci/"..self.pciaddress)
-   local txc   = self.txcounter
+   local txc = self.txcounter
    return {
       counter_id = txc,
-      packets = counter.read(frame["q"..txc.."_txpackets"]),
-      bytes = counter.read(frame["q"..txc.."_txbytes"])
+      packets = self.shm["q"..txc.."_txpackets"](),
+      bytes = self.shm["q"..txc.."_txbytes"]()
    }
 end
 

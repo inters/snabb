@@ -1,5 +1,167 @@
 # Change Log
 
+## [2019.06.01]
+
+### Notable changes
+
+ * Improve stability of receive-side scaling (RSS), in which multiple
+   CPU cores can service traffic on the same NIC.  Previously, the
+   lwAFTR had a pathology whereby a transient error condition that could
+   cause one core to drop packets could then cause another core to
+   attempt to perform self-healing by re-optimizing its code, which
+   could then ping-pong back and cause the other core to try to
+   self-heal, and on and on forever.  See
+   https://github.com/Igalia/snabb/pull/1229 and
+   https://github.com/snabbco/snabb/pull/1443 for more details.
+
+ * Fix a problem whereby `snabb config add` would cause the lwAFTR to
+   crash after a few thousand softwire additions.  See
+   https://github.com/Igalia/snabb/pull/1228.
+
+ * Update the `ieee-softwire` compatibility layer for the native
+   `snabb-softwire-v2` Yang module, corresponding the latest changes in
+   the Internet Draft,
+   [`draft-ietf-softwire-yang-16`](https://datatracker.ietf.org/doc/draft-ietf-softwire-yang/16/).
+
+ * Add counters and historical data records for how much memory a lwAFTR
+   process uses over time, for use in on-line and post-mortem system
+   diagnostics.  See https://github.com/Igalia/snabb/pull/1228 for
+   details.
+
+ * Add `snabb rrdcat` tool that can be used to identify when packet
+   drops occured in the past.  See
+   https://github.com/Igalia/snabb/pull/1225 for details.
+
+ * Incorporate changes from the upstream [Snabb 2019.06
+   "Deltadromeus"](https://github.com/snabbco/snabb/releases/tag/v2019.01)
+   release.  This finally includes a switch over to RaptorJIT, which
+   adds a number of on-line diagnostic tools that can be useful for
+   troubleshooting performance problems in production.
+
+## [2018.09.03]
+
+### Features
+
+ * Add new "revision" declaration to snabb-softwire-v2 YANG module,
+   corresponding to addition of flow-label nodes back in version
+   2018.09.01.  No changes to the schema otherwise.
+
+ * Add new performance diagnostics that will print warnings for common
+   system misconfigurations, such as missing `isolcpus` declarations or
+   the use of power-saving CPU frequency scaling strategies.  These
+   warnings detect conditions which are described in the performance
+   tuning document.
+
+     https://github.com/Igalia/snabb/pull/1212
+     https://github.com/snabbco/snabb/blob/master/src/doc/performance-tuning.md
+
+ * Improve `snabb lwaftr run --help` output.  Try it out!
+
+### Bug fixes
+
+ * Ingress drop monitor treats startup as part of grace period (10
+   seconds by default), postponing the start of dropped packet detection
+   until after the system has settled down.
+
+     https://github.com/Igalia/snabb/issues/1216
+     https://github.com/Igalia/snabb/pull/1217
+
+ * Fix PCI/NUMA affinity diagnostics.
+
+     https://github.com/Igalia/snabb/pull/1211
+
+ * New YANG schema revisions cause Snabb to recompile configurations.
+
+     https://github.com/Igalia/snabb/pull/1209
+
+ * Re-enable NUMA binding on newer kernels (including the kernel used by
+   Ubuntu 18.04).
+
+     https://github.com/Igalia/snabb/pull/1207
+
+## [2018.09.02]
+
+### Features
+
+* Add benchmarking test for 2 instances each with 2 queues (total of 4
+  queues).
+
+    https://github.com/Igalia/snabb/pull/1206
+
+### Bug fixes
+
+* Fixes compiling on GCC 8.1 relating to unsafe usage of `strncpy`.
+
+    https://github.com/Igalia/snabb/pull/1193
+
+* Fix bug where the next-hop counter reported an incorrect value. The
+  ARP and NDP apps should now report the next-hop mac address when
+  resolved.
+
+    https://github.com/Igalia/snabb/pull/1204
+
+* Fix bug in with ctables that caused a TABOV (table overflow) error.
+
+    https://github.com/Igalia/snabb/pull/1200
+
+* Fix a bug where the kernel could overwrite some of our memory
+  due to giving an incorrect size being given in `get_mempolicy`. This
+  could have caused a crash in certain situations. We're now
+  allocating a mask of the correct size.
+
+    https://github.com/Igalia/snabb/pull/1198
+
+## [2018.09.01]
+
+### Features
+
+* Allow setting the IPv6 flow-label header field on ingress packets, allowing
+  packets from different lwAFTR instances to be distinguished via the field.
+  This adds a new `flow-label` field that can be used in YANG configurations.
+
+    https://github.com/Igalia/snabb/pull/1183
+
+* Next hop MAC addresses (`next-hop-macaddr-v4` and `next-hop-macaddr-v6`) are now
+  shown in the `snabb top` view and are added to the YANG model so that they
+  can be queried using `snabb config get-state`.
+
+    https://github.com/Igalia/snabb/pull/1182
+
+### Bug fixes
+
+* Fix RRD recording for intel_mp stats counters. This fixes issues discovered
+  with the statistics counter improvements from v2018.06.01 and improves the
+  functionality of `snabb top`.
+
+    https://github.com/Igalia/snabb/pull/1179
+
+* Add a workaround for a bug in Linux kernel version 4.15.0-36 with memory
+  binding to avoid segmentation faults.
+
+    https://github.com/Igalia/snabb/pull/1187
+
+* Improved error messages for invalid config files and for `snabb config`.
+
+    https://github.com/Igalia/snabb/pull/1159
+    https://github.com/Igalia/snabb/pull/1160
+
+* Ensure leader process is bound to the correct NUMA node.
+
+    https://github.com/Igalia/snabb/pull/1133
+
+### Other enhancements from upstream
+
+  * Integrates Snabb 2018.09 "Eggplant".
+
+      https://github.com/snabbco/snabb/releases/tag/v2018.09
+
+  * Includes updates to vhost-user driver, PMU support for some AMD CPUs,
+    hash table improvements, a token bucket implementation, and support for
+    time stamp counters.
+
+Thanks to Alexander Gall, Ben Agricola, Luke Gorrie, Max Rottenkolber, and
+kullanici0606 for their upstream contributions in this release.
+
 ## [2018.06.01]
 
 ### Features
