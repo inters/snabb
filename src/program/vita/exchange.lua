@@ -161,6 +161,7 @@ local lib = require("core.lib")
 local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
 local yang = require("lib.yang.yang")
+local logger = require("lib.logger")
 local schemata = require("program.vita.schemata")
 local crypto = require("program.vita.crypto")
 local noise_NNpsk0 = require("program.vita.noise_NNpsk0")
@@ -239,7 +240,7 @@ function KeyManager:reconfig (conf)
       self.ip, self.ip_in = self.ip6, self.ip6_in
    else error("Need either node_ip4 or node_ip6.") end
 
-   self.audit = lib.logger_new({
+   self.audit = logger.new({
          rate = 32,
          module = ("KeyManager(%s)"):format(conf.node_ip4 or conf.node_ip6)
    })

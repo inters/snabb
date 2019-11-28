@@ -123,7 +123,7 @@ local vmprofile_t = ffi.new("uint8_t["..C.vmprofile_get_profile_size().."]")
 local vmprofiles = {}
 local function getvmprofile (name)
    if vmprofiles[name] == nil then
-      vmprofiles[name] = shm.create("vmprofile/"..name, vmprofile_t)
+      vmprofiles[name] = shm.create("vmprofile/"..name..".vmprofile", vmprofile_t)
    end
    return vmprofiles[name]
 end
@@ -625,7 +625,10 @@ function breathe ()
    -- Restart: restart dead apps
    restart_dead_apps()
    -- Inhale: pull work into the app network
-   for i = 1, #breathe_pull_order do
+   local i = 1
+   ::PULL_LOOP::
+   do
+      if i > #breathe_pull_order then goto PULL_EXIT end
       local app = breathe_pull_order[i]
       if app.pull and not app.dead then
          if timeline_mod.rate(timeline_log) <= 3 then
@@ -636,10 +639,16 @@ function breathe ()
             with_restart(app, app.pull)
          end
       end
+      i = i+1
+      goto PULL_LOOP
    end
+   ::PULL_EXIT::
    events.breath_pulled()
    -- Exhale: push work out through the app network
-   for i = 1, #breathe_push_order do
+   i = 1
+   ::PUSH_LOOP::
+   do
+      if i > #breathe_push_order then goto PUSH_EXIT end
       local app = breathe_push_order[i]
       if app.push and not app.dead then
          if timeline_mod.rate(timeline_log) <= 3 then
@@ -650,7 +659,10 @@ function breathe ()
             with_restart(app, app.push)
          end
       end
+      i = i+1
+      goto PUSH_LOOP
    end
+   ::PUSH_EXIT::
    events.breath_pushed()
    local freed
    local freed_packets = counter.read(frees) - freed_packets0

@@ -187,7 +187,10 @@ local function decoder(buf, len)
       return assert((#name > 0 and mod[name]) or mod)
    end
    function decoder:config()
-      return binary.load_compiled_data_file(self:string()).data
+      local filename = self:string()
+      local data = binary.load_compiled_data_file(filename).data
+      S.unlink(filename)
+      return data
    end
    function decoder:finish(...)
       return { ... }

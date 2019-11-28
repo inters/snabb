@@ -12,6 +12,7 @@ local ctable = require('lib.ctable')
 local cltable = require('lib.cltable')
 local lib = require('core.lib')
 local regexp = require("lib.xsd_regexp")
+local lib = require("core.lib")
 
 function normalize_id(id)
    return (id:gsub('[^%w_]', '_'))
@@ -111,22 +112,28 @@ function typeof(name)
    return type_cache[name]
 end
 
--- If a "list" node has one key that is string-valued or representable as a Lua
--- number, we will represent instances of that node as normal Lua tables where
--- the key is the table key and the value does not contain the key.
+-- If a "list" node has a single key that is string-valued or representable as
+-- a Lua number, we will represent instances of that node as normal Lua tables
+-- where the key is the table key and the value does not contain the key.
 local function table_native_key(keys)
-   local function representable_as_native(pt)
-      if pt == 'string' then return true end
-      local dt = {'int8', 'int16', 'int32', 'uint8', 'uint16', 'uint32'}
-      for _, t in ipairs(dt) do if pt == t then return true end end
+   local native_number_types =
+      lib.set('int8', 'int16', 'int32', 'uint8', 'uint16', 'uint32')
+   local function representable_as_native(v)
+      return v.type == 'scalar' and
+             (v.argument_type.primitive_type == 'string' or
+              native_number_types[v.argument_type.primitive_type])
    end
    local native_key = nil
    for k,v in pairs(keys) do
-      if native_key ~= nil then return nil end
-      if v.type ~= 'scalar' then return nil end
-      if representable_as_native(v.argument_type.primitive_type) then
+      if native_key ~= nil then
+         -- Bail out if the list has multiple keys, native or otherwise.
+         return nil
+      elseif representable_as_native(v) then
+         -- Select the first native key, if any.
          native_key = k
-      else return nil end
+      else
+         return nil
+      end
    end
    return native_key
 end
@@ -409,7 +416,8 @@ local function struct_parser(keyword, members, ctype)
          -- Scalar/array parser responsible for requiring whitespace
          -- after keyword.  Struct/table don't need it as they have
          -- braces.
-         local sub = expanded_members[k] or P:error('unrecognized parameter: '..k)
+         local sub = expanded_members[k]
+         if not sub then P:error('unrecognized parameter: '..k) end
          local id = normalize_id(k)
          ret[id] = sub.parse(P, ret[id], k)
          P:skip_whitespace()
@@ -695,7 +703,8 @@ function data_parser_from_grammar(production)
             if P:is_eof() then break end
             local k = P:parse_identifier()
             if k == '' then P:error("Expected a keyword") end
-            local sub = expanded_members[k] or P:error('unrecognized parameter: '..k)
+            local sub = expanded_members[k]
+            if not sub then P:error('unrecognized parameter: '..k) end
             local id = normalize_id(k)
             ret[id] = sub.parse(P, ret[id], k)
          end
@@ -716,7 +725,8 @@ function data_parser_from_grammar(production)
             if P:is_eof() then break end
             local k = P:parse_identifier()
             P:consume_whitespace()
-            local sub = members[k] or P:error('unrecognized rpc: '..k)
+            local sub = assert(members[k])
+            if not sub then P:error('unrecognized rpc: '..k) end
             local data = sub.finish(sub.parse(P, sub.init(), k))
             table.insert(ret, {id=k, data=data})
          end
@@ -1732,6 +1742,13 @@ function selftest()
 
       container fruit-bowl {
          leaf description { type string; }
+         leaf material {
+            type enumeration {
+               enum wood;
+               enum glass;
+               enum plastic;
+            }
+         }
          list contents { uses fruit; key name; }
       }
       leaf addr {
@@ -1750,6 +1767,7 @@ function selftest()
                                        mem.open_input_string [[
      fruit-bowl {
        description 'ohai';
+       material glass;
        contents { name foo; score 7; }
        contents { name bar; score 8; }
        contents { name baz; score 9; tree-grown true; }
@@ -1759,6 +1777,7 @@ function selftest()
    ]])
    for i =1,2 do
       assert(data.fruit_bowl.description == 'ohai')
+      assert(data.fruit_bowl.material == 'glass', data.material)
       local contents = data.fruit_bowl.contents
       assert(contents.foo.score == 7)
       assert(contents.foo.tree_grown == nil)
@@ -1905,6 +1924,28 @@ function selftest()
    ]])
    assert(success == false)
 
+   -- Check native number key.
+   local native_number_key_schema = schema.load_schema([[module native-number-key {
+      namespace "urn:ietf:params:xml:ns:yang:native-number-key";
+      prefix "test";
+
+      list number {
+         key "number";
+         leaf number { type uint32; }
+         leaf name { type string; }
+      }
+   }]])
+
+   local native_number_key_data = load_config_for_schema(
+      native_number_key_schema,
+      mem.open_input_string [[
+         number {
+            number 1;
+            name "Number one!";
+         }
+   ]])
+   assert(native_number_key_data.number[1].name == "Number one!")
+
    -- Test top-level choice with list member.
    local choice_schema = schema.load_schema([[module toplevel-choice-schema {
       namespace "urn:ietf:params:xml:ns:yang:toplevel-choice-schema";
@@ -1953,27 +1994,6 @@ function selftest()
                                               mem.open_input_string "")
    assert(choice_data.foo == "something")
 
-   -- Check native number key.
-   local native_number_key_schema = schema.load_schema([[module native-number-key {
-      namespace "urn:ietf:params:xml:ns:yang:native-number-key";
-      prefix "test";
-
-      list number {
-         key "number";
-         leaf number { type uint32; }
-         leaf name { type string; }
-      }
-   }]])
-
-   local native_number_key_data = load_config_for_schema(native_number_key_schema,
-                                                         mem.open_input_string [[
-      number {
-         number 1;
-         name "Number one!";
-      }
-   ]])
-   assert(native_number_key_data.number[1].name == "Number one!")
-
    -- Test range / length restrictions.
    local range_length_schema = schema.load_schema([[module range-length-schema {
       namespace "urn:ietf:params:xml:ns:yang:range-length-schema";
@@ -2004,18 +2024,20 @@ function selftest()
    assert(success == false)
 
    -- Test range validation. (should succeed)
-   load_config_for_schema(range_length_schema,
-                          mem.open_input_string [[
+   local success, err = pcall(load_config_for_schema, range_length_schema,
+                              mem.open_input_string [[
       range_test 9;
       range_test 22;
    ]])
+   assert(success)
 
    -- Test length validation. (should succeed)
-   load_config_for_schema(range_length_schema,
-                          mem.open_input_string [[
+   local success, err = pcall(load_config_for_schema, range_length_schema,
+                              mem.open_input_string [[
       length_test ".........";
       length_test "++++++++++++++++++++++";
    ]])
+   assert(success)
 
    influxdb_printer_tests()
 

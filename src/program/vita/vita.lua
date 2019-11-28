@@ -222,6 +222,8 @@ end
 -- configuration.
 -- This function does not halt except for fatal error situations.
 function run_vita (opt)
+   local supervisor -- forward declaration
+
    init_sa_db()
 
    -- Listen for SA database changes.
@@ -300,7 +302,7 @@ function run_vita (opt)
    end
 
    -- Setup supervisor
-   local supervisor = ptree.new_manager{
+   supervisor = ptree.new_manager{
       name = opt.name,
       schema_name = 'vita-esp-gateway',
       schema_support = schema_support,
