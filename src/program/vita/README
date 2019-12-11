@@ -18,6 +18,8 @@ Usage:
   -K, --keygen
                              Generate and print a random 32 byte key in
                              hexadecimal notation.
+  -X, --xdp
+                             Enable XDP mode.
 
 Run Vita, configurable via `snabb config'. Refer to “--config-help” for a
 description of the documentation schema.

@@ -52,7 +52,8 @@ local confspec = {
 }
 
 local ifspec = {
-   pci = {required=true},
+   pci = {},
+   ifname = {},
    ip = {},
    nexthop_ip = {},
    mac = {},
@@ -170,6 +171,9 @@ function iterate_sa_db ()
    return pairs(sa_db)
 end
 
+-- Global XDP mode flag
+local xdp_mode = false
+
 -- Vita command-line interface (CLI)
 function run (args)
    local long_opt = {
@@ -179,7 +183,8 @@ function run (args)
       cpu = "c",
       busywait = "b",
       realtime = "r",
-      keygen = "K"
+      keygen = "K",
+      xdp = "X"
    }
 
    local opt = {}
@@ -209,7 +214,9 @@ function run (args)
    function opt.b () busywait = true end
    function opt.r () realtime = true end
 
-   args = lib.dogetopt(args, opt, "hHn:c:brK", long_opt)
+   function opt.X () xdp_mode = true end
+
+   args = lib.dogetopt(args, opt, "hHn:c:brKX", long_opt)
 
    if #args > 0 then exit_usage(1) end
    run_vita{name=name, cpuset=cpuset, busywait=busywait, realtime=realtime}
@@ -310,7 +317,8 @@ function run_vita (opt)
       setup_fn = purify(opt.setup_fn or vita_workers),
       cpuset = opt.cpuset,
       worker_default_scheduling = {busywait=opt.busywait or false,
-                                   real_time=opt.realtime or false},
+                                   real_time=opt.realtime or false,
+                                   enable_xdp=xdp_mode and {}},
       worker_jit_flush = false
    }
 
@@ -442,8 +450,15 @@ function configure_vita_queue (conf, queue, free_links)
 end
 
 local function io_driver (spec)
-   local info = pci.device_info(spec.pci)
-   local driver = require(info.driver)
+   local info
+   if spec.pci then
+      info = pci.device_info(spec.pci)
+   elseif spec.ifname then
+      info = {driver='apps.xdp.xdp'}
+   else
+      info = {model='unknown'}
+   end
+   local driver = info.driver and require(info.driver)
    local conf = {}
    if info.driver == 'apps.intel_mp.intel_mp' then
       if spec.mac then
@@ -459,9 +474,15 @@ local function io_driver (spec)
          conf.rxq = spec.queue - 1
       end
    elseif info.driver == 'apps.intel_avf.intel_avf' then
-      assert((not spec.queue) or spec.queue <= 1,
+      assert(spec.mac or spec.queue <= 1,
              info.model.." only supports a single queue.")
       conf.pciaddr = spec.pci
+   elseif info.driver == 'apps.xdp.xdp' then
+      assert(xdp_mode, "Need to run vita with --xdp to enable XDP mode.")
+      conf.ifname = spec.ifname
+      conf.queue = spec.queue - 1
+      -- XXX: we should test this configuration before shipping it to the
+      -- data-plane.
    else
       error("Unsupported device: "..info.model)
    end
@@ -479,6 +500,7 @@ function configure_interfaces (conf, append)
    local private_interface = conf.private_interface4 or conf.private_interface6
    if private_interface and private_interface.pci ~= "00:00.0" then
       config.app(c, "PrivateNIC", io_driver{ pci = private_interface.pci,
+                                             ifname = private_interface.ifname,
                                              queue = conf.queue })
       ports.private = {
          rx = "PrivateNIC.output",
@@ -489,7 +511,8 @@ function configure_interfaces (conf, append)
    local public_interface = conf.public_interface4 or conf.public_interface6
    if public_interface and public_interface.pci ~= "00:00.0" then
       config.app(c, "PublicNIC", io_driver{ pci = public_interface.pci,
-                                            mac = public_interface.mac })
+                                            ifname = public_interface.ifname,
+                                            queue = conf.queue })
       ports.public = {
          rx = "PublicNIC.output",
          tx = "PublicNIC.input"
@@ -498,6 +521,7 @@ function configure_interfaces (conf, append)
 
    assert(private_interface.pci == "00:00.0" or
              public_interface.pci == "00:00.0" or
+             not (private_interface.pci or public_interface.pci) or
              private_interface.pci ~= public_interface.pci,
           "Using the same PCI device for both interfaces is not supported.")
 

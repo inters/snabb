@@ -144,9 +144,12 @@ module vita-esp-gateway {
 
   grouping interface {
     description "
-    Each interface is assigned a Linux PCI bus address, an IP address, and an
+    Each interface is assigned a device identifier, an IP address, and an
     IP address of the next hop through which all packets leaving the interface
     will be routed.
+
+    A device identifier can be either a Linux PCI bus address or Linux
+    interface name (for use with XDP).
 
     If the Ethernet (MAC) address of the interface is not explicitly specified,
     it is automatically derived from its assigned IP address by prepending the
@@ -157,7 +160,10 @@ module vita-esp-gateway {
     address the next hop directly (this option is mainly intended for use in
     testing environments.)
     ";
-    leaf pci { type pci-address; mandatory true; }
+    choice link {
+      case pci { leaf pci { type pci-address; mandatory true; } }
+      case xdp { leaf ifname { type string; mandatory true; } }
+    }
     leaf mac { type yang:mac-address; }
     leaf nexthop-mac { type yang:mac-address; }
   }
