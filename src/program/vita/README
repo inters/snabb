@@ -34,7 +34,7 @@ the “--cpu” option.
 
 Examples:
   vita --name my-vita --cpus 0,1,2,3,4
-  snabb config set my-vita < vita.conf
+  snabb config set my-vita / < vita.conf
   snabb config add my-vita /route4[id=site1]/gateway { ip 7.7.7.7; queue 2; }
   snabb config add my-vita /public-interface4 <<EOF
   { pci 00:00.0; ip 3.3.3.3; nexthop-ip 2.2.2.2; queue 2; }
