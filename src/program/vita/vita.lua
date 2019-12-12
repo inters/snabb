@@ -114,9 +114,11 @@ local function parse_queue_conf (conf, queue)
    local function select_gateway (gateways)
       local default
       for ip, gateway in pairs(gateways) do
-         if gateway.queue == conf.queue then return ip
+         if gateway.queue == conf.queue then return ip end
          -- default to the first defined gateway
-         elseif gateway.queue == 1 then default = ip end
+         if not default or gateway.queue < gateways[default].queue then
+            default = ip
+         end
       end
       return default
    end
