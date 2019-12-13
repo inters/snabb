@@ -56,9 +56,9 @@ function compute_state_reader (schema_name)
          local id = data.normalize_id(member)
          local grammar = gateway_state_gmr.members[member]
          local counters = {}
-         if graph.apps[app] then
-            local pciaddr = graph.apps[app].arg.pciaddr
-            counters = open_counters("/"..pid.."/pci/"..pciaddr)
+         local pciaddr = graph.apps[app] and graph.apps[app].arg.pciaddr
+         if pciaddr then
+            counters = pciaddr and open_counters("/"..pid.."/pci/"..pciaddr)
          end
          gateway_state[id] = state.state_reader_from_grammar(grammar)(counters)
       end

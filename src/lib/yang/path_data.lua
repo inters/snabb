@@ -314,7 +314,19 @@ local function adder_for_grammar(grammar, path)
    elseif grammar.type == 'table' then
       -- Invariant: either all entries in the new subconfig are added,
       -- or none are.
-      if grammar.key_ctype and grammar.value_ctype then
+      if grammar.native_key
+      or (grammar.key_ctype and not grammar.value_ctype) then
+         -- cltable or string-keyed table.
+         local pairs = grammar.key_ctype and cltable.pairs or pairs
+         return function(config, subconfig)
+            local tab = getter(config)
+            for k,_ in pairs(subconfig) do
+               if tab[k] ~= nil then error('already-existing entry') end
+            end
+            for k,v in pairs(subconfig) do tab[k] = v end
+            return config
+         end
+      elseif grammar.key_ctype and grammar.value_ctype then
          -- ctable.
          return function(config, subconfig)
             local ctab = getter(config)
@@ -528,7 +540,45 @@ function leafref_checker_from_grammar(grammar)
                ("Broken leafref integrity in '%s' when referencing '%s'"):format(
                 path, leafref))
       end
-   end   
+   end
+end
+
+local function pairs_from_grammar(grammar)
+   if grammar.native_key then
+      return pairs
+   elseif grammar.key_ctype and grammar.value_ctype then
+      return function (ctable)
+         local ctable_next, ctable_max, ctable_entry = ctable:iterate()
+         return function()
+            ctable_entry = ctable_next(ctable_max, ctable_entry)
+            if not ctable_entry then return end
+            return ctable_entry.key, ctable_entry.value
+         end
+      end
+   elseif grammar.key_ctype then
+      return cltable.pairs
+   else
+      return pairs
+   end
+end
+
+local function expanded_pairs(values)
+   -- Return an iterator for each non-choice pair in values and each pair of
+   -- all choice bodies recursively.
+   local expanded = {}
+   local function expand(values)
+      for name, value in pairs(values) do
+         if value.type == 'choice' then
+            for _, body in pairs(value.choices) do
+               expand(body)
+            end
+         else
+            expanded[name] = value
+         end
+      end
+   end
+   expand(values)
+   return pairs(expanded)
 end
 
 function uniqueness_checker_from_grammar(grammar)
@@ -538,7 +588,7 @@ function uniqueness_checker_from_grammar(grammar)
       for leaf in leaves:split(" +") do
          table.insert(unique_leaves, normalize_id(leaf))
       end
-      local pairs = grammar.native_key and pairs or cltable.pairs
+      local pairs = pairs_from_grammar(grammar)
       return function (tab)
          -- Sad quadratic loop, again
          for k1, v1 in pairs(tab) do
@@ -560,10 +610,11 @@ function uniqueness_checker_from_grammar(grammar)
    local function visit_unique_and_check(grammar, data)
       if not data then return
       elseif grammar.type == 'table' then
+         local pairs = pairs_from_grammar(grammar)
          -- visit values
-         for name, value in pairs(grammar.values) do
+         for name, value in expanded_pairs(grammar.values) do
             for k, datum in pairs(data) do
-               visit_unique_and_check(value, datum[name])
+               visit_unique_and_check(value, datum[normalize_id(name)])
             end
          end
          -- check unique rescrictions
@@ -572,8 +623,8 @@ function uniqueness_checker_from_grammar(grammar)
          end
       elseif grammar.type == 'struct' then
          -- visit members
-         for name, member in pairs(grammar.members) do
-            visit_unique_and_check(member, data[name])
+         for name, member in expanded_pairs(grammar.members) do
+            visit_unique_and_check(member, data[normalize_id(name)])
          end
       end
    end
@@ -586,10 +637,10 @@ function minmax_elements_checker_from_grammar(grammar)
    -- Generate checker for table (list, leaf-list)
    local function minmax_assertion(grammar, name)
       name = name or ""
-      local pairs = grammar.native_key and pairs or cltable.pairs
       if not (grammar.min_elements or grammar.max_elements) then
          return function () end
       end
+      local pairs = pairs_from_grammar(grammar)
       return function (tab)
          local n = 0
          for k1, v1 in pairs(tab) do
@@ -615,17 +666,18 @@ function minmax_elements_checker_from_grammar(grammar)
          minmax_assertion(grammar, name)(data)
       elseif grammar.type == 'table' then
          -- visit values
-         for name, value in pairs(grammar.values) do
+         local pairs = pairs_from_grammar(grammar)
+         for name, value in expanded_pairs(grammar.values) do
             for k, datum in pairs(data) do
-               visit_minmax_and_check(value, datum[name], name)
+               visit_minmax_and_check(value, datum[normalize_id(name)], name)
             end
          end
          -- check min/max elements restrictions
          minmax_assertion(grammar, name)(data)
       elseif grammar.type == 'struct' then
          -- visit members
-         for name, member in pairs(grammar.members) do
-            visit_minmax_and_check(member, data[name], name)
+         for name, member in expanded_pairs(grammar.members) do
+            visit_minmax_and_check(member, data[normalize_id(name)], name)
          end
       end
    end
@@ -807,7 +859,6 @@ function selftest()
                                "queue[id=0]/external-interface/ip 208.118.235.148")
    remover_for_grammar(grammar, "/softwire-config/instance[device=test]/")
 
-   
    -- Test unique restrictions:
    local unique_schema = schema.load_schema([[module unique-schema {
       namespace "urn:ietf:params:xml:ns:yang:unique-schema";
@@ -969,6 +1020,74 @@ function selftest()
    ]]))
    assert(not success)
    print(result)
+
+   -- Test unique restrictions in choice body:
+   local choice_unique_schema = schema.load_schema([[module choice-unique-schema {
+      namespace "urn:ietf:params:xml:ns:yang:choice-unique-schema";
+      prefix "test";
+
+      choice ab {
+         list unique_test {
+           key "testkey"; unique "testleaf testleaf2";
+           leaf testkey { type string; mandatory true; }
+           leaf testleaf { type string; mandatory true; }
+           leaf testleaf2 { type string; mandatory true; }
+         }
+         list duplicate_test {
+           key "testkey";
+           leaf testkey { type string; mandatory true; }
+           leaf testleaf { type string;}
+           leaf testleaf2 { type string;}
+         }
+      }
+   }]])
+   local checker = consistency_checker_from_schema(choice_unique_schema, true)
+
+   -- Test unique validation in choice body (should fail)
+   local success, result = pcall(
+      checker,
+      data.load_config_for_schema(choice_unique_schema,
+                                  mem.open_input_string [[
+                                     unique_test {
+                                       testkey "foo";
+                                       testleaf "bar";
+                                       testleaf2 "baz";
+                                     }
+                                     unique_test {
+                                       testkey "foo2";
+                                       testleaf "bar";
+                                       testleaf2 "baz";
+                                     }
+   ]]))
+   assert(not success)
+
+   -- Test unique validation in choice body (should succeed)
+   checker(data.load_config_for_schema(choice_unique_schema,
+                                       mem.open_input_string [[
+                                          unique_test {
+                                            testkey "foo";
+                                            testleaf "bar";
+                                            testleaf2 "baz";
+                                          }
+                                          unique_test {
+                                            testkey "foo2";
+                                            testleaf "bar2";
+                                            testleaf2 "baz";
+                                          }
+   ]]))
+
+   -- Test unique validation in choice body (should succeed)
+   checker(data.load_config_for_schema(choice_unique_schema,
+                                       mem.open_input_string [[
+                                          duplicate_test {
+                                            testkey "foo";
+                                            testleaf "bar";
+                                          }
+                                          duplicate_test {
+                                            testkey "foo2";
+                                            testleaf "bar";
+                                          }
+   ]]))
 
    print("selftest: ok")
 end

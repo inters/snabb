@@ -16,6 +16,7 @@ Synth = {
       packets = {},
       random_payload = { default = false },
       packet_id = { default = false },
+      packets = {}
    }
 }
 
@@ -42,7 +43,10 @@ function Synth:new (conf)
          packets[i] = dgram:packet()
       end
    end
-   return setmetatable({cursor=1, packets=packets}, {__index=Synth})
+   return setmetatable(
+      {cursor=0, pktid=(conf.packet_id and 0), packets=packets},
+      {__index=Synth}
+   )
 end
 
 function Synth:pull ()
@@ -51,17 +55,17 @@ function Synth:pull ()
    for _, o in ipairs(self.output) do
       local cursor = self.cursor
       for _ = 1, burst do
-         local c = packet.clone(packets[cursor])
+         local p = packet.clone(packets[1+cursor])
          if self.packet_id then
             -- 14 == sizeof(dstmac srcmac type)
-            ffi.cast("uint32_t *", clone.data+14)[0] = lib.htonl(self.pktid)
+            ffi.cast("uint32_t *", p.data+14)[0] = lib.htonl(self.pktid)
             self.pktid = self.pktid + 1
          end
-         transmit(o, c)
-         cursor = (cursor + 1) % npackets + 1
+         transmit(o, p)
+         cursor = (cursor + 1) % npackets
       end
    end
-   self.cursor = (self.cursor + burst) % npackets + 1
+   self.cursor = (self.cursor + burst) % npackets
 end
 
 function Synth:stop ()

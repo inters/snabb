@@ -52,7 +52,7 @@ LUAJIT_A := ../lib/luajit/src/raptorjit.a
 # for each module that has a top-level selftest () function.
 TESTMODS = $(shell find $(INCLUDE) -regex '[^\#]*\.\(lua\|dasl\)' -printf '%p ' | \
              xargs grep -s -l '^function selftest *[[:punct:]]' | \
-             sed -e 's_\.lua__' -e 's_\.dasl__' -e 's_/_._g')
+             sed -e 's_\.lua__' -e 's_\.dasl__' -e 's_/_._g' -e 's/-/_/g')
 
 # TESTSCRIPTS expands to:
 #   lib/watchdog/selftest.sh ...

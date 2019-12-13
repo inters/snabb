@@ -12,6 +12,7 @@ local ctable = require('lib.ctable')
 local cltable = require('lib.cltable')
 local lib = require('core.lib')
 local regexp = require("lib.xsd_regexp")
+local lib = require("core.lib")
 
 function normalize_id(id)
    return (id:gsub('[^%w_]', '_'))
@@ -111,22 +112,28 @@ function typeof(name)
    return type_cache[name]
 end
 
--- If a "list" node has one key that is string-valued or representable as a Lua
--- number, we will represent instances of that node as normal Lua tables where
--- the key is the table key and the value does not contain the key.
+-- If a "list" node has a single key that is string-valued or representable as
+-- a Lua number, we will represent instances of that node as normal Lua tables
+-- where the key is the table key and the value does not contain the key.
 local function table_native_key(keys)
-   local function representable_as_native(pt)
-      if pt == 'string' then return true end
-      local dt = {'int8', 'int16', 'int32', 'uint8', 'uint16', 'uint32'}
-      for _, t in ipairs(dt) do if pt == t then return true end end
+   local native_number_types =
+      lib.set('int8', 'int16', 'int32', 'uint8', 'uint16', 'uint32')
+   local function representable_as_native(v)
+      return v.type == 'scalar' and
+             (v.argument_type.primitive_type == 'string' or
+              native_number_types[v.argument_type.primitive_type])
    end
    local native_key = nil
    for k,v in pairs(keys) do
-      if native_key ~= nil then return nil end
-      if v.type ~= 'scalar' then return nil end
-      if representable_as_native(v.argument_type.primitive_type) then
+      if native_key ~= nil then
+         -- Bail out if the list has multiple keys, native or otherwise.
+         return nil
+      elseif representable_as_native(v) then
+         -- Select the first native key, if any.
          native_key = k
-      else return nil end
+      else
+         return nil
+      end
    end
    return native_key
 end
@@ -409,7 +416,8 @@ local function struct_parser(keyword, members, ctype)
          -- Scalar/array parser responsible for requiring whitespace
          -- after keyword.  Struct/table don't need it as they have
          -- braces.
-         local sub = expanded_members[k] or P:error('unrecognized parameter: '..k)
+         local sub = expanded_members[k]
+         if not sub then P:error('unrecognized parameter: '..k) end
          local id = normalize_id(k)
          ret[id] = sub.parse(P, ret[id], k)
          P:skip_whitespace()
@@ -695,7 +703,8 @@ function data_parser_from_grammar(production)
             if P:is_eof() then break end
             local k = P:parse_identifier()
             if k == '' then P:error("Expected a keyword") end
-            local sub = expanded_members[k] or P:error('unrecognized parameter: '..k)
+            local sub = expanded_members[k]
+            if not sub then P:error('unrecognized parameter: '..k) end
             local id = normalize_id(k)
             ret[id] = sub.parse(P, ret[id], k)
          end
@@ -716,7 +725,8 @@ function data_parser_from_grammar(production)
             if P:is_eof() then break end
             local k = P:parse_identifier()
             P:consume_whitespace()
-            local sub = members[k] or P:error('unrecognized rpc: '..k)
+            local sub = assert(members[k])
+            if not sub then P:error('unrecognized rpc: '..k) end
             local data = sub.finish(sub.parse(P, sub.init(), k))
             table.insert(ret, {id=k, data=data})
          end
@@ -860,7 +870,7 @@ function xpath_printer_from_grammar(production, print_default, root)
       print_yang_string(k, file)
       file:write(' ')
    end
-   local function body_printer(productions, order)
+   local function body_printer(productions)
       -- Iterate over productions trying to translate to other statements. This
       -- is used for example in choice statements raising the lower statements
       -- in case blocks up to the level of the choice, in place of the choice.
@@ -870,16 +880,15 @@ function xpath_printer_from_grammar(production, print_default, root)
          if translator ~= nil then
             local statements = translator(keyword, production)
             for k,v in pairs(statements) do translated[k] = v end
+            order = nil
          else
             translated[keyword] = production
          end
       end
       productions = translated
-      if not order then
-         order = {}
-         for k,_ in pairs(productions) do table.insert(order, k) end
-         table.sort(order)
-      end
+      local order = {}
+      for k,_ in pairs(productions) do table.insert(order, k) end
+      table.sort(order)
       local printers = {}
       for keyword,production in pairs(productions) do
          local printer = printer(keyword, production, printers)
@@ -894,8 +903,8 @@ function xpath_printer_from_grammar(production, print_default, root)
          end
       end
    end
-   local function key_composer (productions, order)
-      local printer = body_printer(productions, order)
+   local function key_composer (productions)
+      local printer = body_printer(productions)
       local file = {t={}}
       function file:write (str)
          str = str:match("([^%s]+)")
@@ -948,13 +957,8 @@ function xpath_printer_from_grammar(production, print_default, root)
    -- As a special case, the table handler allows the keyword to be nil,
    -- for printing tables at the top level without keywords.
    function handlers.table(keyword, production)
-      local key_order, value_order = {}, {}
-      for k,_ in pairs(production.keys) do table.insert(key_order, k) end
-      for k,_ in pairs(production.values) do table.insert(value_order, k) end
-      table.sort(key_order)
-      table.sort(value_order)
-      local compose_key = key_composer(production.keys, key_order)
-      local print_value = body_printer(production.values, value_order)
+      local compose_key = key_composer(production.keys)
+      local print_value = body_printer(production.values)
       if production.key_ctype and production.value_ctype then
          return function(data, file, path)
             path = path or ''
@@ -1110,7 +1114,7 @@ function influxdb_printer_from_grammar(production, print_default, root)
       file:write(file.is_tag and value or ' value='..value)
       file:write('\n')
    end
-   local function body_printer(productions, order)
+   local function body_printer(productions)
       -- Iterate over productions trying to translate to other statements. This
       -- is used for example in choice statements raising the lower statements
       -- in case blocks up to the level of the choice, in place of the choice.
@@ -1120,16 +1124,15 @@ function influxdb_printer_from_grammar(production, print_default, root)
          if translator ~= nil then
             local statements = translator(keyword, production)
             for k,v in pairs(statements) do translated[k] = v end
+            order = nil
          else
             translated[keyword] = production
          end
       end
       productions = translated
-      if not order then
-         order = {}
-         for k,_ in pairs(productions) do table.insert(order, k) end
-         table.sort(order)
-      end
+      local order = {}
+      for k,_ in pairs(productions) do table.insert(order, k) end
+      table.sort(order)
       local printers = {}
       for keyword,production in pairs(productions) do
          local printer = printer(keyword, production, printers)
@@ -1149,8 +1152,8 @@ function influxdb_printer_from_grammar(production, print_default, root)
                 :gsub(',', '\\,')
                 :gsub(' ', '\\ ')
    end
-   local function key_composer (productions, order)
-      local printer = body_printer(productions, order)
+   local function key_composer (productions)
+      local printer = body_printer(productions)
       local file = {t={}, is_tag=true}
       function file:write (str)
          str = str:match("([^%s]+)")
@@ -1214,14 +1217,9 @@ function influxdb_printer_from_grammar(production, print_default, root)
    -- As a special case, the table handler allows the keyword to be nil,
    -- for printing tables at the top level without keywords.
    function handlers.table(keyword, production)
-      local key_order, value_order = {}, {}
-      for k,_ in pairs(production.keys) do table.insert(key_order, k) end
-      for k,_ in pairs(production.values) do table.insert(value_order, k) end
-      table.sort(key_order)
-      table.sort(value_order)
       local is_key_unique = is_key_unique(production)
-      local compose_key = key_composer(production.keys, key_order)
-      local print_value = body_printer(production.values, value_order)
+      local compose_key = key_composer(production.keys)
+      local print_value = body_printer(production.values)
       if production.key_ctype and production.value_ctype then
          return function(data, file, path)
             path = path or ''
@@ -1351,7 +1349,7 @@ function data_printer_from_grammar(production, print_default)
       print_yang_string(k, file)
       file:write(' ')
    end
-   local function body_printer(productions, order)
+   local function body_printer(productions)
       -- Iterate over productions trying to translate to other statements. This
       -- is used for example in choice statements raising the lower statements
       -- in case blocks up to the level of the choice, in place of the choice.
@@ -1361,16 +1359,15 @@ function data_printer_from_grammar(production, print_default)
          if translator ~= nil then
             local statements = translator(keyword, production)
             for k,v in pairs(statements) do translated[k] = v end
+            order = nil
          else
             translated[keyword] = production
          end
       end
       productions = translated
-      if not order then
-         order = {}
-         for k,_ in pairs(productions) do table.insert(order, k) end
-         table.sort(order)
-      end
+      local order = {}
+      for k,_ in pairs(productions) do table.insert(order, k) end
+      table.sort(order)
       local printers = {}
       for keyword,production in pairs(productions) do
          local printer = printer(keyword, production, printers)
@@ -1416,13 +1413,8 @@ function data_printer_from_grammar(production, print_default)
    -- As a special case, the table handler allows the keyword to be nil,
    -- for printing tables at the top level without keywords.
    function handlers.table(keyword, production)
-      local key_order, value_order = {}, {}
-      for k,_ in pairs(production.keys) do table.insert(key_order, k) end
-      for k,_ in pairs(production.values) do table.insert(value_order, k) end
-      table.sort(key_order)
-      table.sort(value_order)
-      local print_key = body_printer(production.keys, key_order)
-      local print_value = body_printer(production.values, value_order)
+      local print_key = body_printer(production.keys)
+      local print_value = body_printer(production.values)
       if production.key_ctype and production.value_ctype then
          return function(data, file, indent)
             for entry in data:iterate() do
@@ -1732,6 +1724,13 @@ function selftest()
 
       container fruit-bowl {
          leaf description { type string; }
+         leaf material {
+            type enumeration {
+               enum wood;
+               enum glass;
+               enum plastic;
+            }
+         }
          list contents { uses fruit; key name; }
       }
       leaf addr {
@@ -1744,21 +1743,35 @@ function selftest()
          description
          "Address prefixes bound to this interface.";
       }
+
+      list choices {
+         key id;
+         leaf id { type string; }
+         choice choice {
+            leaf red { type string; }
+            leaf blue { type string; }
+         }
+      }
    }]])
 
    local data = load_config_for_schema(test_schema,
                                        mem.open_input_string [[
      fruit-bowl {
        description 'ohai';
+       material glass;
        contents { name foo; score 7; }
        contents { name bar; score 8; }
        contents { name baz; score 9; tree-grown true; }
      }
      addr 1.2.3.4;
      address 1.2.3.4/24;
+     choices { id "one"; blue "hey"; }
+     choices { id "two"; red "bye"; }
+
    ]])
    for i =1,2 do
       assert(data.fruit_bowl.description == 'ohai')
+      assert(data.fruit_bowl.material == 'glass', data.material)
       local contents = data.fruit_bowl.contents
       assert(contents.foo.score == 7)
       assert(contents.foo.tree_grown == nil)
@@ -1766,7 +1779,9 @@ function selftest()
       assert(contents.bar.tree_grown == nil)
       assert(contents.baz.score == 9)
       assert(contents.baz.tree_grown == true)
-      assert(data.addr == util.ipv4_pton('1.2.3.4'))
+      assert(data.addr == '1.2.3.4')
+      assert(data.choices.one.blue == "hey")
+      assert(data.choices.two.red == "bye")
 
       local stream = mem.tmpfile()
       print_config_for_schema(test_schema, data, stream)
@@ -1905,6 +1920,28 @@ function selftest()
    ]])
    assert(success == false)
 
+   -- Check native number key.
+   local native_number_key_schema = schema.load_schema([[module native-number-key {
+      namespace "urn:ietf:params:xml:ns:yang:native-number-key";
+      prefix "test";
+
+      list number {
+         key "number";
+         leaf number { type uint32; }
+         leaf name { type string; }
+      }
+   }]])
+
+   local native_number_key_data = load_config_for_schema(
+      native_number_key_schema,
+      mem.open_input_string [[
+         number {
+            number 1;
+            name "Number one!";
+         }
+   ]])
+   assert(native_number_key_data.number[1].name == "Number one!")
+
    -- Test top-level choice with list member.
    local choice_schema = schema.load_schema([[module toplevel-choice-schema {
       namespace "urn:ietf:params:xml:ns:yang:toplevel-choice-schema";
@@ -1953,27 +1990,6 @@ function selftest()
                                               mem.open_input_string "")
    assert(choice_data.foo == "something")
 
-   -- Check native number key.
-   local native_number_key_schema = schema.load_schema([[module native-number-key {
-      namespace "urn:ietf:params:xml:ns:yang:native-number-key";
-      prefix "test";
-
-      list number {
-         key "number";
-         leaf number { type uint32; }
-         leaf name { type string; }
-      }
-   }]])
-
-   local native_number_key_data = load_config_for_schema(native_number_key_schema,
-                                                         mem.open_input_string [[
-      number {
-         number 1;
-         name "Number one!";
-      }
-   ]])
-   assert(native_number_key_data.number[1].name == "Number one!")
-
    -- Test range / length restrictions.
    local range_length_schema = schema.load_schema([[module range-length-schema {
       namespace "urn:ietf:params:xml:ns:yang:range-length-schema";
@@ -2004,18 +2020,20 @@ function selftest()
    assert(success == false)
 
    -- Test range validation. (should succeed)
-   load_config_for_schema(range_length_schema,
-                          mem.open_input_string [[
+   local success, err = pcall(load_config_for_schema, range_length_schema,
+                              mem.open_input_string [[
       range_test 9;
       range_test 22;
    ]])
+   assert(success)
 
    -- Test length validation. (should succeed)
-   load_config_for_schema(range_length_schema,
-                          mem.open_input_string [[
+   local success, err = pcall(load_config_for_schema, range_length_schema,
+                              mem.open_input_string [[
       length_test ".........";
       length_test "++++++++++++++++++++++";
    ]])
+   assert(success)
 
    influxdb_printer_tests()
 

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -e
 set -x
@@ -9,10 +9,13 @@ conf=$(mktemp)
 ./vita --name $name &
 vita=$!
 
-function cleanup { kill $vita; }
+(sleep 20; kill -SIGKILL $$; echo "Test timeout!") &
+timeout=$!
+
+function cleanup { kill $vita; kill $timeout; }
 trap cleanup EXIT HUP INT QUIT TERM
 
-sleep 1
+until ./snabb config get $name /; do sleep .1; done
 
 program/vita/genconf.snabb < program/vita/clitest.conf > $conf
 
@@ -27,12 +30,15 @@ program/vita/genconf.snabb < program/vita/clitest.conf > $conf
 
 [ $(./snabb config get $name /mtu) = 1500 ]
 
-sleep 2
+until ./snabb config get-state $name /gateway-state/private-router \
+              | grep route-errors
+do sleep .1; done
 
 [ $(./snabb config get-state $name \
-            /gateway-state/private-router/route-errors) = 0 ]
+            /gateway-state/private-router/route-errors) = 0 ] \
+    || ./snabb config get-state $name /gateway-state
 
 ./snabb config set $name / <<EOF
 EOF
 
-sleep 2
+[ $(./snabb config get $name /mtu) -gt 1500 ]

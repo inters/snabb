@@ -31,7 +31,7 @@ local function make_worker(pci, rxq, rxc)
                    wait_for_link = true })
       config.link(c, "nic.output -> sink.input")
       engine.configure(c)
-      engine.main({ duration = 2 })
+      engine.main()
       ]], pci, rxq, rxc)
 
    worker.start("worker"..rxq, code)
@@ -76,5 +76,5 @@ assert(pkts > 0, "get_rxstats failed")
 
 local status = worker.status()
 local pid = status.worker0.pid
-local ct = counter.open("/"..pid.."/pci/"..pciaddr1.."/q1_rxbytes.counter")
+local ct = counter.open("/"..pid.."/apps/nic/pci/"..pciaddr1.."/q1_rxbytes.counter")
 assert(counter.read(ct) > 0, "failed to read worker queue counter")

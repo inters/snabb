@@ -16,6 +16,7 @@ local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
 local datagram = require("lib.protocol.datagram")
 local yang = require("lib.yang.yang")
+local logger = require("lib.logger")
 
 
 -- Testing apps for Vita
@@ -31,7 +32,7 @@ GaugeThroughput = {
 
 function GaugeThroughput:new (conf)
    local self = setmetatable(conf, { __index = GaugeThroughput })
-   self.report = lib.logger_new({module=self.name})
+   self.report = logger.new({module=self.name})
    self.progress = lib.throttle(3)
    self.source = gen_packets(self.testconf)
    self.index = 1
@@ -215,6 +216,7 @@ defaults = {
 }
 private_interface4_defaults = {
    pci = {default="00:00.0"},
+   ifname = {},
    mac = {default="02:00:00:00:00:01"}, -- needed because used in sim. packets
    ip = {default="172.16.0.10"},
    nexthop_ip = {default="172.16.1.1"},
@@ -222,6 +224,7 @@ private_interface4_defaults = {
 }
 private_interface6_defaults = {
    pci = {default="00:00.0"},
+   ifname = {},
    mac = {default="02:00:00:00:00:01"}, -- needed because used in sim. packets
    ip = {default="ac10:0000::10"},
    nexthop_ip = {default="ac10:0100::1"},
@@ -229,6 +232,7 @@ private_interface6_defaults = {
 }
 public_interface4_defaults = {
    pci = {default="00:00.0"},
+   ifname = {},
    mac = {},
    nexthop_ip = {default="172.16.0.10"},
    nexthop_mac = {},
@@ -236,11 +240,18 @@ public_interface4_defaults = {
 }
 public_interface6_defaults = {
    pci = {default="00:00.0"},
+   ifname = {},
    mac = {},
    nexthop_ip = {default="ac10:0000::10"},
    nexthop_mac = {},
    queue = {default=1}
 }
+
+local function parse_interface (interface, defaults)
+   local cfg = lib.parse(interface, defaults)
+   if cfg.ifname then cfg.pci = nil end
+   return cfg
+end
 
 traffic_templates = {
    -- Internet Mix, see https://en.wikipedia.org/wiki/Internet_Mix
@@ -256,16 +267,18 @@ local function parse_gentestconf (conf)
    -- populate defaults
    conf = lib.parse(conf, defaults)
    conf.private_interface4 = conf.private_interface4 and
-      lib.parse(conf.private_interface4, private_interface4_defaults) or nil
+      parse_interface(conf.private_interface4, private_interface4_defaults)
+      or nil
    conf.private_interface6 = conf.private_interface6 and
-      lib.parse(conf.private_interface6, private_interface6_defaults) or nil
+      parse_interface(conf.private_interface6, private_interface6_defaults)
+      or nil
    for ip, interface in pairs(conf.public_interface4) do
       conf.public_interface4[ip] =
-         lib.parse(interface, public_interface4_defaults)
+         parse_interface(interface, public_interface4_defaults)
    end
    for ip, interface in pairs(conf.public_interface6) do
       conf.public_interface6[ip] =
-         lib.parse(interface, public_interface6_defaults)
+         parse_interface(interface, public_interface6_defaults)
    end
    assert(conf.nroutes >= 0 and conf.nroutes <= 255,
           "Invalid number of routes: "..conf.nroutes)

@@ -10,6 +10,7 @@ local file = require("lib.stream.file")
 local rpc = require("lib.yang.rpc")
 local yang = require("lib.yang.yang")
 local data = require("lib.yang.data")
+local path_data = require("lib.yang.path_data")
 local path_resolver = require("lib.yang.path_data").resolver
 
 function show_usage(command, status, err_msg)
@@ -38,7 +39,14 @@ end
 
 function data_parser(schema_name, path, is_config)
    local grammar = path_grammar(schema_name, path, is_config)
-   return data.data_parser_from_grammar(grammar)
+   local parser = data.data_parser_from_grammar(grammar)
+   local validator = path_data.consistency_checker_from_grammar(grammar)
+   return function (data)
+      local config = parser(data)
+      validator(config)
+      print("validated")
+      return config
+   end
 end
 
 function config_parser(schema_name, path)
@@ -58,7 +66,8 @@ end
 function validate_path(schema_name, path, is_config)
    local succ, err = pcall(path_grammar, schema_name, path, is_config)
    if succ == false then
-      error_and_quit(err)
+      local filename, lineno, msg = err:match("(.+):(%d+):(.+)$")
+      error_and_quit(("Invalid path:"..msg) or err)
    end
 end
 
