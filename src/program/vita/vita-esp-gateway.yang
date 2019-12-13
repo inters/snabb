@@ -74,7 +74,9 @@ module vita-esp-gateway {
 
         If more than one public interface is configured then each one needs to
         have a unique queue identifier assigned. Multiple public interfaces can
-        operate on the same hardware interface in VMDq mode.
+        operate on the same hardware interface in VMDq mode. If XDP mode is
+        used, the host must ensure that traffic to the interface ip is
+        forwarded to the correct queue (i.e., using ethtool --config-nfc).
         ";
       }
       list route4 {
