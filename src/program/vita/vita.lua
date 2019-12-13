@@ -463,6 +463,7 @@ local function io_driver (spec)
    local driver = info.driver and require(info.driver)
    local conf = {}
    if info.driver == 'apps.intel_mp.intel_mp' then
+      assert(not xdp_mode, "Can not use native driver in XDP mode. (--xdp)")
       if spec.mac then
          conf.pciaddr = spec.pci
          conf.macaddr = spec.mac
@@ -476,6 +477,7 @@ local function io_driver (spec)
          conf.rxq = spec.queue - 1
       end
    elseif info.driver == 'apps.intel_avf.intel_avf' then
+      assert(not xdp_mode, "Can not use native driver in XDP mode. (--xdp)")
       assert(spec.mac or spec.queue <= 1,
              info.model.." only supports a single queue.")
       conf.pciaddr = spec.pci
