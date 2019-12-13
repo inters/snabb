@@ -880,6 +880,7 @@ function xpath_printer_from_grammar(production, print_default, root)
          if translator ~= nil then
             local statements = translator(keyword, production)
             for k,v in pairs(statements) do translated[k] = v end
+            order = nil
          else
             translated[keyword] = production
          end
@@ -1123,6 +1124,7 @@ function influxdb_printer_from_grammar(production, print_default, root)
          if translator ~= nil then
             local statements = translator(keyword, production)
             for k,v in pairs(statements) do translated[k] = v end
+            order = nil
          else
             translated[keyword] = production
          end
@@ -1357,6 +1359,7 @@ function data_printer_from_grammar(production, print_default)
          if translator ~= nil then
             local statements = translator(keyword, production)
             for k,v in pairs(statements) do translated[k] = v end
+            order = nil
          else
             translated[keyword] = production
          end

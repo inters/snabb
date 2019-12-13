@@ -91,14 +91,18 @@ kernel network stack.
 
 ## Getting started
 
-Vita runs on any modern Linux/x86-64 distribution, but requires a compatible
-network interface card (currently *Intel* chipsets i210, i350, and 82599 or
-alternatively Intel AVF capable VFs e.g. from a X710 and XL710) as
-well as CPU support for
+Vita runs on any modern Linux/x86-64 distribution. You will need a compatible
+x86 CPU with support for
 [AES-NI](https://en.wikipedia.org/wiki/AES_instruction_set) and
 [AVX-2](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions#Advanced_Vector_Extensions_2).
-Important note: Snabb needs Linux to be booted with `iommu=off` for its device
-drivers to function.
+For network interfaces you have the following supported options:
+
+- *Intel* chipsets i210, i350, and 82599
+- *Intel AVF* capable VFs e.g. from a X710 and XL710
+- Linux XDP capable interfaces
+
+Important note: Snabb needs Linux to be booted with `iommu=off` for its native
+device drivers to function.
 
     $ git clone https://github.com/inters/vita
     $ cd vita
