@@ -36,8 +36,8 @@ function PrivateDispatch:new (conf)
       }]]):format(conf.node_ip4, conf.node_ip4))
    elseif conf.node_ip6 then
       o.dispatch = pf_match.compile(([[match {
-         ip6 and icmp6 and (ip6[40] = 135 or ip6[40] = 136) => nd
-         ip6 dst host %s and icmp6 => icmp6
+         ip6[6] = 58 and (ip6[40] = 135 or ip6[40] = 136) => nd
+         ip6 dst host %s and ip6[6] = 58 => icmp6
          ip6 dst host %s => protocol6_unreachable
          ip6 => forward6
          otherwise => reject_ethertype
@@ -131,10 +131,10 @@ function PublicDispatch:new (conf)
       }]]):format(exchange.PROTOCOL, conf.node_ip4, conf.node_ip4))
    elseif conf.node_ip6 then
       o.dispatch = pf_match.compile(([[match {
-         ip6 proto esp => forward6
-         ip6 proto %d => protocol
-         ip6 and icmp6 and (ip6[40] = 135 or ip6[40] = 136) => nd
-         ip6 dst host %s and icmp6 => icmp6
+         ip6[6] = 50 => forward6
+         ip6[6] = %d => protocol
+         ip6[6] = 58 and (ip6[40] = 135 or ip6[40] = 136) => nd
+         ip6 dst host %s and ip6[6] = 58 => icmp6
          ip6 dst host %s => protocol6_unreachable
          ip6 => reject_protocol
          otherwise => reject_ethertype
@@ -246,7 +246,7 @@ function InboundDispatch:new (conf)
    elseif conf.node_ip6 then
       o.eth = ethernet:new{type=0x86dd}
       o.dispatch = pf_match.compile(([[match {
-         ip6 dst host %s and icmp6 => icmp6
+         ip6 dst host %s and ip6[6] = 58 => icmp6
          ip6 dst host %s => protocol6_unreachable
          ip6 => forward6
          otherwise => reject_protocol
