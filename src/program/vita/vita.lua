@@ -367,6 +367,15 @@ function run_vita (opt)
    -- Run the supervisor while keeping up to date with SA database changes.
    while true do
       supervisor:main(1)
+      -- Exit if a worker failed unexpectedly.
+      local status = worker.status()
+      for id, worker in pairs(supervisor.workers) do
+         if not worker.shutting_down and not status[id].alive then
+            supervisor:warn("Worker exited unexpectedly: %s", id)
+            main.exit(status[id].status)
+         end
+      end
+      -- React to SA database changes.
       if not supervisor.current_configuration.data_plane and
          sa_db_needs_reload()
       then
