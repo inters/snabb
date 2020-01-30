@@ -338,6 +338,7 @@ end
 function gen_configuration (conf)
    conf = parse_gentestconf(conf)
    local cfg = {
+      is_first_queue = true,
       private_interface4 = conf.private_interface4,
       private_interface6 = conf.private_interface6,
       public_interface4 = conf.public_interface4,

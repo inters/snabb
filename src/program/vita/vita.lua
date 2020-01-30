@@ -36,6 +36,7 @@ local default_config = yang.load_config_for_schema_by_name(
 )
 
 local confspec = {
+   is_first_queue = {},
    private_interface4 = {},
    private_interface6 = {},
    public_interface4 = {default={}},
@@ -386,8 +387,13 @@ function vita_workers (conf)
    local public_interfaces = conf.public_interface4 or
                              conf.public_interface6 or
                              {}
+   local first_queue
+   for _, interface in pairs(public_interfaces) do
+      first_queue = math.min(interface.queue, first_queue or interface.queue)
+   end
    for _, interface in pairs(public_interfaces) do
       local name = "queue"..interface.queue
+      conf.is_first_queue = (interface.queue == first_queue)
       workers[name] = configure_vita_queue(conf, interface.queue)
    end
    return workers
@@ -570,7 +576,8 @@ function configure_private_router (conf, append)
                     node_ip4 = conf.private_interface4.ip,
                     nexthop_ip4 = conf.private_interface4.nexthop_ip,
                     nexthop_mac = conf.private_interface4.nexthop_mac,
-                    synchronize = true
+                    synchronize = true,
+                    passive = not conf.is_first_queue
       })
       config.link(c, "PrivateDispatch.forward4 -> OutboundTTL.input")
       config.link(c, "PrivateDispatch.icmp4 -> PrivateICMP4.input")
@@ -613,7 +620,8 @@ function configure_private_router (conf, append)
                     node_ip6 = conf.private_interface6.ip,
                     nexthop_ip6 = conf.private_interface6.nexthop_ip,
                     nexthop_mac = conf.private_interface6.nexthop_mac,
-                    synchronize = true
+                    synchronize = true,
+                    passive = not conf.is_first_queue
       })
       config.link(c, "PrivateDispatch.forward6 -> OutboundHopLimit.input")
       config.link(c, "PrivateDispatch.icmp6 -> PrivateICMP6.input")
