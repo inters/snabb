@@ -82,6 +82,7 @@ function NextHop4:new (conf)
    end
 
    -- We can get our next hop by synchronizing with other NextHop4 instances
+   o.synchronize = conf.synchronize
    o.sync_interval = lib.throttle(1)
 
    return setmetatable(o, {__index = NextHop4})
@@ -350,6 +351,7 @@ function NextHop6:new (conf)
    end
 
    -- We can get our next hop by synchronizing with other NextHop6 instances
+   o.synchronize = conf.synchronize
    o.sync_interval = lib.throttle(1)
 
    return setmetatable(o, {__index = NextHop6})
