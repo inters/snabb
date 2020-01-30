@@ -32,7 +32,7 @@ function DecrementTTL:push ()
             events.checksum_verification_failed()
             packet.free(p)
             counter.add(self.shm.checksum_errors)
-         elseif ip4 and ip4:ttl() > 0 then
+         elseif ip4 and ip4:ttl() > 1 then
             events.checksum_verification_succeeded()
             ip4:ttl_decrement()
             -- Strip IP frame from TFC or Ethernet padding
@@ -68,7 +68,7 @@ function DecrementHopLimit:push ()
          events.decrement_hop_limit_start()
          local p = link.receive(input)
          local ip6 = self.ip6:new_from_mem(p.data, p.length)
-         if ip6 and ip6:hop_limit() > 0 then
+         if ip6 and ip6:hop_limit() > 1 then
             ip6:hop_limit(ip6:hop_limit() - 1)
             -- Strip IP frame from TFC or Ethernet padding
             local len = math.min(p.length, ip6:payload_length() + ip6:sizeof())
