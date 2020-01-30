@@ -22,7 +22,8 @@ NextHop4 = {
       node_ip4 = {required=true},
       nexthop_ip4 = {required=true},
       nexthop_mac = {},
-      synchronize = {default=false}
+      synchronize = {default=false},
+      passive = {default=false}
    },
    shm = {
       arp_requests = {counter},
@@ -73,7 +74,7 @@ function NextHop4:new (conf)
 
    -- Initially, we don’t know the hardware address of our next hop
    o.connected = false
-   o.connect_interval = lib.throttle(5)
+   o.connect_interval = (not conf.passive) and lib.throttle(5)
 
    -- ...unless its supplied
    if conf.nexthop_mac then
@@ -114,9 +115,10 @@ function NextHop4:push ()
             link.transmit(output, self:encapsulate(p, 0x0800))
          end
       end
+   end
 
-   elseif self.connect_interval() then
-      -- Send periodic ARP requests if not connected
+   if self.connect_interval and self.connect_interval() then
+      -- Send periodic ARP requests
       link.transmit(output, self:arp_request(self.nexthop_ip4))
       counter.add(self.shm.arp_requests)
    end
@@ -252,7 +254,8 @@ NextHop6 = {
       node_ip6 = {required=true},
       nexthop_ip6 = {required=true},
       nexthop_mac = {},
-      synchronize = {default=false}
+      synchronize = {default=false},
+      passive = {default=false}
    },
    shm = {
       ns_requests = {counter},
@@ -342,7 +345,7 @@ function NextHop6:new (conf)
 
    -- Initially, we don’t know the hardware address of our next hop
    o.connected = false
-   o.connect_interval = lib.throttle(5)
+   o.connect_interval = (not conf.passive) and lib.throttle(5)
 
    -- ...unless its supplied
    if conf.nexthop_mac then
@@ -384,9 +387,10 @@ function NextHop6:push ()
             link.transmit(output, self:encapsulate(p, 0x86dd))
          end
       end
+   end
 
-   elseif self.connect_interval() then
-      -- Send periodic neighbot solicitation requests if not connected
+   if self.connect_interval and self.connect_interval() then
+      -- Send periodic neighbot solicitation requests
       link.transmit(output, self.ns_request.p)
       counter.add(self.shm.ns_requests)
    end
