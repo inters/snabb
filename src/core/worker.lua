@@ -12,8 +12,6 @@ local lib = require("core.lib")
 local shm = require("core.shm")
 local S = require("syscall")
 local vmprofile = require("jit.vmprofile")
-local C = require("ffi").C
-require("core.worker_h")
 
 --------------------------------------------------------------
 -- Master (parent) process code
@@ -79,12 +77,6 @@ function status ()
       }
    end
    return status
-end
-
--- Set a signal handler so that the calling process exits when any of its
--- workers exit.
-function set_exit_on_worker_death (enable)
-   C.worker_sigchld_setup(enable)
 end
 
 function selftest ()

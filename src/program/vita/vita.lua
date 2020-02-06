@@ -36,6 +36,7 @@ local default_config = yang.load_config_for_schema_by_name(
 )
 
 local confspec = {
+   is_first_queue = {},
    private_interface4 = {},
    private_interface6 = {},
    public_interface4 = {default={}},
@@ -363,12 +364,18 @@ function run_vita (opt)
    io.stdout:setvbuf("line")
    io.stderr:setvbuf("line")
 
-   -- Ensure exit on worker failure (while we lack proper process supervision.)
-   worker.set_exit_on_worker_death(true)
-
    -- Run the supervisor while keeping up to date with SA database changes.
    while true do
       supervisor:main(1)
+      -- Exit if a worker failed unexpectedly.
+      local status = worker.status()
+      for id, worker in pairs(supervisor.workers) do
+         if not worker.shutting_down and not status[id].alive then
+            supervisor:warn("Worker exited unexpectedly: %s", id)
+            main.exit(status[id].status)
+         end
+      end
+      -- React to SA database changes.
       if not supervisor.current_configuration.data_plane and
          sa_db_needs_reload()
       then
@@ -386,8 +393,13 @@ function vita_workers (conf)
    local public_interfaces = conf.public_interface4 or
                              conf.public_interface6 or
                              {}
+   local first_queue
+   for _, interface in pairs(public_interfaces) do
+      first_queue = math.min(interface.queue, first_queue or interface.queue)
+   end
    for _, interface in pairs(public_interfaces) do
       local name = "queue"..interface.queue
+      conf.is_first_queue = (interface.queue == first_queue)
       workers[name] = configure_vita_queue(conf, interface.queue)
    end
    return workers
@@ -570,7 +582,8 @@ function configure_private_router (conf, append)
                     node_ip4 = conf.private_interface4.ip,
                     nexthop_ip4 = conf.private_interface4.nexthop_ip,
                     nexthop_mac = conf.private_interface4.nexthop_mac,
-                    synchronize = true
+                    synchronize = true,
+                    passive = not conf.is_first_queue
       })
       config.link(c, "PrivateDispatch.forward4 -> OutboundTTL.input")
       config.link(c, "PrivateDispatch.icmp4 -> PrivateICMP4.input")
@@ -613,7 +626,8 @@ function configure_private_router (conf, append)
                     node_ip6 = conf.private_interface6.ip,
                     nexthop_ip6 = conf.private_interface6.nexthop_ip,
                     nexthop_mac = conf.private_interface6.nexthop_mac,
-                    synchronize = true
+                    synchronize = true,
+                    passive = not conf.is_first_queue
       })
       config.link(c, "PrivateDispatch.forward6 -> OutboundHopLimit.input")
       config.link(c, "PrivateDispatch.icmp6 -> PrivateICMP6.input")
