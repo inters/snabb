@@ -30,6 +30,7 @@ vita1=$!
  kill -SIGKILL $$) &
 timeout=$!
 
+iperf=$(which iperf || which iperf3)
 iperfs0="" # To be assigned
 iperfs1="" # ...
 
@@ -93,9 +94,9 @@ ip netns exec $pr1 ip route add 10.10.1.0/24 via 10.10.2.1 src 10.10.2.2 dev $pr
 ip netns exec $pr1 ip route add default via 10.10.2.2 dev $pr1
 
 # Start iperf servers
-ip netns exec $pr0 iperf -s &
+ip netns exec $pr0 $iperf -s &
 iperfs0=$!
-ip netns exec $pr1 iperf -s &
+ip netns exec $pr1 $iperf -s &
 iperfs1=$!
 
 # Wait until vitas are ready.
@@ -158,10 +159,10 @@ ip netns exec $pr1 ping -c 1 10.10.1.1
 ip netns exec $pr1 ping -c 1 10.10.1.2
 
 # Test iperf
-ip netns exec $pr0 iperf -c 10.10.2.2
-ip netns exec $pr0 iperf -c 10.10.2.2 -u
-ip netns exec $pr1 iperf -c 10.10.1.2
-ip netns exec $pr1 iperf -c 10.10.1.2 -u
+ip netns exec $pr0 $iperf -c 10.10.2.2
+ip netns exec $pr0 $iperf -c 10.10.2.2 -u
+ip netns exec $pr1 $iperf -c 10.10.1.2
+ip netns exec $pr1 $iperf -c 10.10.1.2 -u
 
 # Test traceroute
 [ $(ip netns exec $pr0 traceroute -m 3 -n 10.10.2.2 | tee /dev/stderr \
