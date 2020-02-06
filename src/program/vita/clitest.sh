@@ -8,7 +8,12 @@ name=vita-clitest-test-$$
 ./vita --name $name &
 vita=$!
 
-(sleep 20; echo "Test timeout!"; kill -SIGTERM $$;) &
+(sleep 20
+ echo "Test timeout!"
+ kill -SIGTERM $$
+ # Need to really kill it for Travis!?
+ sleep 1
+ kill -SIGKILL $$) &
 timeout=$!
 
 function cleanup {

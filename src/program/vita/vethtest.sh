@@ -24,7 +24,10 @@ vita1=$!
 
 (sleep 60
  echo "Test timeout!"
- kill -SIGTERM $$) &
+ kill -SIGTERM $$
+ # Need to really kill it for Travis!?
+ sleep 1
+ kill -SIGKILL $$) &
 timeout=$!
 
 iperfs0="" # To be assigned
