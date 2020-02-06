@@ -6,6 +6,7 @@ compiler: gcc
 
 before_script:
   - sudo sysctl -w vm.nr_hugepages=512
+  - sudp apt-get -y install iperf3 traceroute
 
 script:
  - make -j
@@ -16,3 +17,4 @@ script:
  - (cd src && sudo program/vita/test.snabb IMIX 1e6 3)
  - (cd src && sudo program/vita/test6.snabb IMIX 1e6 3)
  - (cd src && sudo program/vita/clitest.sh)
+ - (cd src && sudo program/vita/vethtest.sh)
