@@ -69,7 +69,7 @@ snabb: $(LUAOBJ) $(PFLUAOBJ) $(HOBJ) $(COBJ) $(ARCHOBJ) $(ASMOBJ) $(PFLUAASMOBJ)
 	$(E) "LINK      $@"
 	$(Q) $(CC) $(DEBUG) -Wl,--no-as-needed -Wl,-E -Werror -Wall -o $@ $^ \
 	    obj/version_lua.o \
-	    $(BLAKEOBJ) $(CURVE25519OBJ) \
+	    $(BLAKEOBJ) $(CURVE25519OBJ) -no-pie \
 	    -lrt -lc -ldl -lm -lpthread
 	@echo -n "BINARY    "
 	@ls -sh snabb
