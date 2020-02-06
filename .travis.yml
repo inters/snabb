@@ -1,5 +1,11 @@
 dist: bionic
 
+addons:
+  apt:
+    packages:
+    - iperf3
+    - traceroute
+
 sudo: required
 
 language: c
@@ -9,7 +15,6 @@ compiler: gcc
 before_script:
   - sudo sysctl -w vm.nr_hugepages=512
   - sudo mount -t bpf bpf /sys/fs/bpf/
-  - sudo apt-get -y install iperf3 traceroute
 
 script:
  - make -j
