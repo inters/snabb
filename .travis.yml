@@ -6,7 +6,7 @@ compiler: gcc
 
 before_script:
   - sudo sysctl -w vm.nr_hugepages=512
-  - sudp apt-get -y install iperf3 traceroute
+  - sudo apt-get -y install iperf3 traceroute
 
 script:
  - make -j
