@@ -1,3 +1,11 @@
+dist: bionic
+
+addons:
+  apt:
+    packages:
+    - iperf3
+    - traceroute
+
 sudo: required
 
 language: c
@@ -6,6 +14,7 @@ compiler: gcc
 
 before_script:
   - sudo sysctl -w vm.nr_hugepages=512
+  - sudo mount -t bpf bpf /sys/fs/bpf/
 
 script:
  - make -j
@@ -16,3 +25,4 @@ script:
  - (cd src && sudo program/vita/test.snabb IMIX 1e6 3)
  - (cd src && sudo program/vita/test6.snabb IMIX 1e6 3)
  - (cd src && sudo program/vita/clitest.sh)
+ - (cd src && sudo program/vita/vethtest.sh)
