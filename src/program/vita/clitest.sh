@@ -4,22 +4,23 @@ set -e
 set -x
 
 name=vita-clitest-test-$$
-conf=$(mktemp)
 
 ./vita --name $name &
 vita=$!
 
-(sleep 20; kill -SIGKILL $$; echo "Test timeout!") &
+(sleep 20; echo "Test timeout!"; kill -SIGTERM $$;) &
 timeout=$!
 
-function cleanup { kill $vita; kill $timeout; }
+function cleanup {
+    kill $vita || true
+    kill $timeout || true
+}
 trap cleanup EXIT HUP INT QUIT TERM
 
 until ./snabb config get $name /; do sleep .1; done
 
-program/vita/genconf.snabb < program/vita/clitest.conf > $conf
-
-./snabb config set $name / < $conf
+program/vita/genconf.snabb < program/vita/clitest.conf \
+    | ./snabb config set $name /
 
 [ $(./snabb config get $name /public-interface4[ip=172.16.0.10]/nexthop-ip) \
       = 172.17.0.10 ]
