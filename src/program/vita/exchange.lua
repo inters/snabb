@@ -144,9 +144,8 @@ module(...,package.seeall)
 --  3. The Transport header is a super-light transport header that encodes the
 --     target SPI and message type of the protocol requests it precedes. It is
 --     used by the KeyManager app to parse requests and associate them to the
---     correct route and fsm by SPI and message type respectively. It uses the
---     IP protocol type 99 for “any private encryption scheme”. (Eventually, it
---     needs to be wrapped in UDP.)
+--     correct route and fsm by SPI and message type respectively. It is
+--     wrapped in a generic UDP header.
 --
 --     It exists explicitly separate from the KeyManager app and Protocol fsm,
 --     to clarify that it is interchangable, and logically unrelated to either
@@ -160,13 +159,12 @@ local header = require("lib.protocol.header")
 local lib = require("core.lib")
 local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
+local udp = require("lib.protocol.udp")
 local yang = require("lib.yang.yang")
 local logger = require("lib.logger")
 local schemata = require("program.vita.schemata")
 local crypto = require("program.vita.crypto")
 local noise_NNpsk0 = require("program.vita.noise_NNpsk0")
-
-PROTOCOL = 99 -- “Any private encryption scheme”
 
 KeyManager = {
    name = "KeyManager",
@@ -175,6 +173,7 @@ KeyManager = {
       node_ip6 = {},
       routes = {},
       sa_db_path = {required=true},
+      udp_port = {default=303},
       num_outbound_sa = {default=1},
       max_inbound_sa = {default=4},
       negotiation_ttl = {default=5}, -- default:  5 seconds
@@ -210,6 +209,8 @@ function KeyManager:new (conf)
       ip_in = nil,
       ip4_in = ipv4:new({}),
       ip6_in = ipv6:new({}),
+      udp = udp:new({}),
+      udp_in = udp:new({}),
       transport = Transport.header:new({}),
       transport_in = Transport.header:new({}),
       knock_message = Protocol.knock_message:new({}),
@@ -239,6 +240,8 @@ function KeyManager:reconfig (conf)
       new_node_ipn = ipv6:pton(conf.node_ip6)
       self.ip, self.ip_in = self.ip6, self.ip6_in
    else error("Need either node_ip4 or node_ip6.") end
+
+   self.udp_port = conf.udp_port
 
    self.audit = logger.new({
          rate = 32,
@@ -656,28 +659,6 @@ end
 function KeyManager:request (route, message)
    local request = packet.allocate()
 
-   if self.ip:class() == ipv4 then
-      self.ip:new({
-            total_length = ipv4:sizeof()
-               + Transport.header:sizeof()
-               + message:sizeof(),
-            ttl = 64,
-            protocol = PROTOCOL,
-            src = self.node_ipn,
-            dst = route.gateway_ipn
-      })
-      packet.append(request, self.ip:header(), ipv4:sizeof())
-   elseif self.ip:class() == ipv6 then
-      self.ip:new({
-            payload_length = Transport.header:sizeof() + message:sizeof(),
-            hop_limit = 64,
-            next_header = PROTOCOL,
-            src = self.node_ipn,
-            dst = route.gateway_ipn
-      })
-      packet.append(request, self.ip:header(), ipv6:sizeof())
-   else error("BUG") end
-
    self.transport:new({
          spi = route.spi,
          message_type = (message == self.knock_message
@@ -693,6 +674,40 @@ function KeyManager:request (route, message)
    packet.append(request, self.transport:header(), Transport.header:sizeof())
 
    packet.append(request, message:header(), message:sizeof())
+
+   if self.ip:class() == ipv4 then
+      self.ip:new({
+            total_length = ipv4:sizeof()
+               + Transport.header:sizeof()
+               + udp:sizeof()
+               + message:sizeof(),
+            ttl = 64,
+            protocol = 17, -- UDP
+            src = self.node_ipn,
+            dst = route.gateway_ipn
+      })
+   elseif self.ip:class() == ipv6 then
+      self.ip:new({
+            payload_length = Transport.header:sizeof()
+               + udp:sizeof()
+               + message:sizeof(),
+            hop_limit = 64,
+            next_header = 17, -- UDP
+            src = self.node_ipn,
+            dst = route.gateway_ipn
+      })
+   else error("BUG") end
+
+   self.udp:new({
+         src_port = self.udp_port,
+         dst_port = self.udp_port,
+   })
+   self.udp:length(udp:sizeof() + request.length)
+   self.udp:checksum(request.data, request.length, self.ip)
+
+   request = packet.prepend(request, self.udp:header(), udp:sizeof())
+
+   request = packet.prepend(request, self.ip:header(), self.ip:sizeof())
 
    return request
 end
@@ -710,6 +725,21 @@ function KeyManager:parse_request (request)
    elseif self.ip:class() == ipv6 then
       length = math.min(request.length - ip:sizeof(), ip:payload_length())
    else error("BUG") end
+
+   local dg = self.udp_in:new_from_mem(data, length)
+   if not dg then
+      counter.add(self.shm.protocol_errors)
+      return ip
+   end
+   local data = data + udp:sizeof()
+   local length = length - udp:sizeof()
+   local checksum = dg:checksum()
+   if dg:dst_port() ~= self.udp_port
+   or length ~= (dg:length() - udp:sizeof())
+   or checksum ~= dg:checksum(data, length, ip) then
+      counter.add(self.shm.protocol_errors)
+      return ip
+   end
 
    local transport = self.transport_in:new_from_mem(data, length)
    if not transport then
@@ -1152,9 +1182,6 @@ end
 
 -- Transport wrapper for vita-ske that encompasses an SPI to map requests to
 -- routes, and a message type to facilitate parsing.
---
--- NB: might have to replace this with a UDP based header to get key exchange
--- requests through protocol filters.
 
 Transport = {
    message_type = {knock = 11, challenge = 12, proposal = 13, agreement = 14},
