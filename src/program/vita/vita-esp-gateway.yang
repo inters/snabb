@@ -66,6 +66,7 @@ module vita-esp-gateway {
       }
       list public-interface4 {
         uses interface; uses interface4; uses overridable-queue; uses gateway;
+        uses nat-ip4;
         key ip; unique queue;
         description "
         Outbound traffic is distributed onto work queues once it is received on
@@ -123,6 +124,7 @@ module vita-esp-gateway {
       }
       list public-interface6 {
         uses interface; uses interface6; uses overridable-queue; uses gateway;
+        uses nat-ip6;
         key ip; unique queue;
         description "
         Identical to public-interface4 (see above) except that it uses IPv6
@@ -165,6 +167,11 @@ module vita-esp-gateway {
     Public interfaces can have the device-queue option set which overrides
     automatic device queue selection. Use this option with caution as it can
     interfere with other users of the device.
+
+    In cases where public interfaces are behind a NAT the nat-ip option must
+    specify the translated network address as seen by its peer gateways. If
+    neither the nat-ip or ip options match the gateway ip as seen by peers
+    key exchange messages will fail to authenticate.
     ";
     choice link {
       case pci { leaf pci { type pci-address; mandatory true; } }
@@ -183,6 +190,12 @@ module vita-esp-gateway {
   }
   grouping overridable-queue {
     leaf device-queue { type queue; }
+  }
+  grouping nat-ip4 {
+    leaf nat-ip { type inet:ipv4-address-no-zone; }
+  }
+  grouping nat-ip6 {
+    leaf nat-ip { type inet:ipv6-address-no-zone; }
   }
 
   grouping route {

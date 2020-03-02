@@ -56,6 +56,7 @@ local ifspec = {
    pci = {},
    ifname = {},
    ip = {},
+   nat_ip = {},
    nexthop_ip = {},
    mac = {},
    nexthop_mac = {},
@@ -771,6 +772,8 @@ function configure_exchange (conf, append)
    config.app(c, "KeyManager", exchange.KeyManager, {
                  node_ip4 = conf.public_interface4 and conf.public_interface4.ip,
                  node_ip6 = conf.public_interface6 and conf.public_interface6.ip,
+                 node_nat_ip4 = conf.public_interface4 and conf.public_interface4.nat_ip,
+                 node_nat_ip6 = conf.public_interface6 and conf.public_interface6.nat_ip,
                  routes = (conf.public_interface4 and conf.route4) or
                           (conf.public_interface6 and conf.route6),
                  sa_db_path = queue_sa_db(conf.queue),
