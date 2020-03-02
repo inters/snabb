@@ -447,7 +447,7 @@ function KeyManager:handle_negotiation (request)
       counter.add(self.shm.rxerrors)
       self.audit:log(
          ("Rejected invalid negotiation request for route '%s' from %s")
-            :format(route or "<unknown>", ip:ntop(ip:src()))
+            :format((route and route.id) or "<unknown>", ip:ntop(ip:src()))
       )
    end
 end
