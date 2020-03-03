@@ -641,10 +641,12 @@ function KeyManager:upsert_outbound_sa (route, sa)
       key = lib.hexdump(sa.key),
       salt = lib.hexdump(sa.salt),
       ttl = lib.timeout(self.sa_ttl),
-      -- Rekey outbound SAs after approximately half of sa_ttl, with a second
-      -- of jitter to reduce the probability of two peers initating the key
-      -- exchange concurrently.
-      rekey_timeout = lib.timeout(self.sa_ttl/2 + math.random(1000)/1000),
+      -- Rekey outbound SAs after approximately half of sa_ttl, with an eighth
+      -- of sa_ttl seconds of jitter to reduce the probability of two peers
+      -- initating the key exchange concurrently.
+      rekey_timeout = lib.timeout(
+         self.sa_ttl/2 + (self.sa_ttl/8 * math.random(1000)/1000)
+      ),
       -- Delay before activating redundant, newly established outbound SAs to
       -- give the receiving end time to set up. Choosen so that when a
       -- negotiation times out due to packet loss, the initiator can update
