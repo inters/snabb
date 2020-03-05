@@ -176,9 +176,10 @@ function NextHop4:handle_arp (p)
       --        hardware address field of the entry with the new
       --        information in the packet and set Merge_flag to true.
       if ip4eq(arp_ipv4:spa(), self.nexthop_ip4) and self.connected then
+         local diff = not self.eth:dst_eq(arp_ipv4:sha())
          self.eth:dst(arp_ipv4:sha())
          if self.synchronize then self:share_nexthop() end
-         counter.add(self.shm.addresses_updated)
+         if diff then counter.add(self.shm.addresses_updated) end
          self.connected = true
       end
       --    ?Am I the target protocol address?
@@ -447,9 +448,10 @@ function NextHop6:handle_nd (p)
    end
 
    local function add_or_update_nexthop (lladdr)
+      local diff = not self.eth:dst_eq(lladdr)
       self.eth:dst(lladdr)
       if self.synchronize then self:share_nexthop() end
-      if self.connected then counter.add(self.shm.addresses_updated)
+      if self.connected and diff then counter.add(self.shm.addresses_updated)
       else counter.add(self.shm.addresses_added) end
       self.connected = true
    end
