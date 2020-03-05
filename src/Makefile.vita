@@ -12,7 +12,7 @@ INCLUDE = *.* core arch jit syscall pf \
           apps/basic apps/interlink apps/intel_mp apps/intel_avf apps/xdp \
           apps/ipv6/nd_light.lua lib/pcap \
           program/vita program/config program/ps program/pci_bind \
-          program/top program/shm
+          program/top program/shm program/rrdcat
 
 INCLUDE_TEST = $(INCLUDE) \
                lib/pmu* apps/test apps/packet_filter apps/ipv4 \
