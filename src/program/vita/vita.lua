@@ -45,6 +45,7 @@ local confspec = {
    tfc = {},
    route4 = {default={}},
    route6 = {default={}},
+   protocol_port = {default=default_config.protocol_port},
    negotiation_ttl = {default=default_config.negotation_ttl},
    sa_ttl = {default=default_config.sa_ttl},
    data_plane = {},
@@ -56,10 +57,12 @@ local ifspec = {
    pci = {},
    ifname = {},
    ip = {},
+   nat_ip = {},
    nexthop_ip = {},
    mac = {},
    nexthop_mac = {},
-   queue = {}
+   queue = {},
+   device_queue = {}
 }
 
 local function derive_local_unicast_mac (prefix, ip)
@@ -515,9 +518,11 @@ function configure_interfaces (conf, append)
 
    local private_interface = conf.private_interface4 or conf.private_interface6
    if private_interface and private_interface.pci ~= "00:00.0" then
-      config.app(c, "PrivateNIC", io_driver{ pci = private_interface.pci,
-                                             ifname = private_interface.ifname,
-                                             queue = conf.queue })
+      config.app(c, "PrivateNIC", io_driver{
+                    pci = private_interface.pci,
+                    ifname = private_interface.ifname,
+                    queue = conf.queue
+      })
       ports.private = {
          rx = "PrivateNIC.output",
          tx = "PrivateNIC.input"
@@ -526,9 +531,11 @@ function configure_interfaces (conf, append)
 
    local public_interface = conf.public_interface4 or conf.public_interface6
    if public_interface and public_interface.pci ~= "00:00.0" then
-      config.app(c, "PublicNIC", io_driver{ pci = public_interface.pci,
-                                            ifname = public_interface.ifname,
-                                            queue = conf.queue })
+      config.app(c, "PublicNIC", io_driver{
+                    pci = public_interface.pci,
+                    ifname = public_interface.ifname,
+                    queue = public_interface.device_queue or conf.queue
+      })
       ports.public = {
          rx = "PublicNIC.output",
          tx = "PublicNIC.input"
@@ -679,7 +686,8 @@ function configure_public_router (conf, append)
    if conf.public_interface4 then
       routes = conf.route4
       config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
-                    node_ip4 = conf.public_interface4.ip
+                    node_ip4 = conf.public_interface4.ip,
+                    protocol_port = conf.protocol_port
       })
       config.app(c, "PublicICMP4", icmp.ICMP4, {
                     node_ip4 = conf.public_interface4.ip
@@ -699,7 +707,8 @@ function configure_public_router (conf, append)
    elseif conf.public_interface6 then
       routes = conf.route6
       config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
-                    node_ip6 = conf.public_interface6.ip
+                    node_ip6 = conf.public_interface6.ip,
+                    protocol_port = conf.protocol_port
       })
       config.app(c, "PublicICMP6", icmp.ICMP6, {
                     node_ip6 = conf.public_interface6.ip
@@ -766,11 +775,14 @@ function configure_exchange (conf, append)
    config.app(c, "KeyManager", exchange.KeyManager, {
                  node_ip4 = conf.public_interface4 and conf.public_interface4.ip,
                  node_ip6 = conf.public_interface6 and conf.public_interface6.ip,
+                 node_nat_ip4 = conf.public_interface4 and conf.public_interface4.nat_ip,
+                 node_nat_ip6 = conf.public_interface6 and conf.public_interface6.nat_ip,
                  routes = (conf.public_interface4 and conf.route4) or
                           (conf.public_interface6 and conf.route6),
                  sa_db_path = queue_sa_db(conf.queue),
                  negotiation_ttl = conf.negotiation_ttl,
-                 sa_ttl = conf.sa_ttl
+                 sa_ttl = conf.sa_ttl,
+                 udp_port = conf.protocol_port
    })
 
    ports.input = "KeyManager.input"

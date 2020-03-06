@@ -144,9 +144,8 @@ module(...,package.seeall)
 --  3. The Transport header is a super-light transport header that encodes the
 --     target SPI and message type of the protocol requests it precedes. It is
 --     used by the KeyManager app to parse requests and associate them to the
---     correct route and fsm by SPI and message type respectively. It uses the
---     IP protocol type 99 for “any private encryption scheme”. (Eventually, it
---     needs to be wrapped in UDP.)
+--     correct route and fsm by SPI and message type respectively. It is
+--     wrapped in a generic UDP header.
 --
 --     It exists explicitly separate from the KeyManager app and Protocol fsm,
 --     to clarify that it is interchangable, and logically unrelated to either
@@ -160,21 +159,23 @@ local header = require("lib.protocol.header")
 local lib = require("core.lib")
 local ipv4 = require("lib.protocol.ipv4")
 local ipv6 = require("lib.protocol.ipv6")
+local udp = require("lib.protocol.udp")
 local yang = require("lib.yang.yang")
 local logger = require("lib.logger")
 local schemata = require("program.vita.schemata")
 local crypto = require("program.vita.crypto")
 local noise_NNpsk0 = require("program.vita.noise_NNpsk0")
 
-PROTOCOL = 99 -- “Any private encryption scheme”
-
 KeyManager = {
    name = "KeyManager",
    config = {
       node_ip4 = {},
       node_ip6 = {},
+      node_nat_ip4 = {},
+      node_nat_ip6 = {},
       routes = {},
       sa_db_path = {required=true},
+      udp_port = {default=303},
       num_outbound_sa = {default=1},
       max_inbound_sa = {default=4},
       negotiation_ttl = {default=5}, -- default:  5 seconds
@@ -210,6 +211,8 @@ function KeyManager:new (conf)
       ip_in = nil,
       ip4_in = ipv4:new({}),
       ip6_in = ipv6:new({}),
+      udp = udp:new({}),
+      udp_in = udp:new({}),
       transport = Transport.header:new({}),
       transport_in = Transport.header:new({}),
       knock_message = Protocol.knock_message:new({}),
@@ -231,14 +234,24 @@ function KeyManager:new (conf)
 end
 
 function KeyManager:reconfig (conf)
-   local new_node_ipn
+   local new_node_ipn, new_node_nat_ipn
    if conf.node_ip4 then
       new_node_ipn = ipv4:pton(conf.node_ip4)
+      new_node_nat_ipn = conf.node_nat_ip4 and ipv4:pton(conf.node_nat_ip4)
       self.ip, self.ip_in = self.ip4, self.ip4_in
    elseif conf.node_ip6 then
       new_node_ipn = ipv6:pton(conf.node_ip6)
+      new_node_nat_ipn = conf.node_nat_ip6 and ipv6:pton(conf.node_nat_ip6)
       self.ip, self.ip_in = self.ip6, self.ip6_in
    else error("Need either node_ip4 or node_ip6.") end
+
+   -- NB: node_identity must be the public address of this node (as seen by
+   -- peer gateways). This address is included in the AKE protocol’s prologue,
+   -- and authentication will fail if there is a mismatch between this address
+   -- and the respective route.gateway at the other end.
+   local node_identity = new_node_nat_ipn or new_node_ipn
+
+   self.udp_port = conf.udp_port
 
    self.audit = logger.new({
          rate = 32,
@@ -282,19 +295,21 @@ function KeyManager:reconfig (conf)
          -- effectively resetting the fsm
          if conf.negotiation_ttl ~= self.negotiation_ttl or
             not lib.equal(new_node_ipn, self.node_ipn) or
-            not lib.equal(new_gateway, route.gateway_ipn)
+            not lib.equal(new_node_nat_ipn, self.node_nat_ipn) or
+            not lib.equal(new_gateway, old_route.gateway_ipn)
          then
             self.audit:log("Protocol reset for '"..id.."' (reconfig)")
+            old_route.gateway_ipn = new_gateway
             old_route.initiator = Protocol:new('initiator',
                                                old_route.spi,
-                                               new_node_ipn,
+                                               node_identity,
                                                new_gateway,
                                                old_route.preshared_key,
                                                conf.negotiation_ttl)
             old_route.responder = Protocol:new('responder',
                                                old_route.spi,
                                                new_gateway,
-                                               new_node_ipn,
+                                               node_identity,
                                                old_route.preshared_key,
                                                conf.negotiation_ttl)
          end
@@ -309,12 +324,12 @@ function KeyManager:reconfig (conf)
             responder = Protocol:new('responder',
                                      route.spi,
                                      new_gateway,
-                                     new_node_ipn,
+                                     node_identity,
                                      new_key,
                                      conf.negotiation_ttl),
             initiator = Protocol:new('initiator',
                                      route.spi,
-                                     new_node_ipn,
+                                     node_identity,
                                      new_gateway,
                                      new_key,
                                      conf.negotiation_ttl)
@@ -332,6 +347,7 @@ function KeyManager:reconfig (conf)
 
    -- switch to new configuration
    self.node_ipn = new_node_ipn
+   self.node_nat_ipn = new_node_nat_ipn
    self.routes = new_routes
    self.sa_db_file = shm.root.."/"..shm.resolve(conf.sa_db_path)
    self.num_outbound_sa = conf.num_outbound_sa
@@ -447,7 +463,7 @@ function KeyManager:handle_negotiation (request)
       counter.add(self.shm.rxerrors)
       self.audit:log(
          ("Rejected invalid negotiation request for route '%s' from %s")
-            :format(route or "<unknown>", ip:ntop(ip:src()))
+            :format((route and route.id) or "<unknown>", ip:ntop(ip:src()))
       )
    end
 end
@@ -641,10 +657,12 @@ function KeyManager:upsert_outbound_sa (route, sa)
       key = lib.hexdump(sa.key),
       salt = lib.hexdump(sa.salt),
       ttl = lib.timeout(self.sa_ttl),
-      -- Rekey outbound SAs after approximately half of sa_ttl, with a second
-      -- of jitter to reduce the probability of two peers initating the key
-      -- exchange concurrently.
-      rekey_timeout = lib.timeout(self.sa_ttl/2 + math.random(1000)/1000),
+      -- Rekey outbound SAs after approximately half of sa_ttl, with an eighth
+      -- of sa_ttl seconds of jitter to reduce the probability of two peers
+      -- initating the key exchange concurrently.
+      rekey_timeout = lib.timeout(
+         self.sa_ttl/2 + (self.sa_ttl/8 * math.random(1000)/1000)
+      ),
       -- Delay before activating redundant, newly established outbound SAs to
       -- give the receiving end time to set up. Choosen so that when a
       -- negotiation times out due to packet loss, the initiator can update
@@ -655,28 +673,6 @@ end
 
 function KeyManager:request (route, message)
    local request = packet.allocate()
-
-   if self.ip:class() == ipv4 then
-      self.ip:new({
-            total_length = ipv4:sizeof()
-               + Transport.header:sizeof()
-               + message:sizeof(),
-            ttl = 64,
-            protocol = PROTOCOL,
-            src = self.node_ipn,
-            dst = route.gateway_ipn
-      })
-      packet.append(request, self.ip:header(), ipv4:sizeof())
-   elseif self.ip:class() == ipv6 then
-      self.ip:new({
-            payload_length = Transport.header:sizeof() + message:sizeof(),
-            hop_limit = 64,
-            next_header = PROTOCOL,
-            src = self.node_ipn,
-            dst = route.gateway_ipn
-      })
-      packet.append(request, self.ip:header(), ipv6:sizeof())
-   else error("BUG") end
 
    self.transport:new({
          spi = route.spi,
@@ -694,6 +690,40 @@ function KeyManager:request (route, message)
 
    packet.append(request, message:header(), message:sizeof())
 
+   if self.ip:class() == ipv4 then
+      self.ip:new({
+            total_length = ipv4:sizeof()
+               + Transport.header:sizeof()
+               + udp:sizeof()
+               + message:sizeof(),
+            ttl = 64,
+            protocol = 17, -- UDP
+            src = self.node_ipn,
+            dst = route.gateway_ipn
+      })
+   elseif self.ip:class() == ipv6 then
+      self.ip:new({
+            payload_length = Transport.header:sizeof()
+               + udp:sizeof()
+               + message:sizeof(),
+            hop_limit = 64,
+            next_header = 17, -- UDP
+            src = self.node_ipn,
+            dst = route.gateway_ipn
+      })
+   else error("BUG") end
+
+   self.udp:new({
+         src_port = self.udp_port,
+         dst_port = self.udp_port,
+   })
+   self.udp:length(udp:sizeof() + request.length)
+   self.udp:checksum(request.data, request.length, self.ip)
+
+   request = packet.prepend(request, self.udp:header(), udp:sizeof())
+
+   request = packet.prepend(request, self.ip:header(), self.ip:sizeof())
+
    return request
 end
 
@@ -710,6 +740,21 @@ function KeyManager:parse_request (request)
    elseif self.ip:class() == ipv6 then
       length = math.min(request.length - ip:sizeof(), ip:payload_length())
    else error("BUG") end
+
+   local dg = self.udp_in:new_from_mem(data, length)
+   if not dg then
+      counter.add(self.shm.protocol_errors)
+      return ip
+   end
+   local data = data + udp:sizeof()
+   local length = length - udp:sizeof()
+   local checksum = dg:checksum()
+   if dg:dst_port() ~= self.udp_port
+   or length ~= (dg:length() - udp:sizeof())
+   or checksum ~= dg:checksum(data, length, ip) then
+      counter.add(self.shm.protocol_errors)
+      return ip
+   end
 
    local transport = self.transport_in:new_from_mem(data, length)
    if not transport then
@@ -1152,9 +1197,6 @@ end
 
 -- Transport wrapper for vita-ske that encompasses an SPI to map requests to
 -- routes, and a message type to facilitate parsing.
---
--- NB: might have to replace this with a UDP based header to get key exchange
--- requests through protocol filters.
 
 Transport = {
    message_type = {knock = 11, challenge = 12, proposal = 13, agreement = 14},

@@ -104,7 +104,8 @@ PublicDispatch = {
    name = "PublicDispatch",
    config = {
       node_ip4 = {},
-      node_ip6 = {}
+      node_ip6 = {},
+      protocol_port = {required=true}
    },
    shm = {
       rxerrors = {counter},
@@ -122,23 +123,23 @@ function PublicDispatch:new (conf)
       o.dispatch = pf_match.compile(([[match {
          ip[6:2] & 0x3FFF != 0 => reject_fragment
          ip proto esp => forward4
-         ip proto %d => protocol
+         ip proto udp dst port %d => protocol
          ip dst host %s and icmp => icmp4
          ip dst host %s => protocol4_unreachable
          ip => reject_protocol
          arp => arp
          otherwise => reject_ethertype
-      }]]):format(exchange.PROTOCOL, conf.node_ip4, conf.node_ip4))
+      }]]):format(conf.protocol_port, conf.node_ip4, conf.node_ip4))
    elseif conf.node_ip6 then
       o.dispatch = pf_match.compile(([[match {
          ip6[6] = 50 => forward6
-         ip6[6] = %d => protocol
+         ip6[6] = 17 and dst port %d => protocol
          ip6[6] = 58 and (ip6[40] = 135 or ip6[40] = 136) => nd
          ip6 dst host %s and ip6[6] = 58 => icmp6
          ip6 dst host %s => protocol6_unreachable
          ip6 => reject_protocol
          otherwise => reject_ethertype
-      }]]):format(exchange.PROTOCOL, conf.node_ip6, conf.node_ip6, conf.node_ip6))
+      }]]):format(conf.protocol_port, conf.node_ip6, conf.node_ip6, conf.node_ip6))
    else error("Need either node_ip4 or node_ip6.") end
    return setmetatable(o, {__index=PublicDispatch})
 end
