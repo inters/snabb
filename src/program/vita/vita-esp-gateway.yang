@@ -239,7 +239,14 @@ module vita-esp-gateway {
     Confidentiality” (TFC).
     ";
   }
-    
+
+  leaf protocol-port {
+    description "
+    The UDP port used for key exchange protocol messages.
+    ";
+    type inet:port-number;
+    default 303;
+  }
 
   leaf negotiation-ttl {
     description "

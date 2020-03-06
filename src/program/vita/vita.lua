@@ -45,6 +45,7 @@ local confspec = {
    tfc = {},
    route4 = {default={}},
    route6 = {default={}},
+   protocol_port = {default=default_config.protocol_port},
    negotiation_ttl = {default=default_config.negotation_ttl},
    sa_ttl = {default=default_config.sa_ttl},
    data_plane = {},
@@ -679,7 +680,8 @@ function configure_public_router (conf, append)
    if conf.public_interface4 then
       routes = conf.route4
       config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
-                    node_ip4 = conf.public_interface4.ip
+                    node_ip4 = conf.public_interface4.ip,
+                    protocol_port = conf.protocol_port
       })
       config.app(c, "PublicICMP4", icmp.ICMP4, {
                     node_ip4 = conf.public_interface4.ip
@@ -699,7 +701,8 @@ function configure_public_router (conf, append)
    elseif conf.public_interface6 then
       routes = conf.route6
       config.app(c, "PublicDispatch", dispatch.PublicDispatch, {
-                    node_ip6 = conf.public_interface6.ip
+                    node_ip6 = conf.public_interface6.ip,
+                    protocol_port = conf.protocol_port
       })
       config.app(c, "PublicICMP6", icmp.ICMP6, {
                     node_ip6 = conf.public_interface6.ip
@@ -770,7 +773,8 @@ function configure_exchange (conf, append)
                           (conf.public_interface6 and conf.route6),
                  sa_db_path = queue_sa_db(conf.queue),
                  negotiation_ttl = conf.negotiation_ttl,
-                 sa_ttl = conf.sa_ttl
+                 sa_ttl = conf.sa_ttl,
+                 udp_port = conf.protocol_port
    })
 
    ports.input = "KeyManager.input"
