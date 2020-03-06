@@ -170,12 +170,12 @@ module vita-esp-gateway {
     leaf nexthop-mac { type yang:mac-address; }
   }
   grouping interface4 {
-    leaf ip { type inet:ipv4-address-no-zone; }
-    leaf nexthop-ip { type inet:ipv4-address-no-zone; }
+    leaf ip { type inet:ipv4-address-no-zone; mandatory true; }
+    leaf nexthop-ip { type inet:ipv4-address-no-zone; mandatory true; }
   }
   grouping interface6 {
-    leaf ip { type inet:ipv6-address-no-zone; }
-    leaf nexthop-ip { type inet:ipv6-address-no-zone; }
+    leaf ip { type inet:ipv6-address-no-zone; mandatory true; }
+    leaf nexthop-ip { type inet:ipv6-address-no-zone; mandatory true; }
   }
 
   grouping route {
@@ -214,10 +214,10 @@ module vita-esp-gateway {
     leaf queue { type queue; default 1;}
   }
   grouping gateway4 {
-    leaf ip { type inet:ipv4-address-no-zone; }
+    leaf ip { type inet:ipv4-address-no-zone; mandatory true; }
   }
   grouping gateway6 {
-    leaf ip { type inet:ipv6-address-no-zone; }
+    leaf ip { type inet:ipv6-address-no-zone; mandatory true; }
   }
 
   leaf mtu {
@@ -461,12 +461,12 @@ module vita-esp-gateway {
         description
           "Count of declined or invalid ND solicitations/advertisements.";
       }
-      leaf adresses-added {
+      leaf addresses-added {
         type yang:zero-based-counter64;
         description
           "Count of learned addresses.";
       }
-      leaf adresses-updated {
+      leaf addresses-updated {
         type yang:zero-based-counter64;
         description
           "Count of times an address was updated.";

@@ -285,9 +285,10 @@ function KeyManager:reconfig (conf)
          -- effectively resetting the fsm
          if conf.negotiation_ttl ~= self.negotiation_ttl or
             not lib.equal(new_node_ipn, self.node_ipn) or
-            not lib.equal(new_gateway, route.gateway_ipn)
+            not lib.equal(new_gateway, old_route.gateway_ipn)
          then
             self.audit:log("Protocol reset for '"..id.."' (reconfig)")
+            old_route.gateway_ipn = new_gateway
             old_route.initiator = Protocol:new('initiator',
                                                old_route.spi,
                                                new_node_ipn,
@@ -450,7 +451,7 @@ function KeyManager:handle_negotiation (request)
       counter.add(self.shm.rxerrors)
       self.audit:log(
          ("Rejected invalid negotiation request for route '%s' from %s")
-            :format(route or "<unknown>", ip:ntop(ip:src()))
+            :format((route and route.id) or "<unknown>", ip:ntop(ip:src()))
       )
    end
 end
@@ -644,10 +645,12 @@ function KeyManager:upsert_outbound_sa (route, sa)
       key = lib.hexdump(sa.key),
       salt = lib.hexdump(sa.salt),
       ttl = lib.timeout(self.sa_ttl),
-      -- Rekey outbound SAs after approximately half of sa_ttl, with a second
-      -- of jitter to reduce the probability of two peers initating the key
-      -- exchange concurrently.
-      rekey_timeout = lib.timeout(self.sa_ttl/2 + math.random(1000)/1000),
+      -- Rekey outbound SAs after approximately half of sa_ttl, with an eighth
+      -- of sa_ttl seconds of jitter to reduce the probability of two peers
+      -- initating the key exchange concurrently.
+      rekey_timeout = lib.timeout(
+         self.sa_ttl/2 + (self.sa_ttl/8 * math.random(1000)/1000)
+      ),
       -- Delay before activating redundant, newly established outbound SAs to
       -- give the receiving end time to set up. Choosen so that when a
       -- negotiation times out due to packet loss, the initiator can update
