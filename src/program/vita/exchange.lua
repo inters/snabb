@@ -171,6 +171,8 @@ KeyManager = {
    config = {
       node_ip4 = {},
       node_ip6 = {},
+      node_nat_ip4 = {},
+      node_nat_ip6 = {},
       routes = {},
       sa_db_path = {required=true},
       udp_port = {default=303},
@@ -232,14 +234,22 @@ function KeyManager:new (conf)
 end
 
 function KeyManager:reconfig (conf)
-   local new_node_ipn
+   local new_node_ipn, new_node_nat_ipn
    if conf.node_ip4 then
       new_node_ipn = ipv4:pton(conf.node_ip4)
+      new_node_nat_ipn = conf.node_nat_ip4 and ipv4:pton(conf.node_nat_ip4)
       self.ip, self.ip_in = self.ip4, self.ip4_in
    elseif conf.node_ip6 then
       new_node_ipn = ipv6:pton(conf.node_ip6)
+      new_node_nat_ipn = conf.node_nat_ip6 and ipv6:pton(conf.node_nat_ip6)
       self.ip, self.ip_in = self.ip6, self.ip6_in
    else error("Need either node_ip4 or node_ip6.") end
+
+   -- NB: node_identity must be the public address of this node (as seen by
+   -- peer gateways). This address is included in the AKE protocol’s prologue,
+   -- and authentication will fail if there is a mismatch between this address
+   -- and the respective route.gateway at the other end.
+   local node_identity = new_node_nat_ipn or new_node_ipn
 
    self.udp_port = conf.udp_port
 
@@ -285,20 +295,21 @@ function KeyManager:reconfig (conf)
          -- effectively resetting the fsm
          if conf.negotiation_ttl ~= self.negotiation_ttl or
             not lib.equal(new_node_ipn, self.node_ipn) or
+            not lib.equal(new_node_nat_ipn, self.node_nat_ipn) or
             not lib.equal(new_gateway, old_route.gateway_ipn)
          then
             self.audit:log("Protocol reset for '"..id.."' (reconfig)")
             old_route.gateway_ipn = new_gateway
             old_route.initiator = Protocol:new('initiator',
                                                old_route.spi,
-                                               new_node_ipn,
+                                               node_identity,
                                                new_gateway,
                                                old_route.preshared_key,
                                                conf.negotiation_ttl)
             old_route.responder = Protocol:new('responder',
                                                old_route.spi,
                                                new_gateway,
-                                               new_node_ipn,
+                                               node_identity,
                                                old_route.preshared_key,
                                                conf.negotiation_ttl)
          end
@@ -313,12 +324,12 @@ function KeyManager:reconfig (conf)
             responder = Protocol:new('responder',
                                      route.spi,
                                      new_gateway,
-                                     new_node_ipn,
+                                     node_identity,
                                      new_key,
                                      conf.negotiation_ttl),
             initiator = Protocol:new('initiator',
                                      route.spi,
-                                     new_node_ipn,
+                                     node_identity,
                                      new_gateway,
                                      new_key,
                                      conf.negotiation_ttl)
@@ -336,6 +347,7 @@ function KeyManager:reconfig (conf)
 
    -- switch to new configuration
    self.node_ipn = new_node_ipn
+   self.node_nat_ipn = new_node_nat_ipn
    self.routes = new_routes
    self.sa_db_file = shm.root.."/"..shm.resolve(conf.sa_db_path)
    self.num_outbound_sa = conf.num_outbound_sa
