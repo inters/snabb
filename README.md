@@ -67,6 +67,8 @@ kernel network stack.
   — manual page for Vita’s command line interface
 - [Configuration](https://github.com/inters/vita/blob/master/src/program/vita/vita-esp-gateway.yang)
   — detailed description of Vita’s configuration schema
+- [Connecting a Multi-Regional Kubernetes Cluster with Vita on AWS EC2](https://inters.co/vita/vita-ec2-k8s-demo.html)
+  — demo of deploying Vita in EC2 as a inter-region VPN for Kubernetes
 
 ### Articles
 
