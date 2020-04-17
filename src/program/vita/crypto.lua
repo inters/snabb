@@ -7,7 +7,7 @@ local C = ffi.C
 local S = require("syscall")
 
 function random_bytes (out, n)
-   S.getrandom(out, n)
+   assert(S.getrandom(out, n) == n)
 end
 
 function bytes_equal (x, y, n) -- Constant time memcmp
