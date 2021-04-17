@@ -83,6 +83,8 @@ kernel network stack.
 
 ### Presentations
 
+- [Vita: high-speed traffic encryption on x86_64 with Snabb](https://archive.fosdem.org/2020/schedule/event/vita_high_speed_traffic_encryption_on_x86_64/)
+  at FOSDEM 2020, Brussels
 - [High-Performance Traffic Encryption on x86_64](https://ripe78.ripe.net/archives/video/65/)
   at RIPE78, Reykjavík
 
